@@ -40,9 +40,9 @@ aprender aquí.
 
 |                                     |                                                                       |
 | ----------------------------------- | --------------------------------------------------------------------- |
-| **Nombres**                         |                                                                       |
-| **Repositorio**                     | _URL de GitHub, el que registrasteis en H0_                           |
-| **Rol profesional al que apuntáis** | _El que escribisteis el primer día. Condiciona qué paper os conviene_ |
+| **Nombres**                         | Asier Corral e Ibon Erdoiza                                           |
+| **Repositorio**                     | https://github.com/Ibonerdoiza2004/tiiac-proyecto.git                 |
+| **Rol profesional al que apuntáis** | Nos vemos ambos como Ingenieros de IA especializados en RL o NLP      |
 
 ---
 
@@ -52,12 +52,11 @@ aprender aquí.
 
 |                            |                                                                     |
 | -------------------------- | ------------------------------------------------------------------- |
-| **Paper o referencia**     | _Título completo_                                                   |
-| **Autores y año**          |                                                                     |
-| **Enlace**                 | _arXiv, DOI o web del paper_                                        |
+| **Paper o referencia**     | Generative Adversarial Imitation Learning                           |
+| **Autores y año**          | Jonathan Ho y Stefano Ermon, 2016                                   |
+| **Enlace**                 | https://arxiv.org/pdf/1606.03476                                    |
 | **Vía**                    | B (propuesta propia)                             |
-| **Por qué este y no otro** | _Dos líneas. Idealmente conectado con el rol profesional de arriba_ |
-
+| **Por qué este y no otro** | El proyecto de RL es uno de los que más hemos disfrutado y nos     quedamos con la espina de hacer algo sobre Imitation Learning, así que nos ha parecido buena idea hacer algo relacionado.     |
 ### Comprobación 1 · Datos
 
 - [ ] Son **públicos y descargables hoy**. Enlace que funciona, no una promesa.
@@ -65,11 +64,11 @@ aprender aquí.
 
 |                                       |                                                                |
 | ------------------------------------- | -------------------------------------------------------------- |
-| **Dataset**                           |                                                                |
-| **Enlace de descarga**                |                                                                |
-| **Tamaño**                            | _En MB/GB y en número de ejemplos_                             |
+| **Dataset**                           | Generado por nosotros mediante TRPO (Entorno: Cartpole)        |
+| **Enlace de descarga**                | Enlace a Cartpole: https://gymnasium.farama.org/environments/classic_control/cart_pole/                                                                        |   
+| **Tamaño**                            |                                                                |
 | **Licencia**                          |                                                                |
-| **¿Hace falta registro o solicitud?** | _Si la respuesta es «hay que pedir acceso y tardan», es un no_ |
+| **¿Hace falta registro o solicitud?** | No                                                             |
 
 ### Comprobación 2 · Especificación
 
@@ -78,38 +77,38 @@ aprender aquí.
 
 |                                                          |                                                                                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **¿Hay código de referencia?**                           | _Sí (enlace) / No_                                                                                            |
-| **Si no lo hay, ¿el paper da la arquitectura completa?** | _Capas, dimensiones, función de pérdida, optimizador_                                                         |
-| **Qué NO especifica el paper**                           | _Lo importante. Si la lista está vacía, no habéis leído el paper con suficiente atención: siempre falta algo_ |
+| **¿Hay código de referencia?**                           |  Sí: https://github.com/openai/imitation             |
+| **Si no lo hay, ¿el paper da la arquitectura completa?** | El paper define redes de 2 capas ocultas de 100 neuronas con tanh y Adam para el discriminador, TRPO para experto y GAIL y Adam para BC                           |
+| **Qué NO especifica el paper**                           | No especifica el learning rate de Adam, todos los hiperparámetros de TRPO, el método exacto de inicialización de pesos, cómo se seleccionan los pares por trayectoria ni el criterio de parada de BC. |
 
 ### Comprobación 3 · Cómputo · la regla 5/20
 
-- [ ] Cabe en el presupuesto, **con el plan de recorte escrito**.
+- [x] Cabe en el presupuesto, **con el plan de recorte escrito**.
 
 |                                                |                                                                                                                   |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Escala del paper original**                  | _Dataset completo, N épocas, qué hardware, cuánto tardó_                                                          |
-| **Escala que vais a hacer vosotros**           | _Subset de N, M épocas, modelo reducido a…_                                                                       |
-| **Tiempo estimado del entrenamiento completo** | _En minutos, en la máquina que vayáis a usar, y cómo lo habéis medido_                                            |
-| **Qué se pierde al recortar**                  | _La respuesta honesta. «La métrica bajará de 0.72 a algo en torno a 0.6» es una buena respuesta; «nada» no lo es_ |
-| **Hardware que vais a usar**                   | _Portátil / Colab gratuito / otro_                                                                                |
+| **Escala del paper original**                  | Se usa un total de 9 entornos. Para CartPole, usan conjuntos de 1, 4, 7 y 10 trayectorias, con unos 50 pares por trayectoria. GAIL realiza 300 iteraciones de 5.000 interacciones, es decir, 1,5 millones por entrenamiento. Se evalúan 7 inicializaciones y 50 episodios por política. No se especifican hardware ni tiempo de ejecución.                                                         |
+| **Escala que vais a hacer vosotros**           |Primero vamos a usar CartPole, comparando BC y GAIL con el experto y el agente aleatorio. Mantendremos redes de 100–100 neuronas con tanh y los tamaños de demostraciones del paper. En el paper, se utilizan varios entornos, pero en principio, nosotros solo usaremos uno (CartPole). Otro entorno será opcional, si vemos que es viable.                                                                       |
+| **Tiempo estimado del entrenamiento completo** | Todavía no lo sabemos, pero esperamos que sea inferior a 10 minutos ya que el entorno elegido es bastante sencillo.                                            |
+| **Qué se pierde al recortar**                  | Perderemos poder ver los resultados y comparar los modelos entre sí en otros entornos. |
+| **Hardware que vais a usar**                   | Portatil con RTX 3060 Laptop / Colab T4                                                                                |
 
 ### Comprobación 4 · Aplicativo
 
-- [ ] Hay una capa de servicio natural encima de la replicación.
+- [x] Hay una capa de servicio natural encima de la replicación.
 
 |                                |                                                                                   |
 | ------------------------------ | --------------------------------------------------------------------------------- |
-| **Qué construís encima**       | _Un buscador, un detector en vídeo, una API, un panel…_                           |
-| **Quién lo usaría y para qué** | _Una frase. Si no se os ocurre, el proyecto no cumple el objetivo del aplicativo_ |
-| **Qué necesita del modelo**    | _Entrada, salida, latencia aceptable_                                             |
+| **Qué construís encima**       | Un dashboard interactivo para jugar a CartPole, grabar demostraciones, entrenar experto/BC/GAIL y visualizar y comparar sus resultados.                           |
+| **Quién lo usaría y para qué** | Estudiantes y profesores para experimentar con aprendizaje por imitación de manera sencilla y poder ver de manera visual las diferencias entre métodos.  |
+| **Qué necesita del modelo**    | Como entrada, las 4 observaciones de CartPole (posición y velocidad del carro, ángulo y velocidad angular del palo). Como salida, acción izquierda o derecha.                                              |
 
 ### Riesgo principal
 
 |                                                    |                                                                                              |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| **Qué es lo que más probablemente va a salir mal** |                                                                                              |
-| **Qué haríais si pasa**                            | _Útil: «si no converge, reducimos a MNIST y lo declaramos». Inútil: «nada, está controlado»_ |
+| **Qué es lo que más probablemente va a salir mal** | Que el desarrollo del aplicativo nos lleve más tiempo del previsto y nos deje poco tiempo para replicar la arquitectura del paper.                                                                      |
+| **Qué haríais si pasa**                            | Si vemos que el desarrollo del dashboard nos va a llevar más tiempo del que tenemos disponible, reduciremos algunas funciones del aplicativo que no sean estrictamente necesarias (Poder activar/desactivar la visualización durante el entrenamiento, elegir hiperparámetros desde el dashboard,...). |
 
 ### Visto bueno del profesor (H2) · no rellenar
 
