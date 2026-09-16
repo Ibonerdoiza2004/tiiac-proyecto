@@ -56,7 +56,7 @@ aprender aquí.
 | **Autores y año**          | Jonathan Ho y Stefano Ermon, 2016                                   |
 | **Enlace**                 | https://arxiv.org/pdf/1606.03476                                    |
 | **Vía**                    | B (propuesta propia)                             |
-| **Por qué este y no otro** | El proyecto de RL es uno de los que más hemos disfrutado y nos     quedamos con la espina de hacer algo sobre Imitation Learning, así que nos ha parecido buena idea hacer algo relacionado.     |
+| **Por qué este y no otro** | El proyecto de RL es uno de los que más hemos disfrutado y nos quedamos con la espina de hacer algo sobre Imitation Learning, así que nos ha parecido buena idea hacer algo relacionado.     |
 ### Comprobación 1 · Datos
 
 - [ ] Son **públicos y descargables hoy**. Enlace que funciona, no una promesa.
@@ -128,7 +128,7 @@ aprender aquí.
 | **Paper o referencia**     | ParaDetox: Text Detoxification with Parallel Data                                                   |
 | **Autores y año**          | Varvara Logacheva, Daryna Dementieva, Sergey Ustyantsev, Daniil Moskovskiy, David Dalei, Irina Krotova, Nikita Semenov nd Alexander Panchenko                                                                    |
 | **Enlace**                 | _https://aclanthology.org/2022.acl-long.469.pdfDowdp                                   
-| **Vía**                    | A (propuesta propia)                             |
+| **Vía**                    | B (propuesta propia)                             |
 | **Por qué este y no otro** | _Dos líneas. Idealmente conectado con el rol profesional de arriba_ |
 
 ### Comprobación 1 · Datos
@@ -140,7 +140,7 @@ aprender aquí.
 | ------------------------------------- | -------------------------------------------------------------- |
 | **Dataset**                           | ParaDetox Corpus                                                               |
 | **Enlace de descarga**                | https://github.com/s-nlp/paradetox/blob/main/paradetox/paradetox.tsv
-| **Tamaño**                            | _1.55MB, 11936 lineas de texto (he had steel balls too !	he was brave too!)                         |   
+| **Tamaño**                            | 1.55MB, 11936 lineas de texto (he had steel balls too !	he was brave too!)                         |   
 | **Licencia**                          |CC0 1.0 Universal (Dominio Público)                                                                |
 | **¿Hace falta registro o solicitud?** | No  |
 
