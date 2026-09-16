@@ -55,7 +55,7 @@ aprender aquí.
 | **Paper o referencia**     | _Título completo_                                                   |
 | **Autores y año**          |                                                                     |
 | **Enlace**                 | _arXiv, DOI o web del paper_                                        |
-| **Vía**                    | A (lista curada) / B (propuesta propia)                             |
+| **Vía**                    | B (propuesta propia)                             |
 | **Por qué este y no otro** | _Dos líneas. Idealmente conectado con el rol profesional de arriba_ |
 
 ### Comprobación 1 · Datos
@@ -73,7 +73,7 @@ aprender aquí.
 
 ### Comprobación 2 · Especificación
 
-- [ ] Hay implementación de referencia, **o bien** el paper especifica la arquitectura lo bastante como
+- [x] Hay implementación de referencia, **o bien** el paper especifica la arquitectura lo bastante como
       para implementarla sin adivinar.
 
 |                                                          |                                                                                                               |
@@ -126,64 +126,64 @@ aprender aquí.
 
 |                            |                                                                     |
 | -------------------------- | ------------------------------------------------------------------- |
-| **Paper o referencia**     | _Título completo_                                                   |
-| **Autores y año**          |                                                                     |
-| **Enlace**                 | _arXiv, DOI o web del paper_                                        |
-| **Vía**                    | A (lista curada) / B (propuesta propia)                             |
+| **Paper o referencia**     | ParaDetox: Text Detoxification with Parallel Data                                                   |
+| **Autores y año**          | Varvara Logacheva, Daryna Dementieva, Sergey Ustyantsev, Daniil Moskovskiy, David Dalei, Irina Krotova, Nikita Semenov nd Alexander Panchenko                                                                    |
+| **Enlace**                 | _https://aclanthology.org/2022.acl-long.469.pdfDowdp                                   
+| **Vía**                    | A (propuesta propia)                             |
 | **Por qué este y no otro** | _Dos líneas. Idealmente conectado con el rol profesional de arriba_ |
 
 ### Comprobación 1 · Datos
 
-- [ ] Son **públicos y descargables hoy**. Enlace que funciona, no una promesa.
-- [ ] La licencia permite el uso académico.
+- [ x ] Son **públicos y descargables hoy**. Enlace que funciona, no una promesa.
+- [ x ] La licencia permite el uso académico.
 
 |                                       |                                                                |
 | ------------------------------------- | -------------------------------------------------------------- |
-| **Dataset**                           |                                                                |
-| **Enlace de descarga**                |                                                                |
-| **Tamaño**                            | _En MB/GB y en número de ejemplos_                             |
-| **Licencia**                          |                                                                |
-| **¿Hace falta registro o solicitud?** | _Si la respuesta es «hay que pedir acceso y tardan», es un no_ |
+| **Dataset**                           | ParaDetox Corpus                                                               |
+| **Enlace de descarga**                | https://github.com/s-nlp/paradetox/blob/main/paradetox/paradetox.tsv
+| **Tamaño**                            | _1.55MB, 11936 lineas de texto (he had steel balls too !	he was brave too!)                         |   
+| **Licencia**                          |CC0 1.0 Universal (Dominio Público)                                                                |
+| **¿Hace falta registro o solicitud?** | No  |
 
 ### Comprobación 2 · Especificación
 
-- [ ] Hay implementación de referencia, **o bien** el paper especifica la arquitectura lo bastante como
+- [x] Hay implementación de referencia, **o bien** el paper especifica la arquitectura lo bastante como
       para implementarla sin adivinar.
 
 |                                                          |                                                                                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **¿Hay código de referencia?**                           | _Sí (enlace) / No_                                                                                            |
-| **Si no lo hay, ¿el paper da la arquitectura completa?** | _Capas, dimensiones, función de pérdida, optimizador_                                                         |
-| **Qué NO especifica el paper**                           | _Lo importante. Si la lista está vacía, no habéis leído el paper con suficiente atención: siempre falta algo_ |
+| **¿Hay código de referencia?**                           | https://github.com/s-nlp/paradetox                                                                                            |
+| **Si no lo hay, ¿el paper da la arquitectura completa?** | El paper especifica fine-tuning de modelos Seq2Seq (BART y T5) usando pérdida Cross-Entropy de generación y optimizador AdamW ($lr=3\cdot 10^{-5}$).                                                        |
+| **Qué NO especifica el paper**                           |No detalla los parámetros de *decoding* en producción (ej. *beam search vs top-p sampling*) ni umbrales dinámicos de filtrado para equilibrar toxicidad vs preservación de significado. |
 
 ### Comprobación 3 · Cómputo · la regla 5/20
 
-- [ ] Cabe en el presupuesto, **con el plan de recorte escrito**.
+- [x] Cabe en el presupuesto, **con el plan de recorte escrito**.
 
 |                                                |                                                                                                                   |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Escala del paper original**                  | _Dataset completo, N épocas, qué hardware, cuánto tardó_                                                          |
-| **Escala que vais a hacer vosotros**           | _Subset de N, M épocas, modelo reducido a…_                                                                       |
-| **Tiempo estimado del entrenamiento completo** | _En minutos, en la máquina que vayáis a usar, y cómo lo habéis medido_                                            |
-| **Qué se pierde al recortar**                  | _La respuesta honesta. «La métrica bajará de 0.72 a algo en torno a 0.6» es una buena respuesta; «nada» no lo es_ |
-| **Hardware que vais a usar**                   | _Portátil / Colab gratuito / otro_                                                                                |
+| ---------------------------------------------- | -----------------------------------------------------------------------------------------------------------------|
+| **Escala del paper original**                  | Dataset completo (~20k pares), entrenamiento con BART-large / BART-base durante 10 epochs en GPUs de alta gama (NVIDIA V100/A100)                                                        |
+| **Escala que vais a hacer vosotros**           | Subconjunto de 5,000 pares tóxico-neutro, fine-tuning de `t5-small` (60M parámetros) o `facebook/bart-base` durante 3-4 epochs                                                                       |
+| **Tiempo estimado del entrenamiento completo** | 8 a 12 minutos en una GPU T4 (Google Colab)                                         |
+| **Qué se pierde al recortar**                  | La metrica bajará levemente (~3-5%) al usar un modelo más pequeño y menos datos. |
+| **Hardware que vais a usar**                   | Colab                                                                                |
 
 ### Comprobación 4 · Aplicativo
 
-- [ ] Hay una capa de servicio natural encima de la replicación.
+- [x] Hay una capa de servicio natural encima de la replicación.
 
 |                                |                                                                                   |
 | ------------------------------ | --------------------------------------------------------------------------------- |
-| **Qué construís encima**       | _Un buscador, un detector en vídeo, una API, un panel…_                           |
-| **Quién lo usaría y para qué** | _Una frase. Si no se os ocurre, el proyecto no cumple el objetivo del aplicativo_ |
-| **Qué necesita del modelo**    | _Entrada, salida, latencia aceptable_                                             |
+| **Qué construís encima**       | Una API REST (FastAPI)                           |
+| **Quién lo usaría y para qué** | Moderadores de comunidades o usuarios de foros para reescribir de forma educada un comentario agresivo antes de publicarlo en la red |
+| **Qué necesita del modelo**    | Entrada: frase tóxica (string). Salida: frase desintoxicada (string). Latencia aceptable: < 500ms por frase.                                             |
 
 ### Riesgo principal
 
 |                                                    |                                                                                              |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| **Qué es lo que más probablemente va a salir mal** |                                                                                              |
-| **Qué haríais si pasa**                            | _Útil: «si no converge, reducimos a MNIST y lo declaramos». Inútil: «nada, está controlado»_ |
+| **Qué es lo que más probablemente va a salir mal** |Que el modelo borre demasiado texto para evitar la toxicidad, alterando o destruyendo el significado original de la frase                                                                                              |
+| **Qué haríais si pasa**                            | Implementar un post-filtro de similitud  que descarte reescrituras cuya similitud sea menor a 0.7|
 
 ### Visto bueno del profesor (H2) · no rellenar
 
