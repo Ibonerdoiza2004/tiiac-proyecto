@@ -64,8 +64,8 @@ aprender aquí.
 
 |                                       |                                                                |
 | ------------------------------------- | -------------------------------------------------------------- |
-| **Dataset**                           | Generado por nosotros mediante TRPO (Entorno: Cartpole)        |
-| **Enlace de descarga**                | Enlace a Cartpole: https://gymnasium.farama.org/environments/classic_control/cart_pole/                                                                        |   
+| **Dataset**                           | Generado por nosotros mediante TRPO en los entornos evaluados        |
+| **Enlace de descarga**                | Entornos de Gymnasium: https://gymnasium.farama.org/environments/classic_control/cart_pole/                                                                        |   
 | **Tamaño**                            |                                                                |
 | **Licencia**                          |                                                                |
 | **¿Hace falta registro o solicitud?** | No                                                             |
@@ -88,10 +88,13 @@ aprender aquí.
 |                                                |                                                                                                                   |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | **Escala del paper original**                  | Se usa un total de 9 entornos. Para CartPole, usan conjuntos de 1, 4, 7 y 10 trayectorias, con unos 50 pares por trayectoria. GAIL realiza 300 iteraciones de 5.000 interacciones, es decir, 1,5 millones por entrenamiento. Se evalúan 7 inicializaciones y 50 episodios por política. No se especifican hardware ni tiempo de ejecución.                                                         |
-| **Escala que vais a hacer vosotros**           |Primero vamos a usar CartPole, comparando BC y GAIL con el experto y el agente aleatorio. Mantendremos redes de 100–100 neuronas con tanh y los tamaños de demostraciones del paper. En el paper, se utilizan varios entornos, pero en principio, nosotros solo usaremos uno (CartPole). Otro entorno será opcional, si vemos que es viable.                                                                       |
-| **Tiempo estimado del entrenamiento completo** | Todavía no lo sabemos, pero esperamos que sea inferior a 10 minutos ya que el entorno elegido es bastante sencillo.                                            |
-| **Qué se pierde al recortar**                  | Perderemos poder ver los resultados y comparar los modelos entre sí en otros entornos. |
+| **Escala que vais a hacer vosotros**           | La evaluación progresará por etapas: (1) CartPole; (2) MountainCar; (3) Acrobot; (4) Reacher y (5) HalfCheetah, como objetivo ideal. La elección de los entornos busca aumentar la dificultad poco a poco. CartPole nos permitirá comprobar que la implementación funciona en un problema sencillo y con acciones discretas. MountainCar añade la necesidad de encadenar acciones para ganar impulso, mientras que Acrobot introduce una dinámica articulada distinta. Después, Reacher servirá para estudiar el paso a acciones continuas y ver si BC sigue siendo competitivo. HalfCheetah sería el reto final, porque combina locomoción y varios controles continuos, aunque solo lo abordaremos si encaja en la regla 5/20. En cada entorno compararemos BC y GAIL con un experto y un agente aleatorio, manteniendo redes de 100–100 neuronas con tanh y los tamaños de demostraciones del paper cuando sea aplicable.  |
+| **Tiempo estimado del entrenamiento completo** | Mediremos el tiempo de cada etapa y mantendremos como criterio la regla 5/20: el smoke test deberá completarse en menos de 5 minutos en CPU y el entrenamiento completo en menos de 20 minutos en una T4. La primera estimación para CartPole es inferior a 10 minutos. |
+| **Qué se pierde al recortar**                  | Si no podemos completar todas las etapas, priorizaremos CartPole, MountainCar y Acrobot, y dejaremos a un lado Reacher y HalfCheetah.  |
 | **Hardware que vais a usar**                   | Portatil con RTX 3060 Laptop / Colab T4                                                                                |
+
+
+
 
 ### Comprobación 4 · Aplicativo
 
