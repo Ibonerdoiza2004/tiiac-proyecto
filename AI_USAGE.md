@@ -15,7 +15,8 @@ comprueba en la defensa.
 
 | Fecha | Tarea | Herramienta | Qué devolvió | Qué hicimos y por qué |
 |---|---|---|---|---|
-| | | | | |
+| 2026-09-23 | Diseñar AGENTS.md siguiendo la guía de trabajo e inspeccionando el repositorio | Codex | Propuesta de instrucciones adaptada al proyecto GAIL/CartPole | Se utilizó como base y se pidió recuperar la estructura original del archivo para mantener su organización. |
+| 2026-09-23 | Recuperar la estructura original y concretar las reglas de uso de IA y de pruebas | Codex | AGENTS.md con las seis secciones originales, rechazo explícito de tareas prohibidas, registro de conversaciones y pruebas tras cada funcionalidad | Se ajustaron las instrucciones solicitadas y se corrigió el estado actual: propuestas.md está terminado; los demás campos se dejaron vacíos porque su información no era correcta. Las pruebas deben cubrir casos normales, límites, errores y combinaciones relevantes, con exhaustividad cuando sea viable. |
 
 ---
 
