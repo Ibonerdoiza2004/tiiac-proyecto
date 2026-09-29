@@ -77,9 +77,17 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
 - **La IA debe documentar todas las conversaciones de este proyecto en
   `AI_USAGE.md`**, también consultas, aclaraciones, intentos fallidos y solicitudes
   rechazadas, aunque no produzcan código. Actualizarlo en cada intercambio antes
-  de la respuesta final, con fecha, petición, herramienta, respuesta y decisión
-  o resultado. Resumir fielmente; no es necesario copiar la transcripción completa.
-  Conservar entradas previas, no incluir secretos ni inventar aceptación del equipo.
+  de la respuesta final **dentro de la tabla existente**. Actualizar no significa
+  añadir una fila por mensaje: agrupar los intercambios de una misma tarea dentro
+  de una sesión y actualizar su fila; separar tareas o decisiones distintas cuando
+  agrupándolas se pierda información relevante. Usar frases breves, como en los
+  ejemplos de la plantilla, con fecha, tarea, herramienta, respuesta y decisión
+  o resultado y su motivo cuando conste. Resumir correcciones e intentos fallidos
+  relevantes sin transcribir la conversación ni detallar comandos o incidencias
+  operativas que no afecten al resultado. Conservar el contenido sustancial del
+  historial al resumirlo, no incluir secretos ni inventar aceptación del equipo.
+  Esta agrupación es una convención del proyecto, no un requisito comprobado de
+  la guía docente; si se dispone de ella, respetar sus requisitos explícitos.
   Si no puede escribir el archivo, comunicarlo y proporcionar la entrada pendiente.
 - Revisar `git status` y el diff; preservar cambios ajenos. Trabajar por cambios
   pequeños y revisar los PR con la pareja usando la plantilla del repositorio.
