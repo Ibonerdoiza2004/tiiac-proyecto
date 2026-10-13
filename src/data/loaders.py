@@ -13,8 +13,10 @@ from collections.abc import Sequence
 
 import numpy as np
 import torch
+from gymnasium import spaces
 from torch.utils.data import DataLoader, Dataset, Subset
 
+from src.data.splits import SplitsDemostraciones, validar_splits
 from src.data.tipos import LoteTransiciones, Trayectoria, es_id_episodio
 
 
@@ -105,3 +107,122 @@ def submuestrear_pares(
         ids_episodio=np.concatenate(ids), pasos=np.concatenate(pasos),
     )
 
+
+
+class DatasetTransiciones(Dataset):
+    """Pares (estado, acción) de un LoteTransiciones como tensores para BC.
+
+    Los estados son float32 [N, d_observacion]. Con Discrete(n, start) las
+    acciones son int64 [N] en [0, n), ya sin el start, como espera PoliticaBC;
+    con Box son float32 [N, d_accion]. ids_episodio conserva de qué partida
+    sale cada par. Los arrays se copian y no se normalizan.
+    """
+
+    def __init__(self, lote: LoteTransiciones, espacio_accion: spaces.Space) -> None:
+        """Comprueba el lote frente al espacio de acción y lo convierte a tensores.
+
+        Args:
+            lote: Pares no vacíos, por ejemplo de submuestrear_pares.
+            espacio_accion: Discrete o Box de una dimensión del entorno.
+
+        Raises:
+            ValueError: Lote vacío o incoherente, acciones fuera del espacio o
+                espacio no compatible.
+        """
+        if not isinstance(lote, LoteTransiciones):
+            raise ValueError("Se esperaba un LoteTransiciones")
+        estados = np.asarray(lote.estados)
+        acciones = np.asarray(lote.acciones)
+        n = len(estados)
+        if estados.ndim != 2 or n == 0 or not np.issubdtype(estados.dtype, np.number):
+            raise ValueError(f"Los estados deben ser números [N, d] con N > 0, "
+                             f"no {estados.dtype} {estados.shape}")
+        if not np.all(np.isfinite(estados)):
+            raise ValueError("Los estados deben ser finitos")
+        if np.shape(lote.ids_episodio) != (n,):
+            raise ValueError(f"ids_episodio debe tener forma [{n}]")
+
+        if isinstance(espacio_accion, spaces.Discrete):
+            if (acciones.shape != (n,) or not np.issubdtype(acciones.dtype, np.integer)):
+                raise ValueError(f"Con acciones Discrete se esperaban enteros [{n}], "
+                                 f"no {acciones.dtype} {acciones.shape}")
+            indices = acciones.astype(np.int64) - int(espacio_accion.start)
+            if indices.min() < 0 or indices.max() >= int(espacio_accion.n):
+                raise ValueError("Hay acciones fuera del espacio Discrete")
+            self.acciones = torch.tensor(indices, dtype=torch.int64)
+        elif isinstance(espacio_accion, spaces.Box) and len(espacio_accion.shape) == 1:
+            forma = (n, int(espacio_accion.shape[0]))
+            if acciones.shape != forma or not np.issubdtype(acciones.dtype, np.floating):
+                raise ValueError(f"Con acciones Box se esperaban reales {list(forma)}, "
+                                 f"no {acciones.dtype} {acciones.shape}")
+            if not np.all(np.isfinite(acciones)):
+                raise ValueError("Las acciones deben ser finitas")
+            self.acciones = torch.tensor(acciones, dtype=torch.float32)
+        else:
+            raise ValueError(
+                "Espacio de acción no compatible: se admite Discrete o Box de una dimensión")
+        self.estados = torch.tensor(estados, dtype=torch.float32)
+        self.ids_episodio = np.array(lote.ids_episodio, dtype=np.int64)
+
+    def __len__(self) -> int:
+        """Devuelve el número de pares."""
+        return len(self.estados)
+
+    def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Devuelve el par (estado, acción) en la posición i."""
+        return self.estados[i], self.acciones[i]
+
+
+def construir_loaders_bc(
+    trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones, cantidad: int,
+    espacio_accion: spaces.Space, cfg: dict, generador: np.random.Generator,
+) -> tuple[DataLoader, DataLoader]:
+    """Devuelve (train_loader, val_loader) de BC para un subconjunto de partidas.
+
+    Train usa los pares submuestreados de las partidas del subconjunto cantidad
+    y validación los de las partidas de validación, con la misma frecuencia, de
+    modo que ninguna partida aporta pares a ambos. Con el mismo generador se
+    sortean primero los pares de validación y después los de train. Así, con la
+    misma semilla, validación tiene los mismos pares para cualquier cantidad, y
+    las partidas que comparten dos subconjuntos aportan los mismos pares de
+    train en ambos. Train se baraja en cada época y validación no.
+
+    Args:
+        trayectorias: Todas las partidas del dataset para el que se crearon los splits.
+        splits: Splits de esas partidas.
+        cantidad: Número de partidas de train que se usan, por ejemplo 1, 4, 7 o 10.
+            Tiene que haber un subconjunto de ese tamaño: splits.subconjuntos
+            asocia cada tamaño con los IDs de sus partidas.
+        espacio_accion: Espacio de acción del entorno.
+        cfg: Configuración resuelta con bc.frecuencia_pares y bc.batch_size.
+        generador: Generador de src.utils.seed.crear_generador.
+
+    Raises:
+        ValueError: Splits que no corresponden a las partidas, cantidad sin
+            subconjunto, configuración incompleta o datos no válidos.
+    """
+    bcfg = cfg.get("bc") if isinstance(cfg, dict) else None
+    if not isinstance(bcfg, dict) or not {"frecuencia_pares", "batch_size"} <= bcfg.keys():
+        raise ValueError("La configuración necesita bc.frecuencia_pares y bc.batch_size")
+    batch_size = bcfg["batch_size"]
+    if (isinstance(batch_size, (bool, np.bool_)) or not isinstance(batch_size, (int, np.integer))
+            or batch_size < 1):
+        raise ValueError(f"bc.batch_size debe ser un entero positivo, no {batch_size!r}")
+    if (isinstance(trayectorias, (str, bytes)) or not isinstance(trayectorias, Sequence)
+            or not all(isinstance(t, Trayectoria) for t in trayectorias)):
+        raise ValueError("Se requiere una secuencia de objetos Trayectoria")
+    validar_splits(splits, [t.id_episodio for t in trayectorias])
+    if (isinstance(cantidad, (bool, np.bool_)) or not isinstance(cantidad, (int, np.integer))
+            or cantidad not in splits.subconjuntos):
+        raise ValueError(f"No hay subconjunto de {cantidad!r} partidas; "
+                         f"disponibles: {sorted(splits.subconjuntos)}")
+
+    por_id = {int(t.id_episodio): t for t in trayectorias}
+    frecuencia = bcfg["frecuencia_pares"]
+    validacion = submuestrear_pares([por_id[i] for i in splits.validacion], frecuencia, generador)
+    train = submuestrear_pares([por_id[i] for i in splits.subconjuntos[cantidad]],
+                               frecuencia, generador)
+    return (DataLoader(DatasetTransiciones(train, espacio_accion),
+                       batch_size=int(batch_size), shuffle=True),
+            DataLoader(DatasetTransiciones(validacion, espacio_accion),
+                       batch_size=int(batch_size), shuffle=False))

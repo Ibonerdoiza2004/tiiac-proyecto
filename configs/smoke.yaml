@@ -16,6 +16,31 @@ datos:
 modelo:
   nombre: mi_modelo
 
+bc:
+  # Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh.
+  capas_ocultas: [100, 100]
+  activacion: tanh
+  # Acciones continuas: log de la desviacion tipica inicial de la gaussiana
+  # (eleccion propia; 0.0 es el valor por defecto de las politicas de SB3).
+  log_std_inicial: 0.0
+  # Normalizacion de observaciones con media y desviacion de los estados de
+  # train, como el codigo original (que usa tambien su 30 % de validacion).
+  # Componentes con desviacion <= epsilon solo se centran.
+  normalizar_observaciones: true
+  epsilon_normalizacion: 1.0e-6
+  # Un par (estado, accion) de cada N pasos de cada partida. Depende del
+  # entorno en el codigo original de GAIL: CartPole 10, MountainCar y Acrobot 5,
+  # MuJoCo (HalfCheetah) 20. Pasara al perfil de cada entorno.
+  frecuencia_pares: 10
+  # Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original).
+  # Las epocas maximas y la paciencia son eleccion propia: el original entrena
+  # un numero fijo de iteraciones y se queda con el mejor snapshot.
+  optimizador: adam
+  batch_size: 128
+  learning_rate: 0.001
+  epocas_maximas: 2
+  paciencia: 1
+
 entrenamiento:
   learning_rate: 0.001
   epochs: 1
