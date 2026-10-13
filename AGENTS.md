@@ -106,7 +106,8 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
   Mantener `.gitignore`, versiones exactas en `requirements.txt` y un procedimiento
   reproducible para obtener los datos, con su procedencia y licencia.
 - `src/data/splits.py` crea, valida, guarda y carga splits, pero todavía no hay
-  splits congelados: no afirmar que lo están. Cuando se congelen en H3, documentar
+  splits congelados: no afirmar que lo están. Se congelarán cuando existan las
+  demostraciones del experto (previstas para H5, 25 de octubre); entonces documentar
   la ubicación del JSON y la huella del dataset y no cambiarlos sin acuerdo explícito.
 
 ## Estado actual
@@ -114,5 +115,5 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
 Actualizar esta sección cuando cambie el proyecto.
 
 - **Hecho:** dependencias de backend FastAPI y Uvicorn fijadas en `requirements.txt`. Contenedor `Trayectoria` y validación frente a espacios Gymnasium, guardado y carga de demostraciones NPZ/JSON implementados y probados. Splits por trayectoria con subconjuntos anidados, `LoteTransiciones` y `submuestrear_pares`, fusionados en `main`.
-- **En curso:** rama `bc`: `PoliticaBC` para acciones Discrete y Box (gaussiana con `log_std` aprendido), `DatasetTransiciones`, `construir_loaders_bc`, `entrenar_bc` con parada temprana, `evaluar_bc` y `entrenar_bc_subconjunto` (recorrido completo para un subconjunto), implementados y probados con partidas inventadas; pendientes de commit y PR; sin integrar en `run.py` (rama `integracion-e1`). Inicialización, selección del mejor modelo (error cuadrático de la media en continuas) y `frecuencia_pares` alineados con el código original de GAIL; la frecuencia depende del entorno y pasará a su perfil. Normalización de observaciones con estadísticas solo de train, guardada en buffers de la política (decisión del 2026-10-13).
+- **En curso:** rama `bc`: `PoliticaBC` para acciones Discrete y Box (gaussiana con `log_std` aprendido), `DatasetTransiciones`, `construir_loaders_bc`, `entrenar_bc` con parada temprana, `evaluar_bc` y `entrenar_bc_subconjunto` (recorrido completo para un subconjunto), implementados y probados con partidas inventadas; en commit, pendiente de PR; sin integrar en `run.py` (rama `integracion-e1`). Tras la revisión del 2026-10-13: generadores de los tests solo con `crear_generador`, `evaluar_bc` probada sin gradientes, `bc.learning_rate` positivo y normalización leída del dataset sin gastar números aleatorios. `ACTIVACIONES` mantiene `relu` por decisión del usuario. Inicialización, selección del mejor modelo (error cuadrático de la media en continuas) y `frecuencia_pares` alineados con el código original de GAIL; la frecuencia depende del entorno y pasará a su perfil. Normalización de observaciones con estadísticas solo de train, guardada en buffers de la política (decisión del 2026-10-13).
 - **Pendiente:** `combinar_demostraciones` para el aplicativo: varios NPZ se combinan en uno nuevo con IDs sin repetir antes de crear splits, que siguen correspondiendo a un único archivo (decisión del 2026-10-13).

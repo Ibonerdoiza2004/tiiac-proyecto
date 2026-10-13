@@ -55,7 +55,10 @@ def _criterio(continua: bool) -> str:
 
 def _partida(identificador: int, pasos: int = 6, continua: bool = False,
              inicio_accion: int = 0) -> Trayectoria:
-    """Partida exacta: estado t = 100 * id + t; acción discreta t % 2 + inicio o continua (t, -t)."""
+    """Partida exacta: estado t = 100 * id + t.
+
+    La acción es t % 2 + inicio (discreta) o (t, -t) (continua).
+    """
     base = 100 * identificador + np.arange(pasos + 1, dtype=np.float32)
     observaciones = np.repeat(base[:, None], 4, axis=1)
     t = np.arange(pasos)
@@ -85,7 +88,7 @@ def _lote(estados, acciones, ids=None) -> LoteTransiciones:
 
 def _datos_aprendibles(continua: bool, n: int = 256, semilla: int = 0):
     """Pares en los que la acción depende del estado: signo de x0 o combinación lineal."""
-    estados = np.random.default_rng(semilla).normal(size=(n, 4)).astype(np.float32)
+    estados = crear_generador(semilla).normal(size=(n, 4)).astype(np.float32)
     if continua:
         acciones = np.stack([estados[:, 0] - estados[:, 1], 0.5 * estados[:, 2]], axis=1)
         return estados, acciones.astype(np.float32)
@@ -181,7 +184,8 @@ def test_log_std_inicial_no_se_admite_en_discretas():
 
 def test_normalizacion_empieza_como_identidad_y_no_se_entrena():
     politica = _politica(False)
-    assert torch.equal(politica.media, torch.zeros(4)) and torch.equal(politica.escala, torch.ones(4))
+    assert torch.equal(politica.media, torch.zeros(4))
+    assert torch.equal(politica.escala, torch.ones(4))
     nombres = dict(politica.named_parameters())
     assert "media" not in nombres and "escala" not in nombres
     assert {"media", "escala"} <= politica.state_dict().keys()
@@ -189,8 +193,8 @@ def test_normalizacion_empieza_como_identidad_y_no_se_entrena():
 
 @pytest.mark.parametrize("n", [2, 7, 100])
 def test_ajustar_normalizacion_usa_media_y_desviacion_poblacional(n):
-    estados = np.random.default_rng(n).normal([5.0, -2.0, 0.0, 300.0], [1.0, 0.01, 3.0, 50.0],
-                                              size=(n, 4)).astype(np.float32)
+    estados = crear_generador(n).normal([5.0, -2.0, 0.0, 300.0], [1.0, 0.01, 3.0, 50.0],
+                                        size=(n, 4)).astype(np.float32)
     politica = _politica(False)
     politica.ajustar_normalizacion(torch.tensor(estados), 1e-6)
     datos = estados.astype(np.float64)
@@ -632,9 +636,41 @@ def test_evaluar_bc_calcula_acierto_y_error_cuadratico_exactos():
 def test_evaluar_bc_pone_modo_evaluacion_y_no_calcula_gradientes(continua):
     politica = _politica(continua).train()
     estados, acciones = _datos_aprendibles(continua, n=8)
-    evaluar_bc(politica, _loader(estados, acciones, CONTINUO if continua else DISCRETO))
+    estados_gradiente: list[bool] = []
+    gancho = politica.red.register_forward_hook(
+        lambda modulo, entrada, salida: estados_gradiente.append(torch.is_grad_enabled()))
+    try:
+        evaluar_bc(politica, _loader(estados, acciones, CONTINUO if continua else DISCRETO))
+    finally:
+        gancho.remove()
     assert not politica.training
     assert all(p.grad is None for p in politica.parameters())
+    # Regresión: sin @torch.no_grad() la red se ejecutaba guardando el grafo y no
+    # fallaba ningún test, porque .grad sigue a None mientras no se llame a backward.
+    assert estados_gradiente and not any(estados_gradiente)
+
+
+def test_normalizar_no_gasta_numeros_aleatorios_del_barajado(monkeypatch):
+    """Ajustar la normalización recorre train sin barajar: no altera la semilla global."""
+    import src.training.loop as loop
+    estados, acciones = _datos_aprendibles(False, n=40)
+    loader = _loader(estados, acciones, DISCRETO, batch_size=8, barajar=True)
+    original = PoliticaBC.ajustar_normalizacion
+    capturas: list[torch.Tensor] = []
+
+    def ajustar(self, estados_train, epsilon):
+        """Normaliza de verdad y para el entrenamiento justo después."""
+        original(self, estados_train, epsilon)
+        capturas.append(torch.get_rng_state())
+        raise RuntimeError("parar tras normalizar")
+
+    fijar_seed(3)
+    politica = _politica(False)                 # crear la red sí gasta números aleatorios
+    antes = torch.get_rng_state()
+    monkeypatch.setattr(PoliticaBC, "ajustar_normalizacion", ajustar)
+    with pytest.raises(RuntimeError, match="parar tras normalizar"):
+        loop.entrenar_bc(politica, loader, loader, _cfg(epocas_maximas=1))
+    assert torch.equal(antes, capturas[0])
 
 
 def test_evaluar_bc_rechaza_un_loader_vacio():
@@ -664,12 +700,15 @@ def test_entrenar_bc_aprende_una_relacion_sencilla(continua):
 
 
 @pytest.mark.parametrize("paciencia", [1, 2, 5])
-def test_entrenar_bc_para_tras_paciencia_epocas_sin_mejora(paciencia):
-    """Con learning rate 0 la pérdida de validación no cambia: la mejor época es la 1."""
+def test_entrenar_bc_para_tras_paciencia_epocas_sin_mejora(paciencia, monkeypatch):
+    """Si la validación nunca mejora, la mejor época es la 1 y se para tras paciencia más."""
+    import src.training.loop as loop
+    monkeypatch.setattr(loop, "evaluar_bc", lambda politica, loader: {"perdida": 1.0,
+                                                                        "acierto": 0.5})
     estados, acciones = _datos_aprendibles(False, n=16)
     loader = _loader(estados, acciones, DISCRETO)
     resultado = entrenar_bc(_politica(False), loader, loader,
-                            _cfg(learning_rate=0, paciencia=paciencia, epocas_maximas=50))
+                            _cfg(paciencia=paciencia, epocas_maximas=50))
     assert resultado["mejor_epoca"] == 1
     assert resultado["epocas"] == 1 + paciencia
 
@@ -777,7 +816,8 @@ def test_entrenar_bc_sin_normalizar_deja_la_normalizacion_como_estaba():
     politica = _politica(False)
     entrenar_bc(politica, loader, loader,
                 _cfg(normalizar_observaciones=False, epsilon_normalizacion=None, epocas_maximas=1))
-    assert torch.equal(politica.media, torch.zeros(4)) and torch.equal(politica.escala, torch.ones(4))
+    assert torch.equal(politica.media, torch.zeros(4))
+    assert torch.equal(politica.escala, torch.ones(4))
 
 
 @TIPOS
@@ -837,7 +877,8 @@ def test_entrenar_bc_rechaza_estados_nan(normalizar, mensaje):
     ({"epocas_maximas": True}, "epocas_maximas"), ({"paciencia": 0}, "paciencia"),
     ({"paciencia": None}, "paciencia"), ({"optimizador": "lbfgs"}, "optimizador"),
     ({"optimizador": None}, "optimizador"), ({"optimizador": ["adam"]}, "optimizador"),
-    ({"learning_rate": -0.1}, "learning_rate"), ({"learning_rate": math.nan}, "learning_rate"),
+    ({"learning_rate": -0.1}, "learning_rate"), ({"learning_rate": 0}, "learning_rate"),
+    ({"learning_rate": 0.0}, "learning_rate"), ({"learning_rate": math.nan}, "learning_rate"),
     ({"learning_rate": math.inf}, "learning_rate"), ({"learning_rate": "0.1"}, "learning_rate"),
     ({"learning_rate": True}, "learning_rate"),
     ({"normalizar_observaciones": None}, "normalizar_observaciones"),

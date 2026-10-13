@@ -159,16 +159,19 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
     learning_rate = bcfg.get("learning_rate")
     if (isinstance(learning_rate, (bool, np.bool_))
             or not isinstance(learning_rate, (int, float, np.integer, np.floating))
-            or not math.isfinite(learning_rate) or learning_rate < 0):
-        raise ValueError(f"bc.learning_rate debe ser un real no negativo, no {learning_rate!r}")
+            or not math.isfinite(learning_rate) or learning_rate <= 0):
+        raise ValueError(f"bc.learning_rate debe ser un real positivo, no {learning_rate!r}")
     normalizar = bcfg.get("normalizar_observaciones")
     if not isinstance(normalizar, (bool, np.bool_)):
         raise ValueError(f"bc.normalizar_observaciones debe ser booleano, no {normalizar!r}")
     if normalizar:
-        lotes = [estados for estados, _ in train_loader]
-        if not lotes:
+        # Se leen los estados directamente del dataset: recorrer un DataLoader, aunque
+        # no baraje, saca un número del generador global y cambiaría el entrenamiento.
+        conjunto = train_loader.dataset
+        if len(conjunto) == 0:
             raise ValueError("El loader de train no tiene pares")
-        politica.ajustar_normalizacion(torch.cat(lotes), bcfg.get("epsilon_normalizacion"))
+        estados_train = torch.stack([conjunto[i][0] for i in range(len(conjunto))])
+        politica.ajustar_normalizacion(estados_train, bcfg.get("epsilon_normalizacion"))
     opt = OPTIMIZADORES[optimizador](politica.parameters(), lr=float(learning_rate))
 
     criterio = "error_cuadratico" if politica.continua else "perdida"

@@ -204,7 +204,8 @@ class PoliticaBC(nn.Module):
             ValueError: Si las acciones no tienen la forma, el tipo o el rango esperados.
         """
         if self.continua:
-            if acciones.shape != (len(estados), self.dim_accion) or not acciones.is_floating_point():
+            if (acciones.shape != (len(estados), self.dim_accion)
+                    or not acciones.is_floating_point()):
                 raise ValueError(f"Se esperaban acciones reales [{len(estados)}, "
                                  f"{self.dim_accion}], no {acciones.dtype} {tuple(acciones.shape)}")
         else:
@@ -257,7 +258,9 @@ def construir_politica_bc(cfg: dict, espacio_observacion: spaces.Space,
 
 
 def construir_modelo(cfg: dict) -> nn.Module:
-    nombre = cfg["modelo"]["nombre"]
-    if nombre == "mi_modelo":
-        return ModeloPlaceholder()
-    raise ValueError(f"modelo desconocido: {nombre}")
+    """Devuelve el modelo de ejemplo de la plantilla, que usa el smoke actual.
+
+    Es un placeholder: ignora cfg["modelo"]["nombre"] y desaparecerá cuando
+    run.py use BC y GAIL en la rama integracion-e1.
+    """
+    return ModeloPlaceholder()
