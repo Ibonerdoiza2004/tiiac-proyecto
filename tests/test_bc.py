@@ -16,7 +16,10 @@ import pytest
 import torch
 import yaml
 from gymnasium import spaces
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
+from torch.utils.data import (
+    BatchSampler, DataLoader, RandomSampler, SequentialSampler, SubsetRandomSampler,
+    TensorDataset,
+)
 
 from src.data.loaders import DatasetTransiciones, construir_loaders_bc, submuestrear_pares
 from src.data.splits import crear_splits
@@ -29,7 +32,8 @@ RAIZ = Path(__file__).resolve().parent.parent
 HUELLA = "a" * 64
 OBSERVACION = spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)
 DISCRETO = spaces.Discrete(2)
-CONTINUO = spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
+# Límites amplios: las acciones de prueba van de -5 a 5 y deben caber en el espacio.
+CONTINUO = spaces.Box(-10.0, 10.0, shape=(2,), dtype=np.float32)
 CFG = {"bc": {
     "capas_ocultas": [100, 100], "activacion": "tanh", "log_std_inicial": 0.0,
     "frecuencia_pares": 1, "batch_size": 8, "optimizador": "adam",
@@ -413,6 +417,21 @@ def test_dataset_continuo_da_float32_con_los_mismos_valores():
     assert torch.equal(dataset.acciones, torch.tensor(acciones, dtype=torch.float32))
 
 
+@pytest.mark.parametrize(("accion", "valida"), [
+    ([-1.0, 2.0], True), ([1.0, -2.0], True), ([0.0, 0.0], True),
+    ([-1.01, 0.0], False), ([1.01, 0.0], False), ([0.0, -2.01], False), ([0.0, 2.01], False),
+], ids=["minimos", "maximos", "centro", "bajo_c0", "sobre_c0", "bajo_c1", "sobre_c1"])
+def test_dataset_continuo_comprueba_los_limites_del_box(accion, valida):
+    """Regresión: una acción 5 en Box(-1, 1) se aceptaba. Límites inclusivos por componente."""
+    espacio = spaces.Box(np.array([-1.0, -2.0], np.float32), np.array([1.0, 2.0], np.float32))
+    lote = _lote(np.zeros((2, 4)), np.array([[0.0, 0.0], accion], np.float32))
+    if valida:
+        DatasetTransiciones(lote, espacio)
+    else:
+        with pytest.raises(ValueError, match="fuera de los límites del espacio Box"):
+            DatasetTransiciones(lote, espacio)
+
+
 def test_dataset_devuelve_pares_y_conserva_ids():
     estados = np.arange(12, dtype=np.float32).reshape(3, 4)
     dataset = DatasetTransiciones(_lote(estados, [1, 0, 1], ids=[7, 7, 9]), DISCRETO)
@@ -671,6 +690,85 @@ def test_normalizar_no_gasta_numeros_aleatorios_del_barajado(monkeypatch):
     with pytest.raises(RuntimeError, match="parar tras normalizar"):
         loop.entrenar_bc(politica, loader, loader, _cfg(epocas_maximas=1))
     assert torch.equal(antes, capturas[0])
+
+
+def _dataset_compartido():
+    """Train (estados 0 y 2) y validación (100 y 102) dentro de un mismo dataset."""
+    estados = torch.tensor([[0.0] * 4, [2.0] * 4, [100.0] * 4, [102.0] * 4])
+    return TensorDataset(estados, torch.tensor([0, 1, 0, 1]))
+
+
+def test_normalizacion_respeta_el_sampler_del_loader_de_train():
+    """Regresión: leer todo el dataset metía los estados de validación (media 51, no 1)."""
+    datos = _dataset_compartido()
+    train = DataLoader(datos, batch_size=2, sampler=SubsetRandomSampler([0, 1]))
+    val = DataLoader(datos, batch_size=2, sampler=SubsetRandomSampler([2, 3]))
+    politica = _politica(False)
+    entrenar_bc(politica, train, val, _cfg(epocas_maximas=1))
+    assert torch.allclose(politica.media, torch.ones(4))
+    assert torch.allclose(politica.escala, torch.ones(4))
+
+
+@pytest.mark.parametrize("muestreador", ["secuencial", "aleatorio", "subconjunto"])
+def test_normalizacion_no_gasta_numeros_aleatorios_con_ningun_sampler(muestreador, monkeypatch):
+    """Los índices se leen del sampler sin recorrerlo, también con SubsetRandomSampler."""
+    datos = _dataset_compartido()
+    opciones = {"secuencial": SequentialSampler(datos), "aleatorio": RandomSampler(datos),
+                "subconjunto": SubsetRandomSampler([0, 1])}
+    loader = DataLoader(datos, batch_size=2, sampler=opciones[muestreador])
+    original = PoliticaBC.ajustar_normalizacion
+    capturas: list[torch.Tensor] = []
+
+    def ajustar(self, estados_train, epsilon):
+        """Normaliza de verdad y para el entrenamiento justo después."""
+        original(self, estados_train, epsilon)
+        capturas.append(torch.get_rng_state())
+        raise RuntimeError("parar tras normalizar")
+
+    fijar_seed(5)
+    politica = _politica(False)
+    antes = torch.get_rng_state()
+    monkeypatch.setattr(PoliticaBC, "ajustar_normalizacion", ajustar)
+    with pytest.raises(RuntimeError, match="parar tras normalizar"):
+        entrenar_bc(politica, loader, loader, _cfg(epocas_maximas=1))
+    assert torch.equal(antes, capturas[0])
+
+
+@pytest.mark.parametrize("caso", ["con_reemplazo", "menos_muestras", "batch_sampler_propio"])
+def test_normalizacion_rechaza_loaders_de_los_que_no_se_saben_los_pares(caso):
+    """Si no se puede saber qué pares recorre train, se rechaza en lugar de adivinar."""
+    datos = _dataset_compartido()
+    if caso == "con_reemplazo":
+        loader = DataLoader(datos, batch_size=2, sampler=RandomSampler(datos, replacement=True))
+    elif caso == "menos_muestras":
+        loader = DataLoader(datos, batch_size=2, sampler=RandomSampler(datos, num_samples=2))
+    else:
+        loader = DataLoader(datos, batch_sampler=BatchSampler(SubsetRandomSampler([0, 1]), 2,
+                                                              drop_last=False))
+    with pytest.raises(ValueError, match="(no se sabe|No se puede)"):
+        entrenar_bc(_politica(False), loader, loader, _cfg(epocas_maximas=1))
+
+
+def test_sin_normalizar_se_admite_cualquier_loader():
+    """La comprobación del sampler solo se aplica al normalizar."""
+    datos = _dataset_compartido()
+    loader = DataLoader(datos, batch_size=2, sampler=RandomSampler(datos, replacement=True))
+    entrenar_bc(_politica(False), loader, loader,
+                _cfg(normalizar_observaciones=False, epocas_maximas=1))
+
+
+@pytest.mark.parametrize("metricas", [
+    {"perdida": math.inf, "acierto": 0.5}, {"perdida": math.nan, "acierto": 0.5},
+    {"perdida": 0.3, "acierto": math.nan},
+], ids=["perdida_inf", "perdida_nan", "acierto_nan"])
+def test_entrenar_bc_rechaza_metricas_de_validacion_no_finitas(metricas, monkeypatch):
+    """Regresión: una validación infinita se aceptaba como mejor resultado."""
+    import src.training.loop as loop
+    monkeypatch.setattr(loop, "evaluar_bc", lambda politica, loader: dict(metricas))
+    estados, acciones = _datos_aprendibles(False, n=16)
+    loader = _loader(estados, acciones, DISCRETO)
+    with pytest.raises(FloatingPointError, match="validación no finitas en la época 1"):
+        entrenar_bc(_politica(False), loader, loader, _cfg(epocas_maximas=3))
 
 
 def test_evaluar_bc_rechaza_un_loader_vacio():

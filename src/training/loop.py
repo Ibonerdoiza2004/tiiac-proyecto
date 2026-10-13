@@ -10,7 +10,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gymnasium import spaces
-from torch.utils.data import DataLoader
+from torch.utils.data import (
+    BatchSampler, DataLoader, IterableDataset, RandomSampler, SequentialSampler,
+    SubsetRandomSampler,
+)
 
 from src.data.loaders import construir_loaders_bc
 from src.data.splits import SplitsDemostraciones
@@ -83,6 +86,36 @@ def _entero_positivo_de_cfg(bcfg: dict, clave: str) -> int:
     return int(valor)
 
 
+def _indices_de_train(loader: DataLoader) -> list[int]:
+    """Índices del dataset que recorre el loader de train, sin gastar números aleatorios.
+
+    Recorrer el loader sacaría un número del generador global de PyTorch, y leer
+    todo el dataset ignoraría su sampler: si train y validación comparten
+    dataset, metería estados de validación. Por eso se leen los índices del
+    propio sampler. Se admiten SequentialSampler y RandomSampler sin reemplazo y
+    con su tamaño por defecto, que recorren todo el dataset, y
+    SubsetRandomSampler, que recorre sus índices.
+
+    Raises:
+        ValueError: Si el loader usa otro sampler, un batch_sampler propio o un
+            dataset iterable, porque entonces no se sabe qué pares recorre.
+    """
+    muestreador = loader.sampler
+    if (isinstance(loader.dataset, IterableDataset)
+            or not isinstance(loader.batch_sampler, BatchSampler)
+            or loader.batch_sampler.sampler is not muestreador):
+        raise ValueError("No se puede saber qué pares recorre el loader de train para normalizar")
+    total = len(loader.dataset)
+    if isinstance(muestreador, SequentialSampler) or (
+            isinstance(muestreador, RandomSampler) and not muestreador.replacement
+            and muestreador.num_samples == total):
+        return list(range(total))
+    if isinstance(muestreador, SubsetRandomSampler):
+        return [int(i) for i in muestreador.indices]
+    raise ValueError(f"No se puede normalizar con el sampler {type(muestreador).__name__}: "
+                     "usa SequentialSampler, RandomSampler o SubsetRandomSampler")
+
+
 @torch.no_grad()
 def evaluar_bc(politica: PoliticaBC, loader: DataLoader) -> dict[str, float]:
     """Evalúa la política de BC en modo evaluación y sin gradientes.
@@ -118,8 +151,9 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
     """Entrena la política de BC con parada temprana y deja los mejores pesos.
 
     Si bc.normalizar_observaciones es true, antes de entrenar ajusta la
-    normalización de la política con todos los estados de train_loader y
-    bc.epsilon_normalizacion; nunca con validación. Si es false, la deja como esté.
+    normalización de la política con los estados que recorre train_loader
+    (los índices de su sampler) y bc.epsilon_normalizacion; nunca con
+    validación ni gastando números aleatorios. Si es false, la deja como esté.
 
     Minimiza la log-verosimilitud negativa de las acciones de train. Tras cada
     época evalúa en validación con el criterio de selección: la pérdida con
@@ -144,8 +178,10 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
         de la mejor época, con el prefijo val_.
 
     Raises:
-        ValueError: Configuración no válida o train_loader sin pares.
-        FloatingPointError: Si la pérdida de train no es finita.
+        ValueError: Configuración no válida, train_loader sin pares o con un
+            sampler del que no se sabe qué pares recorre (al normalizar).
+        FloatingPointError: Si la pérdida de train o alguna métrica de
+            validación no es finita.
     """
     bcfg = cfg.get("bc") if isinstance(cfg, dict) else None
     if not isinstance(bcfg, dict):
@@ -165,12 +201,10 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
     if not isinstance(normalizar, (bool, np.bool_)):
         raise ValueError(f"bc.normalizar_observaciones debe ser booleano, no {normalizar!r}")
     if normalizar:
-        # Se leen los estados directamente del dataset: recorrer un DataLoader, aunque
-        # no baraje, saca un número del generador global y cambiaría el entrenamiento.
-        conjunto = train_loader.dataset
-        if len(conjunto) == 0:
+        indices = _indices_de_train(train_loader)
+        if not indices:
             raise ValueError("El loader de train no tiene pares")
-        estados_train = torch.stack([conjunto[i][0] for i in range(len(conjunto))])
+        estados_train = torch.stack([train_loader.dataset[i][0] for i in indices])
         politica.ajustar_normalizacion(estados_train, bcfg.get("epsilon_normalizacion"))
     opt = OPTIMIZADORES[optimizador](politica.parameters(), lr=float(learning_rate))
 
@@ -195,8 +229,10 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
 
         metricas = evaluar_bc(politica, val_loader)
         registrar(run, {f"bc/val/{k}": v for k, v in metricas.items()}, paso)
-        if (not mejores or not math.isfinite(mejores[criterio])
-                or metricas[criterio] < mejores[criterio]):
+        if not all(math.isfinite(v) for v in metricas.values()):
+            raise FloatingPointError(
+                f"Métricas de validación no finitas en la época {epoca}: {metricas}")
+        if not mejores or metricas[criterio] < mejores[criterio]:
             mejores, mejor_epoca, sin_mejora = metricas, epoca, 0
             mejor_estado = copy.deepcopy(politica.state_dict())
         else:

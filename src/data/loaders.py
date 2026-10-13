@@ -157,6 +157,8 @@ class DatasetTransiciones(Dataset):
                                  f"no {acciones.dtype} {acciones.shape}")
             if not np.all(np.isfinite(acciones)):
                 raise ValueError("Las acciones deben ser finitas")
+            if np.any(acciones < espacio_accion.low) or np.any(acciones > espacio_accion.high):
+                raise ValueError("Hay acciones fuera de los límites del espacio Box")
             self.acciones = torch.tensor(acciones, dtype=torch.float32)
         else:
             raise ValueError(
