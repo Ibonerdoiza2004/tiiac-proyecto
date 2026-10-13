@@ -14,7 +14,7 @@ import numpy as np
 from gymnasium import spaces
 from numpy.typing import NDArray
 
-from src.data.tipos import Trayectoria
+from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria, es_id_episodio
 
 _CAMPOS = (
     "estados", "acciones", "siguientes_estados", "recompensas_originales",
@@ -76,6 +76,9 @@ def _validar_trayectoria(
     if (isinstance(identificador, (bool, np.bool_))
             or not isinstance(identificador, (int, np.integer))):
         raise ValueError(f"{contexto}: id_episodio debe ser un entero")
+    if not es_id_episodio(identificador):
+        raise ValueError(f"{contexto}: id_episodio debe estar en el rango de int64 "
+                         f"[{ID_EPISODIO_MINIMO}, {ID_EPISODIO_MAXIMO}]")
     identificador = int(identificador)
 
     arrays: dict[str, NDArray[Any]] = {}

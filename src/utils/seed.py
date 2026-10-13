@@ -31,3 +31,25 @@ def fijar_seed(seed: int, determinista: bool = True) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+
+def crear_generador(semilla: int) -> np.random.Generator:
+    """Crea un generador aleatorio propio, independiente de la semilla global.
+
+    Sirve para decisiones que deben repetirse igual aunque cambie el resto de la
+    ejecución, como el reparto de demostraciones o el submuestreo de pares. Usar
+    siempre esta función en lugar de crear generadores en otros módulos.
+
+    Args:
+        semilla: entero no negativo. Va en configs/, no aquí.
+
+    Returns:
+        Un numpy.random.Generator; la misma semilla produce la misma secuencia.
+
+    Raises:
+        ValueError: si la semilla no es un entero no negativo.
+    """
+    if (isinstance(semilla, (bool, np.bool_))
+            or not isinstance(semilla, (int, np.integer)) or semilla < 0):
+        raise ValueError(f"La semilla debe ser un entero no negativo, no {semilla!r}")
+    return np.random.default_rng(int(semilla))

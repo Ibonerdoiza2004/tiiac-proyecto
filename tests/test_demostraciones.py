@@ -18,7 +18,7 @@ from gymnasium import spaces
 from src.data.demostraciones import (
     cargar_demostraciones, guardar_demostraciones, validar_demostraciones,
 )
-from src.data.tipos import Trayectoria
+from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria
 
 OBSERVACION = spaces.Box(-np.inf, np.inf, (4,), np.float32)
 DISCRETA = spaces.Discrete(2)
@@ -351,6 +351,31 @@ def test_rechaza_identificadores_no_enteros(
     """Los IDs son enteros; cadenas, booleanos y reales se rechazan."""
     with pytest.raises(ValueError, match="id_episodio"):
         _guardar(tmp_path / "datos.npz", [_trayectoria(identificador=identificador)], metadatos)
+
+
+@pytest.mark.parametrize("identificador", [
+    ID_EPISODIO_MAXIMO + 1, ID_EPISODIO_MINIMO - 1, 2**70, np.uint64(ID_EPISODIO_MAXIMO + 1),
+], ids=["maximo_mas_uno", "minimo_menos_uno", "2_elevado_70", "uint64_grande"])
+def test_rechaza_ids_fuera_del_rango_int64(
+    tmp_path: Path, metadatos: dict[str, object], identificador: Any,
+) -> None:
+    """Regresión: IDs válidos por tipo pero fuera de int64 rompían los splits y el lote."""
+    with pytest.raises(ValueError, match="id_episodio debe estar en el rango de int64"):
+        _guardar(tmp_path / "datos.npz", [_trayectoria(identificador=identificador)], metadatos)
+
+
+@pytest.mark.parametrize("identificador", [
+    ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, np.int64(ID_EPISODIO_MAXIMO),
+    np.uint64(ID_EPISODIO_MAXIMO),
+], ids=["maximo", "minimo", "maximo_int64", "maximo_uint64"])
+def test_ids_en_los_limites_de_int64_se_guardan_y_cargan_exactos(
+    tmp_path: Path, metadatos: dict[str, object], identificador: Any,
+) -> None:
+    """Los extremos del rango son válidos y vuelven exactamente iguales tras guardar y cargar."""
+    ruta = _guardar(tmp_path / "datos.npz", [_trayectoria(identificador=identificador)], metadatos)
+    trayectorias, _ = cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
+    assert trayectorias[0].id_episodio == int(identificador)
+    assert type(trayectorias[0].id_episodio) is int
 
 
 @pytest.mark.parametrize("ids", [(0, 0), (1, np.int64(1)), (np.int32(2), np.uint8(2))],

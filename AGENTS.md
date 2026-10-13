@@ -105,14 +105,14 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
 - No versionar datos, demostraciones, pesos, entornos, cachés, `wandb/` ni secretos.
   Mantener `.gitignore`, versiones exactas en `requirements.txt` y un procedimiento
   reproducible para obtener los datos, con su procedencia y licencia.
-- `src/data/splits.py` todavía no existe: no afirmar que sus splits están congelados.
-  Cuando se congelen en H3, documentar su ubicación e identidad y no cambiarlos
-  sin acuerdo explícito.
+- `src/data/splits.py` crea, valida, guarda y carga splits, pero todavía no hay
+  splits congelados: no afirmar que lo están. Cuando se congelen en H3, documentar
+  la ubicación del JSON y la huella del dataset y no cambiarlos sin acuerdo explícito.
 
 ## Estado actual
 
 Actualizar esta sección cuando cambie el proyecto.
 
 - **Hecho:** dependencias de backend FastAPI y Uvicorn fijadas en `requirements.txt`. Contenedor `Trayectoria` y validación frente a espacios Gymnasium, guardado y carga de demostraciones NPZ/JSON implementados y probados.
-- **En curso:**
-- **Pendiente:**
+- **En curso:** rama `splits-demostraciones`: `crear_generador`, `LoteTransiciones`, splits por trayectoria con subconjuntos anidados en JSON con la huella del dataset y `submuestrear_pares`, implementados y probados; pendientes de revisión.
+- **Pendiente:** `combinar_demostraciones` para el aplicativo: varios NPZ se combinan en uno nuevo con IDs sin repetir antes de crear splits, que siguen correspondiendo a un único archivo (decisión del 2026-10-13).
