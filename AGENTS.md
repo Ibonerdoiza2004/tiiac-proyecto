@@ -49,6 +49,11 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
 
 ## Convenciones
 
+- Modificar la plantilla lo mínimo necesario: reutilizar y adaptar los archivos
+  existentes cuando encajen con su responsabilidad. Crear módulos nuevos solo
+  cuando aporten una separación necesaria o eviten mezclar responsabilidades;
+  no duplicar lógica ni crear un archivo por cada rama o función. Sustituir los
+  placeholders y adaptar interfaces cuando lo requiera el proyecto.
 - Sin rutas absolutas en código, configuración ni documentación del proyecto.
 - Toda función pública nueva o modificada lleva docstring y anotaciones de tipo.
 - `run.py` orquesta; la lógica vive en `src/data/`, `src/models/` y `src/training/`.
@@ -58,8 +63,8 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
   separar por trayectoria para evitar fugas entre episodios compartidos.
 - Aplicar augmentation solo a train, jamás a validación ni a test.
 - Evaluar con el modelo en modo evaluación y sin gradientes.
-- `src/app/` no importa `src/training/`: carga un checkpoint y responde.
-  Lanzar entrenamientos desde el dashboard necesitará una orquestación separada.
+- El dashboard puede lanzar entrenamientos: el profesor lo autorizó para este
+  proyecto de RL (comunicado el 2026-10-08).
 - **Después de implementar o modificar una funcionalidad, escribir o adaptar
   y ejecutar los tests correspondientes antes de darla por terminada.** Comprobar
   cada comportamiento y requisito: casos normales, límites, entradas vacías o
@@ -108,6 +113,6 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
 
 Actualizar esta sección cuando cambie el proyecto.
 
-- **Hecho:** `docs/propuestas.md` terminado.
+- **Hecho:** dependencias de backend FastAPI y Uvicorn fijadas en `requirements.txt`. Contenedor `Trayectoria` y validación frente a espacios Gymnasium, guardado y carga de demostraciones NPZ/JSON implementados y probados.
 - **En curso:**
 - **Pendiente:**
