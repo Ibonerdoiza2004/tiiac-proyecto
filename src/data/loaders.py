@@ -109,13 +109,68 @@ def submuestrear_pares(
 
 
 
+def tensores_de_pares(estados: object, acciones: object,
+                      espacio_accion: spaces.Space) -> tuple[torch.Tensor, torch.Tensor]:
+    """Comprueba pares (estado, acción) frente al espacio y los pasa a tensores.
+
+    Los estados salen float32 [N, d_observacion]. Con Discrete(n, start) las
+    acciones salen int64 [N] en [0, n), ya sin el start, como esperan
+    PoliticaBC y Discriminador; con Box salen float32 [N, d_accion]. Los
+    arrays se copian y no se normalizan.
+
+    Args:
+        estados: Array de números finitos [N, d] con N > 0.
+        acciones: Enteros [N] del espacio Discrete o reales finitos [N, d_accion]
+            dentro de los límites del Box.
+        espacio_accion: Discrete o Box de una dimensión del entorno.
+
+    Returns:
+        (estados, acciones) como tensores.
+
+    Raises:
+        ValueError: Pares vacíos o incoherentes, acciones fuera del espacio o
+            espacio no compatible.
+    """
+    estados = np.asarray(estados)
+    acciones = np.asarray(acciones)
+    n = len(estados)
+    if estados.ndim != 2 or n == 0 or estados.dtype.kind not in "iuf":
+        raise ValueError(f"Los estados deben ser números [N, d] con N > 0, "
+                         f"no {estados.dtype} {estados.shape}")
+    if not np.all(np.isfinite(estados)):
+        raise ValueError("Los estados deben ser finitos")
+
+    if isinstance(espacio_accion, spaces.Discrete):
+        if (acciones.shape != (n,) or not np.issubdtype(acciones.dtype, np.integer)):
+            raise ValueError(f"Con acciones Discrete se esperaban enteros [{n}], "
+                             f"no {acciones.dtype} {acciones.shape}")
+        indices = acciones.astype(np.int64) - int(espacio_accion.start)
+        if indices.min() < 0 or indices.max() >= int(espacio_accion.n):
+            raise ValueError("Hay acciones fuera del espacio Discrete")
+        tensor_acciones = torch.tensor(indices, dtype=torch.int64)
+    elif isinstance(espacio_accion, spaces.Box) and len(espacio_accion.shape) == 1:
+        forma = (n, int(espacio_accion.shape[0]))
+        if acciones.shape != forma or not np.issubdtype(acciones.dtype, np.floating):
+            raise ValueError(f"Con acciones Box se esperaban reales {list(forma)}, "
+                             f"no {acciones.dtype} {acciones.shape}")
+        if not np.all(np.isfinite(acciones)):
+            raise ValueError("Las acciones deben ser finitas")
+        if np.any(acciones < espacio_accion.low) or np.any(acciones > espacio_accion.high):
+            raise ValueError("Hay acciones fuera de los límites del espacio Box")
+        tensor_acciones = torch.tensor(acciones, dtype=torch.float32)
+    else:
+        raise ValueError(
+            "Espacio de acción no compatible: se admite Discrete o Box de una dimensión")
+    return torch.tensor(estados, dtype=torch.float32), tensor_acciones
+
+
 class DatasetTransiciones(Dataset):
     """Pares (estado, acción) de un LoteTransiciones como tensores para BC.
 
     Los estados son float32 [N, d_observacion]. Con Discrete(n, start) las
     acciones son int64 [N] en [0, n), ya sin el start, como espera PoliticaBC;
     con Box son float32 [N, d_accion]. ids_episodio conserva de qué partida
-    sale cada par. Los arrays se copian y no se normalizan.
+    sale cada par. Los arrays se copian y no se normalizan (tensores_de_pares).
     """
 
     def __init__(self, lote: LoteTransiciones, espacio_accion: spaces.Space) -> None:
@@ -131,39 +186,10 @@ class DatasetTransiciones(Dataset):
         """
         if not isinstance(lote, LoteTransiciones):
             raise ValueError("Se esperaba un LoteTransiciones")
-        estados = np.asarray(lote.estados)
-        acciones = np.asarray(lote.acciones)
-        n = len(estados)
-        if estados.ndim != 2 or n == 0 or estados.dtype.kind not in "iuf":
-            raise ValueError(f"Los estados deben ser números [N, d] con N > 0, "
-                             f"no {estados.dtype} {estados.shape}")
-        if not np.all(np.isfinite(estados)):
-            raise ValueError("Los estados deben ser finitos")
-        if np.shape(lote.ids_episodio) != (n,):
-            raise ValueError(f"ids_episodio debe tener forma [{n}]")
-
-        if isinstance(espacio_accion, spaces.Discrete):
-            if (acciones.shape != (n,) or not np.issubdtype(acciones.dtype, np.integer)):
-                raise ValueError(f"Con acciones Discrete se esperaban enteros [{n}], "
-                                 f"no {acciones.dtype} {acciones.shape}")
-            indices = acciones.astype(np.int64) - int(espacio_accion.start)
-            if indices.min() < 0 or indices.max() >= int(espacio_accion.n):
-                raise ValueError("Hay acciones fuera del espacio Discrete")
-            self.acciones = torch.tensor(indices, dtype=torch.int64)
-        elif isinstance(espacio_accion, spaces.Box) and len(espacio_accion.shape) == 1:
-            forma = (n, int(espacio_accion.shape[0]))
-            if acciones.shape != forma or not np.issubdtype(acciones.dtype, np.floating):
-                raise ValueError(f"Con acciones Box se esperaban reales {list(forma)}, "
-                                 f"no {acciones.dtype} {acciones.shape}")
-            if not np.all(np.isfinite(acciones)):
-                raise ValueError("Las acciones deben ser finitas")
-            if np.any(acciones < espacio_accion.low) or np.any(acciones > espacio_accion.high):
-                raise ValueError("Hay acciones fuera de los límites del espacio Box")
-            self.acciones = torch.tensor(acciones, dtype=torch.float32)
-        else:
-            raise ValueError(
-                "Espacio de acción no compatible: se admite Discrete o Box de una dimensión")
-        self.estados = torch.tensor(estados, dtype=torch.float32)
+        self.estados, self.acciones = tensores_de_pares(lote.estados, lote.acciones,
+                                                        espacio_accion)
+        if np.shape(lote.ids_episodio) != (len(self.estados),):
+            raise ValueError(f"ids_episodio debe tener forma [{len(self.estados)}]")
         self.ids_episodio = np.array(lote.ids_episodio, dtype=np.int64)
 
     def __len__(self) -> int:
