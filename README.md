@@ -50,10 +50,10 @@ Licencia: <licencia del dataset>.
 
 ```bash
 # Smoke test: el pipeline entero en miniatura. Menos de 5 minutos en CPU.
-python run.py --smoke
+python run.py --smoke --entorno cartpole
 
 # Entrenamiento completo. Menos de 20 minutos en una T4 de Colab gratuito.
-python run.py --config configs/default.yaml
+python run.py --config configs/default.yaml --entorno cartpole
 
 # El aplicativo, sobre el checkpoint entrenado.
 python -m src.app.serve --checkpoint checkpoints/mejor.pt

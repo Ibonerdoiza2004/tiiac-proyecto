@@ -26,6 +26,7 @@ from src.data.splits import crear_splits
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import ACTIVACIONES, PoliticaBC, construir_politica_bc
 from src.training.loop import entrenar_bc, entrenar_bc_subconjunto, evaluar_bc
+from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import crear_generador, fijar_seed
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -47,6 +48,13 @@ def _cfg(**cambios) -> dict:
     cfg = copy.deepcopy(CFG)
     cfg["bc"].update(cambios)
     return cfg
+
+
+def _configuracion_proyecto(ruta: str) -> dict:
+    """Resuelve la configuración base de CartPole y la capa smoke si procede."""
+    ajustes = (yaml.safe_load((RAIZ / ruta).read_text(encoding="utf-8"))
+               if ruta.endswith("smoke.yaml") else None)
+    return resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole", ajustes)
 
 
 def _politica(continua: bool, capas=(16,), dim: int = 4, n: int = 2) -> PoliticaBC:
@@ -344,7 +352,7 @@ def test_box_de_varias_acciones_usa_log_std_de_la_config():
 @pytest.mark.parametrize("ruta", ["configs/default.yaml", "configs/smoke.yaml"])
 @pytest.mark.parametrize("espacio_accion", [DISCRETO, CONTINUO], ids=["discreta", "continua"])
 def test_las_configs_del_proyecto_construyen_la_politica_del_paper(ruta, espacio_accion):
-    cfg = yaml.safe_load((RAIZ / ruta).read_text(encoding="utf-8"))
+    cfg = _configuracion_proyecto(ruta)
     politica = construir_politica_bc(cfg, OBSERVACION, espacio_accion)
     lineales = [m for m in politica.red if isinstance(m, torch.nn.Linear)]
     assert [m.out_features for m in lineales] == [100, 100, 2]
@@ -1062,7 +1070,7 @@ def test_entrenar_bc_subconjunto_normaliza_con_las_partidas_del_subconjunto():
 @pytest.mark.parametrize("ruta", ["configs/default.yaml", "configs/smoke.yaml"])
 @TIPOS
 def test_entrenar_bc_subconjunto_funciona_con_las_configs_del_proyecto(ruta, continua):
-    cfg = yaml.safe_load((RAIZ / ruta).read_text(encoding="utf-8"))
+    cfg = _configuracion_proyecto(ruta)
     cfg["bc"]["epocas_maximas"] = min(cfg["bc"]["epocas_maximas"], 2)
     trayectorias = _quince(continua)
     fijar_seed(0)

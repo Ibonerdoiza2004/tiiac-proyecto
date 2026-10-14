@@ -1,0 +1,17 @@
+# Perfil activo de CartPole. TRPO y el presupuesto del experto proceden de la
+# replicación; el objetivo y pasos_totales son elecciones por medir.
+entorno:
+  id: CartPole-v1
+bc:
+  frecuencia_pares: 10
+trpo:
+  capas_ocultas: [100, 100]
+  activacion: tanh
+  gamma: 0.995
+  gae_lambda: 0.97
+  target_kl: 0.01
+  cg_damping: 0.1
+  pasos_por_iteracion: 5000
+experto:
+  pasos_totales: 100000
+  retorno_objetivo: 475

@@ -7,13 +7,16 @@ experimento:
 
 datos:
   raiz: data/
-  subset: null          # null = dataset completo; un entero = N muestras (regla 5/20)
+  subset: 0              # 0 = dataset completo; un entero positivo = N muestras
   batch_size: 64
   num_workers: 2
 
 modelo:
   nombre: mi_modelo
   # ... los del paper. Cada valor deberia poder senyalarse en la ficha de replicacion.
+
+entorno:
+  id: null
 
 bc:
   # Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh.
@@ -22,15 +25,13 @@ bc:
   # Acciones continuas: log de la desviacion tipica inicial de la gaussiana
   # (eleccion propia; 0.0 es el valor por defecto de las politicas de SB3).
   log_std_inicial: 0.0
-  # Normalizacion de observaciones con media y desviacion de los estados de
-  # train, como el codigo original (que usa tambien su 30 % de validacion).
+  # Normalizacion de observaciones con media y desviacion de train.
   # Componentes con desviacion <= epsilon solo se centran.
   normalizar_observaciones: true
   epsilon_normalizacion: 1.0e-6
-  # Un par (estado, accion) de cada N pasos de cada partida. Depende del
-  # entorno en el codigo original de GAIL: CartPole 10, MountainCar y Acrobot 5,
-  # MuJoCo (HalfCheetah) 20. Pasara al perfil de cada entorno.
-  frecuencia_pares: 10
+  # Un par (estado, accion) de cada N pasos. Depende del entorno y se define
+  # en configs/entornos/.
+  frecuencia_pares: null
   # Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original).
   # Las epocas maximas y la paciencia son eleccion propia: el original entrena
   # un numero fijo de iteraciones y se queda con el mejor snapshot.
@@ -40,12 +41,26 @@ bc:
   epocas_maximas: 500
   paciencia: 20
 
+trpo:
+  capas_ocultas: null
+  activacion: null
+  gamma: null
+  gae_lambda: null
+  target_kl: null
+  cg_damping: null
+  pasos_por_iteracion: null
+
+experto:
+  pasos_totales: null
+  retorno_objetivo: null
+
 entrenamiento:
   learning_rate: 0.001
   epochs: 20
+  max_steps: 0              # 0 = sin límite; el smoke lo reduce
   optimizador: adam
 
 wandb:
   proyecto: tiiac-2026
-  entidad: null         # tu usuario o equipo de W&B
+  entidad: ""           # vacío = entidad predeterminada de W&B
   modo: online          # 'disabled' en los tests
