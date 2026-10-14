@@ -1,0 +1,16 @@
+# Perfil activo de CartPole.
+entorno:
+  id: CartPole-v1  # Gymnasium; v1 permite hasta 500 pasos por episodio.
+bc:
+  frecuencia_pares: 10  # Código original de GAIL para CartPole.
+trpo:
+  capas_ocultas: [100, 100]  # Paper Ho y Ermon (2016).
+  activacion: tanh  # Paper Ho y Ermon (2016).
+  gamma: 0.995  # Código original de GAIL.
+  gae_lambda: 0.97  # Código original de GAIL.
+  target_kl: 0.01  # Código original de GAIL (max_kl).
+  cg_damping: 0.1  # Código original de GAIL.
+  pasos_por_iteracion: 5000  # Código original de GAIL para entornos clásicos.
+experto:
+  pasos_totales: 100000  # Presupuesto inicial elegido para el proyecto; falta medir.
+  retorno_objetivo: 500  # Umbral estándar de CartPole-v1 en Gymnasium (500 pasos).

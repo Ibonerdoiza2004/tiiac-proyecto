@@ -22,7 +22,7 @@ def abrir_run(cfg: dict) -> Any | None:
 
     return wandb.init(
         project=wcfg.get("proyecto", "tiiac-2026"),
-        entity=wcfg.get("entidad"),
+        entity=wcfg.get("entidad") or None,
         name=cfg["experimento"]["nombre"],
         config=cfg,
         mode=wcfg.get("modo", "online"),

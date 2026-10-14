@@ -26,6 +26,7 @@ from src.utils.tracking import abrir_run       # noqa: E402
 from src.data.loaders import construir_loaders  # noqa: E402
 from src.models.factory import construir_modelo  # noqa: E402
 from src.training.loop import entrenar, evaluar  # noqa: E402
+from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 
 
 def cargar_config(ruta: Path) -> dict:
@@ -39,16 +40,22 @@ def main() -> int:
     ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"),
                     help="fichero de configuracion")
     ap.add_argument("--smoke", action="store_true",
-                    help="usa configs/smoke.yaml: el pipeline entero en miniatura")
+                    help="reduce la configuracion para comprobar el pipeline")
+    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
+                    default=TipoEntorno.CARTPOLE.value,
+                    help="perfil de entorno que se combina con la configuracion base")
     ap.add_argument("--solo-evaluar", action="store_true",
                     help="carga el checkpoint y evalua, sin entrenar")
     args = ap.parse_args()
 
-    ruta = Path("configs/smoke.yaml") if args.smoke else args.config
-    if not ruta.is_file():
-        print(f"error: no existe {ruta}", file=sys.stderr)
+    try:
+        ajustes = cargar_config(Path("configs/smoke.yaml")) if args.smoke else None
+        cfg = resolver_configuracion(args.config, args.entorno, ajustes)
+        if args.smoke:
+            cfg["origen"]["archivos"].append("configs/smoke.yaml")
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        print(f"error de configuración: {error}", file=sys.stderr)
         return 2
-    cfg = cargar_config(ruta)
 
     # 1 · reproducibilidad, antes que nada
     fijar_seed(cfg["experimento"]["seed"])
