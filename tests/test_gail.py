@@ -56,11 +56,11 @@ def _discriminador(continuo: bool, capas=(8,)) -> Discriminador:
 
 def _con_pesos_aleatorios(discriminador: Discriminador, semilla: int = 0) -> Discriminador:
     """Da pesos no nulos a la capa de salida, que empieza a cero."""
-    generador = torch.Generator().manual_seed(semilla)
+    generador = crear_generador(semilla)
     salida = [m for m in discriminador.red if isinstance(m, torch.nn.Linear)][-1]
     with torch.no_grad():
-        salida.weight.copy_(torch.randn(salida.weight.shape, generator=generador))
-        salida.bias.copy_(torch.randn(salida.bias.shape, generator=generador))
+        for parametro in (salida.weight, salida.bias):
+            parametro.copy_(torch.tensor(generador.normal(size=tuple(parametro.shape))))
     return discriminador
 
 
@@ -387,7 +387,7 @@ def test_muestrear_expertos_devuelve_copias():
     ("lote", -2, "gen", "cantidad"),
     ("lote", 1.5, "gen", "cantidad"),
     ("lote", True, "gen", "cantidad"),
-    ("lote", 3, np.random.RandomState(0), "Generator"),
+    ("lote", 3, np.random, "Generator"),
     ("lote", 3, None, "Generator"),
     ("vacio", 3, "gen", "No hay pares"),
     ("incoherente", 3, "gen", "longitudes"),
@@ -473,16 +473,18 @@ def test_la_configuracion_del_discriminador_exige_todas_sus_claves():
 
 # --- actualizar_discriminador --------------------------------------------------
 
-def _perdida_esperada(discriminador, agente, experto, continuo, peso) -> float:
-    """Pérdida del original: media por grupo de BCE − peso·H, sumada."""
+def _esperadas(discriminador, agente, experto, continuo, peso) -> tuple[float, float]:
+    """Pérdida del original (media por grupo de BCE − peso·H, sumada) y entropía
+    media por grupo, calculadas con las fórmulas de libro en float64."""
     def grupo(lote, etiqueta):
         logits = discriminador(*_tensores(lote, continuo)).double()
         p = torch.sigmoid(logits)
         bce = -(etiqueta * torch.log(p) + (1 - etiqueta) * torch.log(1 - p))
         entropia = -(p * torch.log(p) + (1 - p) * torch.log(1 - p))
-        return (bce - peso * entropia).mean()
+        return (bce - peso * entropia).mean(), entropia.mean()
     with torch.no_grad():
-        return float(grupo(agente, 0.0) + grupo(experto, 1.0))
+        (perdida_a, entropia_a), (perdida_e, entropia_e) = grupo(agente, 0.0), grupo(experto, 1.0)
+        return float(perdida_a + perdida_e), float((entropia_a + entropia_e) / 2)
 
 
 @TIPOS
@@ -491,11 +493,13 @@ def test_la_perdida_pondera_cada_grupo_por_igual(continuo, peso):
     discriminador = _con_pesos_aleatorios(_discriminador(continuo))
     # Grupos de tamaños distintos: con una media conjunta el resultado cambiaría.
     agente, experto = _lote(7, continuo, 1), _lote(3, continuo, 2, centro=2.0)
-    esperada = _perdida_esperada(copy.deepcopy(discriminador), agente, experto, continuo, peso)
+    perdida, entropia = _esperadas(copy.deepcopy(discriminador), agente, experto, continuo, peso)
     medidas = actualizar_discriminador(discriminador, torch.optim.Adam(discriminador.parameters()),
                                        agente, experto, _espacio(continuo),
                                        _cfg(peso_entropia=peso))
-    assert medidas["perdida"] == pytest.approx(esperada, rel=1e-5)
+    assert medidas["perdida"] == pytest.approx(perdida, rel=1e-5)
+    # La entropía registrada también pesa igual cada grupo.
+    assert medidas["entropia"] == pytest.approx(entropia, rel=1e-5)
 
 
 def test_con_el_discriminador_inicial_la_perdida_es_la_esperada():
@@ -698,6 +702,43 @@ def test_extraer_lote_vacia_el_bloque_e_iniciar_bloque_descarta():
     lote = envuelto.extraer_lote()
     assert lote.numero_transiciones == 2
     np.testing.assert_array_equal(lote.pasos, [2, 2])
+
+
+def test_las_partidas_truncadas_tambien_cambian_de_id():
+    # Sin terminar nunca (fin muy alto), TimeLimit corta cada partida a los 2 pasos.
+    venv = DummyVecEnv([lambda: gym.wrappers.TimeLimit(_EntornoContador(DISCRETO, 100),
+                                                       max_episode_steps=2)])
+    envuelto = EntornoRecompensaGAIL(venv, _discriminador(False), "log_d")
+    previas = [envuelto.reset()]
+    for paso in range(5):
+        observaciones, _, terminados, infos = envuelto.step(_acciones(False, paso, 1))
+        previas.append(observaciones)
+        assert bool(terminados[0]) == infos[0]["TimeLimit.truncated"] == (paso % 2 == 1)
+    lote = envuelto.extraer_lote()
+    np.testing.assert_array_equal(lote.ids_episodio, [0, 0, 1, 1, 2])
+    np.testing.assert_array_equal(lote.pasos, [0, 1, 0, 1, 0])
+    # Tras cada corte, el estado previo es el del reinicio.
+    np.testing.assert_array_equal(lote.estados, np.concatenate(previas[:5]))
+    np.testing.assert_array_equal(lote.estados[[2, 4]], np.zeros((2, 3)))
+
+
+@TIPOS
+def test_el_envoltorio_guarda_copias_de_acciones_y_observaciones(continuo):
+    envuelto, _ = _envuelto(continuo)
+    observaciones = envuelto.reset()
+    acciones = _acciones(continuo, 0)
+    originales = observaciones.copy(), acciones.copy()
+    siguientes, _, _, _ = envuelto.step(acciones)
+    siguientes_originales = siguientes.copy()
+    # Quien llama puede reutilizar sus arrays sin cambiar los pares guardados.
+    observaciones[:] = 7
+    acciones[:] = 0
+    siguientes[:] = 7
+    envuelto.step(_acciones(continuo, 1))
+    lote = envuelto.extraer_lote()
+    np.testing.assert_array_equal(lote.estados[:2], originales[0])
+    np.testing.assert_array_equal(lote.acciones[:2], originales[1])
+    np.testing.assert_array_equal(lote.estados[2:], siguientes_originales)
 
 
 def test_el_envoltorio_exige_reiniciar_antes_de_dar_pasos():

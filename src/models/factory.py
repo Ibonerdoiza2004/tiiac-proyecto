@@ -58,6 +58,18 @@ def _comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
             f"activacion desconocida: {activacion!r}; opciones: {sorted(ACTIVACIONES)}")
 
 
+def _comprobar_dimensiones(dim_observacion: object, dim_accion: object,
+                           continua: object) -> None:
+    """Comprueba los tamaños del estado y de la acción y el tipo de acción."""
+    if not _es_entero_positivo(dim_observacion):
+        raise ValueError(
+            f"dim_observacion debe ser un entero positivo, no {dim_observacion!r}")
+    if not _es_entero_positivo(dim_accion):
+        raise ValueError(f"dim_accion debe ser un entero positivo, no {dim_accion!r}")
+    if not isinstance(continua, (bool, np.bool_)):
+        raise ValueError(f"continua debe ser un booleano, no {continua!r}")
+
+
 def _comprobar_estados(estados: torch.Tensor, dim_observacion: int) -> None:
     """Comprueba que estados es un tensor [B, dim_observacion]."""
     if estados.ndim != 2 or estados.shape[1] != dim_observacion:
@@ -192,13 +204,7 @@ class PoliticaBC(_PerceptronNormalizado):
         Raises:
             ValueError: Si algún argumento no es válido.
         """
-        if not _es_entero_positivo(dim_observacion):
-            raise ValueError(
-                f"dim_observacion debe ser un entero positivo, no {dim_observacion!r}")
-        if not _es_entero_positivo(dim_accion):
-            raise ValueError(f"dim_accion debe ser un entero positivo, no {dim_accion!r}")
-        if not isinstance(continua, (bool, np.bool_)):
-            raise ValueError(f"continua debe ser un booleano, no {continua!r}")
+        _comprobar_dimensiones(dim_observacion, dim_accion, continua)
         _comprobar_arquitectura(capas_ocultas, activacion)
         if continua and not _es_real_finito(log_std_inicial):
             raise ValueError("Con acciones continuas log_std_inicial debe ser un real finito, "
@@ -347,13 +353,7 @@ class Discriminador(_PerceptronNormalizado):
         Raises:
             ValueError: Si algún argumento no es válido.
         """
-        if not _es_entero_positivo(dim_observacion):
-            raise ValueError(
-                f"dim_observacion debe ser un entero positivo, no {dim_observacion!r}")
-        if not _es_entero_positivo(dim_accion):
-            raise ValueError(f"dim_accion debe ser un entero positivo, no {dim_accion!r}")
-        if not isinstance(continua, (bool, np.bool_)):
-            raise ValueError(f"continua debe ser un booleano, no {continua!r}")
+        _comprobar_dimensiones(dim_observacion, dim_accion, continua)
         if continua:
             super().__init__(dim_observacion + dim_accion, 1, capas_ocultas, activacion)
         else:

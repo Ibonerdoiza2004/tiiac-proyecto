@@ -49,6 +49,7 @@ def _config_discriminador(cfg: dict) -> dict:
                          + ", ".join(sorted(claves)))
 
     def real(clave: str) -> float:
+        """Devuelve dcfg[clave] si es un real finito no booleano."""
         valor = dcfg[clave]
         if (isinstance(valor, bool) or not isinstance(valor, (int, float))
                 or not math.isfinite(valor)):
@@ -212,9 +213,9 @@ def actualizar_discriminador(discriminador: Discriminador, optimizador: torch.op
         cfg: Configuración resuelta con la sección gail.
 
     Returns:
-        Medidas del último paso, antes de aplicarlo: perdida, entropia media
-        y acierto_agente / acierto_experto (fracción de pares de cada grupo con
-        el logit del lado correcto de 0).
+        Medidas del último paso, antes de aplicarlo: perdida, entropia (media
+        de las medias de cada grupo) y acierto_agente / acierto_experto
+        (fracción de pares de cada grupo con el logit del lado correcto de 0).
 
     Raises:
         ValueError: Si la configuración o los pares no son válidos.
@@ -237,7 +238,9 @@ def actualizar_discriminador(discriminador: Discriminador, optimizador: torch.op
         perdida.backward()
         optimizador.step()
     with torch.no_grad():
-        entropia = _entropia_bernoulli(torch.cat([logits_agente, logits_experto])).mean()
+        # Cada grupo pesa lo mismo, como en la pérdida.
+        entropia = (_entropia_bernoulli(logits_agente).mean()
+                    + _entropia_bernoulli(logits_experto).mean()) / 2
         return {
             "perdida": perdida.item(),
             "entropia": entropia.item(),
