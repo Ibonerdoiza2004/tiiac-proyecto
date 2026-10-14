@@ -134,7 +134,7 @@ class DatasetTransiciones(Dataset):
         estados = np.asarray(lote.estados)
         acciones = np.asarray(lote.acciones)
         n = len(estados)
-        if estados.ndim != 2 or n == 0 or not np.issubdtype(estados.dtype, np.number):
+        if estados.ndim != 2 or n == 0 or estados.dtype.kind not in "iuf":
             raise ValueError(f"Los estados deben ser números [N, d] con N > 0, "
                              f"no {estados.dtype} {estados.shape}")
         if not np.all(np.isfinite(estados)):

@@ -4,11 +4,18 @@ Un fallo de formas no da error: da un modelo que entrena sobre basura. Estos
 tests son baratos y detectan la mayoria.
 """
 
+import pytest
 import torch
 
 from src.models.factory import construir_modelo
 
 CFG = {"modelo": {"nombre": "mi_modelo"}}
+
+
+@pytest.mark.parametrize("nombre", ["bc", "gail", "", None])
+def test_construir_modelo_rechaza_nombres_desconocidos(nombre):
+    with pytest.raises(ValueError, match="modelo desconocido"):
+        construir_modelo({"modelo": {"nombre": nombre}})
 
 
 def test_forward_devuelve_la_forma_esperada():

@@ -258,9 +258,7 @@ def construir_politica_bc(cfg: dict, espacio_observacion: spaces.Space,
 
 
 def construir_modelo(cfg: dict) -> nn.Module:
-    """Devuelve el modelo de ejemplo de la plantilla, que usa el smoke actual.
-
-    Es un placeholder: ignora cfg["modelo"]["nombre"] y desaparecerá cuando
-    run.py use BC y GAIL en la rama integracion-e1.
-    """
-    return ModeloPlaceholder()
+    nombre = cfg["modelo"]["nombre"]
+    if nombre == "mi_modelo":
+        return ModeloPlaceholder()
+    raise ValueError(f"modelo desconocido: {nombre}")

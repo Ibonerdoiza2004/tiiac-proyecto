@@ -454,6 +454,9 @@ def test_dataset_copia_los_arrays_del_lote():
     (np.zeros((0, 4)), np.zeros(0, np.int64), DISCRETO, "N > 0"),
     (np.zeros(4), np.zeros(1, np.int64), DISCRETO, "N > 0"),
     (np.zeros((2, 4), dtype=bool), np.zeros(2, np.int64), DISCRETO, "números"),
+    # Complejos: torch descartaría la parte imaginaria al pasarlos a float32
+    (np.zeros((2, 4), dtype=np.complex64), np.zeros(2, np.int64), DISCRETO, "números"),
+    (np.full((2, 4), 1 + 1j), np.zeros(2, np.int64), DISCRETO, "números"),
     (np.full((2, 4), np.nan), np.zeros(2, np.int64), DISCRETO, "finitos"),
     (np.zeros((2, 4)), np.zeros(3, np.int64), DISCRETO, "enteros"),
     (np.zeros((2, 4)), np.zeros(2, np.float32), DISCRETO, "enteros"),
