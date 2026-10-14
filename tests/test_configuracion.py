@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 from pathlib import Path
 
 import gymnasium as gym
@@ -10,6 +11,7 @@ import numpy as np
 import pytest
 import yaml
 
+import run
 from src.data.loaders import construir_loaders_bc
 from src.data.splits import crear_splits
 from src.data.tipos import Trayectoria
@@ -27,11 +29,16 @@ def test_todos_los_entornos_activos_resuelven_base_y_smoke(entorno):
     smoke = yaml.safe_load((RAIZ / "configs" / "smoke.yaml").read_text(encoding="utf-8"))
     normal = resolver_configuracion(BASE, entorno)
     mini = resolver_configuracion(BASE, entorno.value, smoke)
+    perfil = yaml.safe_load(
+        (RAIZ / "configs" / "entornos" / f"{entorno.value}.yaml").read_text(encoding="utf-8")
+    )
 
-    assert normal["entorno"]["id"] == "CartPole-v1"
-    assert normal["bc"]["frecuencia_pares"] == 10
+    assert normal["entorno"] == perfil["entorno"]
+    assert normal["bc"]["frecuencia_pares"] == perfil["bc"]["frecuencia_pares"]
     assert normal["origen"]["entorno"] == entorno.value
-    assert normal["origen"]["archivos"] == ["configs/default.yaml", "configs/entornos/cartpole.yaml"]
+    assert normal["origen"]["archivos"] == [
+        "configs/default.yaml", f"configs/entornos/{entorno.value}.yaml",
+    ]
     assert mini["entrenamiento"]["max_steps"] == 10
     assert mini["wandb"]["modo"] == "disabled"
     assert mini["origen"]["archivos"] == normal["origen"]["archivos"]
@@ -55,8 +62,23 @@ def test_ajustes_sobrescriben_recursivamente_y_listas_se_reemplazan():
 
 
 def test_ajustes_vacios_o_none_no_cambian_la_configuracion():
-    assert resolver_configuracion(BASE, "cartpole", {}) == resolver_configuracion(BASE, "cartpole")
-    assert resolver_configuracion(BASE, "cartpole", None) == resolver_configuracion(BASE, "cartpole")
+    original = resolver_configuracion(BASE, "cartpole")
+    assert resolver_configuracion(BASE, "cartpole", {}) == original
+    assert resolver_configuracion(BASE, "cartpole", None) == original
+
+
+def test_error_yaml_del_smoke_se_muestra_como_error_de_configuracion(monkeypatch, capsys):
+    def cargar_config_malformada(_: Path) -> dict:
+        """Simula un smoke.yaml con sintaxis YAML inválida."""
+        raise yaml.YAMLError("sintaxis")
+
+    monkeypatch.setattr(sys, "argv", ["run.py", "--smoke"])
+    monkeypatch.setattr(run, "cargar_config", cargar_config_malformada)
+
+    assert run.main() == 2
+    salida = capsys.readouterr()
+    assert "error de configuración" in salida.err
+    assert "Traceback" not in salida.err
 
 
 @pytest.mark.parametrize("capa", [

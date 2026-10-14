@@ -53,7 +53,7 @@ def main() -> int:
         cfg = resolver_configuracion(args.config, args.entorno, ajustes)
         if args.smoke:
             cfg["origen"]["archivos"].append("configs/smoke.yaml")
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, yaml.YAMLError) as error:
         print(f"error de configuración: {error}", file=sys.stderr)
         return 2
 
