@@ -4,6 +4,9 @@
 experimento:
   nombre: baseline
   seed: 42
+  # Repeticiones de BC y GAIL por cada subconjunto, con semillas de modelo
+  # distintas (codigo original: runs 7 en los entornos clasicos, 1 en MuJoCo).
+  repeticiones: 7
 
 datos:
   raiz: data/
@@ -17,6 +20,17 @@ modelo:
 
 entorno:
   id: null
+
+# Tamanos del experimento. Valores de los entornos clasicos; cada perfil los
+# repite o los cambia (HalfCheetah en el original: subconjuntos 4, 11, 18, 25).
+demostraciones:
+  # Partidas de train: BC y GAIL solo ven las de los subconjuntos.
+  partidas_train: 10
+  # Eleccion propia: partidas aparte para la parada temprana de BC (el paper
+  # separa 70/30 los pares de cada subconjunto).
+  partidas_validacion: 5
+  # Subconjuntos anidados de train (paper, figura 1; dataset_num_trajs).
+  subconjuntos: [1, 4, 7, 10]
 
 bc:
   # Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh.
@@ -56,6 +70,9 @@ experto:
   retorno_objetivo: null
 
 gail:
+  # Iteraciones de GAIL (paper, tabla 2: 300 en los entornos clasicos; el codigo
+  # original usa max_iter 301). Puede bajar al medir la regla 5/20.
+  iteraciones: 300
   discriminador:
     # Misma arquitectura que la politica (paper, seccion 6).
     capas_ocultas: [100, 100]
