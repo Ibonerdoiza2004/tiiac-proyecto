@@ -13,6 +13,7 @@ trpo:
   target_kl: 0.01  # Código original de GAIL (max_kl).
   cg_damping: 0.1  # Código original de GAIL.
   pasos_por_iteracion: 5000  # Paper Ho y Ermon (2016), tabla 2.
+  n_entornos: 1  # Una instancia por defecto; configurable para TRPO vectorizado.
 experto:
   pasos_totales: 100000  # Presupuesto inicial elegido para el proyecto; falta medir.
   # Elección propia: máximo de CartPole-v1 (el umbral de Gymnasium es 475), como el

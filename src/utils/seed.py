@@ -9,8 +9,10 @@ from __future__ import annotations
 import os
 import random
 
+import gymnasium as gym
 import numpy as np
 import torch
+from stable_baselines3.common.vec_env import VecEnv
 
 
 def fijar_seed(seed: int, determinista: bool = True) -> None:
@@ -53,3 +55,52 @@ def crear_generador(semilla: int) -> np.random.Generator:
             or not isinstance(semilla, (int, np.integer)) or semilla < 0):
         raise ValueError(f"La semilla debe ser un entero no negativo, no {semilla!r}")
     return np.random.default_rng(int(semilla))
+
+
+def _validar_semilla_entorno(semilla: int) -> int:
+    """Valida una semilla y la convierte al entero nativo de Python."""
+    if (isinstance(semilla, (bool, np.bool_))
+            or not isinstance(semilla, (int, np.integer)) or semilla < 0):
+        raise ValueError(f"La semilla debe ser un entero no negativo, no {semilla!r}")
+    return int(semilla)
+
+
+def sembrar_entorno(env: gym.Env, semilla: int) -> None:
+    """Inicializa el RNG del entorno y sus espacios de observación y acción.
+
+    Se llama a ``reset(seed=...)`` una sola vez para inicializar el generador
+    del entorno; los resets posteriores continúan su secuencia aleatoria.
+
+    Args:
+        env: entorno Gymnasium, posiblemente envuelto por ``Monitor``.
+        semilla: semilla entera no negativa.
+
+    Raises:
+        TypeError: si ``env`` no es un entorno Gymnasium.
+        ValueError: si la semilla no es un entero no negativo.
+    """
+    semilla_validada = _validar_semilla_entorno(semilla)
+    if not isinstance(env, gym.Env):
+        raise TypeError("env debe ser un entorno Gymnasium")
+    env.reset(seed=semilla_validada)
+    env.action_space.seed(semilla_validada)
+    env.observation_space.seed(semilla_validada)
+
+
+def sembrar_entorno_vectorizado(venv: VecEnv, semilla: int) -> None:
+    """Siembra las instancias de un VecEnv con semillas consecutivas.
+
+    Args:
+        venv: vectorizador que expone sus entornos mediante ``envs``, como
+            ``DummyVecEnv``.
+        semilla: semilla base entera no negativa.
+
+    Raises:
+        TypeError: si ``venv`` no es un VecEnv compatible.
+        ValueError: si la semilla no es un entero no negativo.
+    """
+    semilla_validada = _validar_semilla_entorno(semilla)
+    if not isinstance(venv, VecEnv) or not hasattr(venv, "envs"):
+        raise TypeError("venv debe ser un VecEnv que exponga sus entornos internos")
+    for indice, env in enumerate(venv.envs):
+        sembrar_entorno(env, semilla_validada + indice)

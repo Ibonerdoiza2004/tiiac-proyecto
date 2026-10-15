@@ -49,6 +49,7 @@ trpo:
   target_kl: null
   cg_damping: null
   pasos_por_iteracion: null
+  n_entornos: null
 
 experto:
   pasos_totales: null

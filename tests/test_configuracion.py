@@ -34,6 +34,7 @@ def test_todos_los_entornos_activos_resuelven_base_y_smoke(entorno):
     )
 
     assert normal["entorno"] == perfil["entorno"]
+    assert normal["trpo"]["n_entornos"] == 1
     assert normal["bc"]["frecuencia_pares"] == perfil["bc"]["frecuencia_pares"]
     assert normal["origen"]["entorno"] == entorno.value
     assert normal["origen"]["archivos"] == [
