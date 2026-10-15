@@ -579,6 +579,14 @@ def test_actualizar_rechaza_lotes_no_validos(cual, lote, mensaje):
 
 
 # --- EntornoRecompensaGAIL -----------------------------------------------------
+# Los entornos envueltos usan Discrete con start 0: sb3 no admite otro start.
+
+DISCRETO_SB3 = spaces.Discrete(3)
+
+
+def _espacio_entorno(continuo: bool) -> spaces.Space:
+    return CONTINUO if continuo else DISCRETO_SB3
+
 
 class _EntornoContador(gym.Env):
     """Entorno determinista: la observación codifica el paso y la última acción.
@@ -608,7 +616,7 @@ class _EntornoContador(gym.Env):
 def _envuelto(continuo: bool, fines=(3, 5), modo="menos_log_uno_menos_d", monitor=False):
     def crear(fin):
         def hacer():
-            env = _EntornoContador(_espacio(continuo), fin)
+            env = _EntornoContador(_espacio_entorno(continuo), fin)
             return Monitor(env) if monitor else env
         return hacer
     venv = DummyVecEnv([crear(fin) for fin in fines])
@@ -619,7 +627,7 @@ def _envuelto(continuo: bool, fines=(3, 5), modo="menos_log_uno_menos_d", monito
 def _acciones(continuo: bool, paso: int, entornos: int = 2) -> np.ndarray:
     if continuo:
         return np.full((entornos, 2), (paso % 5) / 5 - 0.4, dtype=np.float32)
-    return np.array([(paso + i) % 3 - 1 for i in range(entornos)])
+    return np.array([(paso + i) % 3 for i in range(entornos)])
 
 
 @TIPOS
@@ -662,7 +670,7 @@ def test_el_envoltorio_da_la_recompensa_del_discriminador(continuo, modo):
     for paso in range(4):
         acciones = _acciones(continuo, paso)
         esperadas = calcular_recompensas_gail(discriminador, previas, acciones,
-                                              _espacio(continuo), modo)
+                                              _espacio_entorno(continuo), modo)
         previas, recompensas, _, infos = envuelto.step(acciones)
         np.testing.assert_array_equal(recompensas, esperadas)
         assert recompensas.dtype == np.float32
@@ -706,7 +714,7 @@ def test_extraer_lote_vacia_el_bloque_e_iniciar_bloque_descarta():
 
 def test_las_partidas_truncadas_tambien_cambian_de_id():
     # Sin terminar nunca (fin muy alto), TimeLimit corta cada partida a los 2 pasos.
-    venv = DummyVecEnv([lambda: gym.wrappers.TimeLimit(_EntornoContador(DISCRETO, 100),
+    venv = DummyVecEnv([lambda: gym.wrappers.TimeLimit(_EntornoContador(DISCRETO_SB3, 100),
                                                        max_episode_steps=2)])
     envuelto = EntornoRecompensaGAIL(venv, _discriminador(False), "log_d")
     previas = [envuelto.reset()]
@@ -753,9 +761,12 @@ def test_el_envoltorio_exige_reiniciar_antes_de_dar_pasos():
     ("observacion", "observación"),
     ("tipo_accion", "acción"),
     ("tamano_accion", "acción"),
+    # Regresión: sb3 daría índices 0..2 a un entorno que espera -1..1.
+    ("start", "start distinto de 0"),
 ])
 def test_el_envoltorio_rechaza_piezas_no_compatibles(caso, mensaje):
-    venv = DummyVecEnv([lambda: _EntornoContador(DISCRETO, 3)])
+    espacio = DISCRETO if caso == "start" else DISCRETO_SB3
+    venv = DummyVecEnv([lambda: _EntornoContador(espacio, 3)])
     discriminador = {
         "discriminador": torch.nn.Linear(3, 1),
         "observacion": Discriminador(4, 3, False, [8], "tanh"),

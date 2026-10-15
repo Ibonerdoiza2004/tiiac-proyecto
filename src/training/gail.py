@@ -271,7 +271,9 @@ class EntornoRecompensaGAIL(VecEnvWrapper):
 
         Args:
             venv: VecEnv con observaciones Box de una dimensión y acciones
-                Discrete o Box de una dimensión, compatibles con el discriminador.
+                Discrete con start 0 o Box de una dimensión, compatibles con el
+                discriminador. sb3 no admite Discrete con otro start: sus
+                políticas generan índices 0..n-1, que el envoltorio pasa tal cual.
             discriminador: Discriminador de construir_discriminador.
             modo: Uno de MODOS_RECOMPENSA (gail.recompensa del perfil).
 
@@ -293,6 +295,9 @@ class EntornoRecompensaGAIL(VecEnvWrapper):
                       else None)
         if dim_accion != discriminador.dim_accion or discreta == discriminador.continua:
             raise ValueError("El espacio de acción no coincide con el discriminador")
+        if discreta and int(accion.start) != 0:
+            raise ValueError("Acciones Discrete con start distinto de 0: sb3 solo genera índices "
+                             "0..n-1 y no admite estos espacios")
         super().__init__(venv)
         self.discriminador = discriminador
         self.modo = modo
