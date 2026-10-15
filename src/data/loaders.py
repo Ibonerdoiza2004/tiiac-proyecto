@@ -133,12 +133,13 @@ def tensores_de_pares(estados: object, acciones: object,
     """
     estados = np.asarray(estados)
     acciones = np.asarray(acciones)
-    n = len(estados)
-    if estados.ndim != 2 or n == 0 or estados.dtype.kind not in "iuf":
+    # ndim antes que len: un escalar no tiene longitud y len() daría TypeError.
+    if estados.ndim != 2 or len(estados) == 0 or estados.dtype.kind not in "iuf":
         raise ValueError(f"Los estados deben ser números [N, d] con N > 0, "
                          f"no {estados.dtype} {estados.shape}")
     if not np.all(np.isfinite(estados)):
         raise ValueError("Los estados deben ser finitos")
+    n = len(estados)
 
     if isinstance(espacio_accion, spaces.Discrete):
         if (acciones.shape != (n,) or not np.issubdtype(acciones.dtype, np.integer)):

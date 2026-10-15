@@ -23,6 +23,7 @@ from sb3_contrib import TRPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
+from src.data.entornos import crear_entorno_vectorizado
 from src.data.tipos import LoteTransiciones
 from src.models.factory import Discriminador, construir_discriminador
 from src.training.gail import (MODOS_RECOMPENSA, EntornoRecompensaGAIL,
@@ -747,6 +748,44 @@ def test_el_envoltorio_guarda_copias_de_acciones_y_observaciones(continuo):
     np.testing.assert_array_equal(lote.estados[:2], originales[0])
     np.testing.assert_array_equal(lote.acciones[:2], originales[1])
     np.testing.assert_array_equal(lote.estados[2:], siguientes_originales)
+
+
+@TIPOS
+def test_el_entorno_ejecuta_la_misma_accion_que_se_guarda(continuo):
+    # Regresión: el entorno recibía el array original y el envoltorio guardaba una
+    # copia; si se cambiaba entre step_async y step_wait, ejecutaba otra acción.
+    envuelto, _ = _envuelto(continuo)
+    envuelto.reset()
+    acciones = _acciones(continuo, 1)
+    original = acciones.copy()
+    envuelto.step_async(acciones)
+    acciones[:] = _acciones(continuo, 2)
+    observaciones, _, _, _ = envuelto.step_wait()
+    # _EntornoContador devuelve en la columna 1 el valor de la acción ejecutada.
+    ejecutadas = observaciones[:, 1]
+    guardadas = envuelto.extraer_lote().acciones
+    np.testing.assert_array_equal(guardadas, original)
+    np.testing.assert_allclose(ejecutadas, original[:, 0] if continuo else original)
+
+
+def test_el_envoltorio_funciona_sobre_crear_entorno_vectorizado():
+    # Monitor queda dentro de cada instancia: mide el retorno real de CartPole
+    # (1 por paso) aunque el agente reciba la recompensa del discriminador.
+    cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
+    venv = crear_entorno_vectorizado(cfg, 2, 3)
+    discriminador = construir_discriminador(cfg, venv.observation_space, venv.action_space)
+    envuelto = EntornoRecompensaGAIL(venv, discriminador, cfg["gail"]["recompensa"])
+    try:
+        envuelto.reset()
+        episodios = []
+        for _ in range(200):
+            _, recompensas, terminados, infos = envuelto.step(np.zeros(2, dtype=np.int64))
+            np.testing.assert_allclose(recompensas, math.log(2), rtol=1e-6)
+            episodios += [info["episode"] for info, fin in zip(infos, terminados) if fin]
+        assert episodios
+        assert all(e["r"] == e["l"] for e in episodios)
+    finally:
+        envuelto.close()
 
 
 def test_el_envoltorio_exige_reiniciar_antes_de_dar_pasos():
