@@ -3,14 +3,22 @@ entorno:
   id: CartPole-v1  # Gymnasium; v1 permite hasta 500 pasos por episodio.
 bc:
   frecuencia_pares: 10  # Código original de GAIL para CartPole.
+# La sección trpo la usan el experto y GAIL. El paper da gamma, gae_lambda y
+# los pares por iteración para GAIL; aplicarlos también al experto es elección propia.
 trpo:
-  capas_ocultas: [100, 100]  # Paper Ho y Ermon (2016).
-  activacion: tanh  # Paper Ho y Ermon (2016).
-  gamma: 0.995  # Código original de GAIL.
-  gae_lambda: 0.97  # Código original de GAIL.
+  capas_ocultas: [100, 100]  # Paper Ho y Ermon (2016), sección 6.
+  activacion: tanh  # Paper Ho y Ermon (2016), sección 6.
+  gamma: 0.995  # Paper Ho y Ermon (2016), apéndice B.
+  gae_lambda: 0.97  # Paper Ho y Ermon (2016), apéndice B.
   target_kl: 0.01  # Código original de GAIL (max_kl).
   cg_damping: 0.1  # Código original de GAIL.
-  pasos_por_iteracion: 5000  # Código original de GAIL para entornos clásicos.
+  pasos_por_iteracion: 5000  # Paper Ho y Ermon (2016), tabla 2.
 experto:
   pasos_totales: 100000  # Presupuesto inicial elegido para el proyecto; falta medir.
-  retorno_objetivo: 500  # Umbral estándar de CartPole-v1 en Gymnasium (500 pasos).
+  # Elección propia: máximo de CartPole-v1 (el umbral de Gymnasium es 475), como el
+  # experto perfecto del paper (200 ± 0 en CartPole-v0, tabla 1).
+  retorno_objetivo: 500
+gail:
+  # Código original de GAIL: −log(1 − D), porque las partidas terminan al fallar
+  # (cuts_off_on_success: false en im_classic_pipeline.yaml).
+  recompensa: menos_log_uno_menos_d

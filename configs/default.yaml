@@ -54,6 +54,24 @@ experto:
   pasos_totales: null
   retorno_objetivo: null
 
+gail:
+  discriminador:
+    # Misma arquitectura que la politica (paper, seccion 6).
+    capas_ocultas: [100, 100]
+    activacion: tanh
+    # Adam con learning rate 0.01, un paso por iteracion y peso 0.001 de la
+    # entropia en la perdida (codigo original de GAIL).
+    optimizador: adam
+    learning_rate: 0.01
+    pasos_adam: 1
+    peso_entropia: 0.001
+    # Eleccion propia: normalizacion fija con los pares expertos de train. El
+    # original la actualiza en cada iteracion tambien con pares del agente.
+    normalizar_entrada: true
+    epsilon_normalizacion: 1.0e-6
+  # menos_log_uno_menos_d o log_d. Depende del entorno: va en configs/entornos/.
+  recompensa: null
+
 entrenamiento:
   learning_rate: 0.001
   epochs: 20

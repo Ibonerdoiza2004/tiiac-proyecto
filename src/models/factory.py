@@ -47,7 +47,122 @@ def _es_real_finito(valor: object) -> bool:
             and not isinstance(valor, (bool, np.bool_)) and bool(np.isfinite(valor)))
 
 
-class PoliticaBC(nn.Module):
+def _comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
+    """Comprueba la lista de capas ocultas y el nombre de la activación."""
+    if (isinstance(capas_ocultas, (str, bytes)) or not isinstance(capas_ocultas, Sequence)
+            or not all(_es_entero_positivo(c) for c in capas_ocultas)):
+        raise ValueError(
+            f"capas_ocultas debe ser una lista de enteros positivos, no {capas_ocultas!r}")
+    if not isinstance(activacion, str) or activacion not in ACTIVACIONES:
+        raise ValueError(
+            f"activacion desconocida: {activacion!r}; opciones: {sorted(ACTIVACIONES)}")
+
+
+def _comprobar_dimensiones(dim_observacion: object, dim_accion: object,
+                           continua: object) -> None:
+    """Comprueba los tamaños del estado y de la acción y el tipo de acción."""
+    if not _es_entero_positivo(dim_observacion):
+        raise ValueError(
+            f"dim_observacion debe ser un entero positivo, no {dim_observacion!r}")
+    if not _es_entero_positivo(dim_accion):
+        raise ValueError(f"dim_accion debe ser un entero positivo, no {dim_accion!r}")
+    if not isinstance(continua, (bool, np.bool_)):
+        raise ValueError(f"continua debe ser un booleano, no {continua!r}")
+
+
+def _comprobar_estados(estados: torch.Tensor, dim_observacion: int) -> None:
+    """Comprueba que estados es un tensor [B, dim_observacion]."""
+    if estados.ndim != 2 or estados.shape[1] != dim_observacion:
+        raise ValueError(f"Se esperaban estados [B, {dim_observacion}], "
+                         f"no {tuple(estados.shape)}")
+
+
+def _comprobar_acciones(acciones: torch.Tensor, n: int, dim_accion: int, continua: bool) -> None:
+    """Comprueba acciones enteras [n] en [0, dim_accion) o reales [n, dim_accion]."""
+    if continua:
+        if acciones.shape != (n, dim_accion) or not acciones.is_floating_point():
+            raise ValueError(f"Se esperaban acciones reales [{n}, {dim_accion}], "
+                             f"no {acciones.dtype} {tuple(acciones.shape)}")
+        return
+    if (acciones.shape != (n,) or acciones.is_floating_point()
+            or acciones.is_complex() or acciones.dtype == torch.bool):
+        raise ValueError(f"Se esperaban acciones enteras [{n}], "
+                         f"no {acciones.dtype} {tuple(acciones.shape)}")
+    if len(acciones) and (acciones.min() < 0 or acciones.max() >= dim_accion):
+        raise ValueError(f"Las acciones discretas deben estar en [0, {dim_accion})")
+
+
+class _PerceptronNormalizado(nn.Module):
+    """Perceptrón multicapa con normalización fija de la entrada.
+
+    Base común de PoliticaBC y Discriminador, que en el código original de GAIL
+    comparten arquitectura e inicialización (policyopt/nn.py): Glorot uniforme
+    en las capas ocultas, la capa de salida a cero y todos los sesgos a cero.
+    Antes de la red, cada componente de la entrada se normaliza con los buffers
+    media y escala, que viajan con el state_dict; valen 0 y 1 (identidad) hasta
+    que se ajustan con datos de train.
+    """
+
+    def __init__(self, dim_entrada: int, dim_salida: int, capas_ocultas: Sequence[int],
+                 activacion: str) -> None:
+        """Crea la red; las dimensiones ya vienen comprobadas por la subclase.
+
+        Raises:
+            ValueError: Si capas_ocultas o activacion no son válidas.
+        """
+        super().__init__()
+        _comprobar_arquitectura(capas_ocultas, activacion)
+        self.dim_entrada = int(dim_entrada)
+        capas: list[nn.Module] = []
+        entrada = self.dim_entrada
+        for tamano in capas_ocultas:
+            capas += [nn.Linear(entrada, int(tamano)), ACTIVACIONES[activacion]()]
+            entrada = int(tamano)
+        capas.append(nn.Linear(entrada, int(dim_salida)))
+        self.red = nn.Sequential(*capas)
+        lineales = [capa for capa in self.red if isinstance(capa, nn.Linear)]
+        for capa in lineales[:-1]:
+            nn.init.xavier_uniform_(capa.weight)
+        nn.init.zeros_(lineales[-1].weight)
+        for capa in lineales:
+            nn.init.zeros_(capa.bias)
+        self.register_buffer("media", torch.zeros(self.dim_entrada))
+        self.register_buffer("escala", torch.ones(self.dim_entrada))
+
+    def _ajustar_normalizacion(self, entradas: torch.Tensor, epsilon: float,
+                               nombre: str) -> None:
+        """Fija media y escala con entradas [N, dim_entrada] de train.
+
+        Como el Standardizer del código original de GAIL, resta la media y divide
+        por la desviación típica poblacional de cada componente, calculadas en
+        float64. A diferencia del original, que divide por desviación + epsilon,
+        una componente con desviación <= epsilon solo se centra (escala 1).
+
+        Raises:
+            ValueError: Si las entradas o epsilon no son válidos; el mensaje
+                llama nombre a las entradas.
+        """
+        if (not isinstance(entradas, torch.Tensor) or entradas.ndim != 2
+                or entradas.shape[1] != self.dim_entrada or len(entradas) == 0
+                or not entradas.is_floating_point()):
+            raise ValueError(f"Se esperaban {nombre} reales [N, {self.dim_entrada}] con N > 0")
+        if not torch.isfinite(entradas).all():
+            raise ValueError(f"Los {nombre} para normalizar deben ser finitos")
+        if not _es_real_finito(epsilon) or epsilon <= 0:
+            raise ValueError(f"epsilon debe ser un real positivo finito, no {epsilon!r}")
+        datos = entradas.detach().to(torch.float64)
+        media = datos.mean(dim=0)
+        desviacion = datos.std(dim=0, unbiased=False)
+        escala = torch.where(desviacion > float(epsilon), desviacion, torch.ones_like(desviacion))
+        self.media.copy_(media)
+        self.escala.copy_(escala)
+
+    def _red_normalizada(self, entradas: torch.Tensor) -> torch.Tensor:
+        """Aplica la normalización y la red a entradas [B, dim_entrada]."""
+        return self.red((entradas - self.media) / self.escala)
+
+
+class PoliticaBC(_PerceptronNormalizado):
     """Política de Behavioral Cloning para acciones discretas o continuas.
 
     Un perceptrón multicapa recibe estados [B, dim_observacion] y devuelve
@@ -89,47 +204,20 @@ class PoliticaBC(nn.Module):
         Raises:
             ValueError: Si algún argumento no es válido.
         """
-        super().__init__()
-        if not _es_entero_positivo(dim_observacion):
-            raise ValueError(
-                f"dim_observacion debe ser un entero positivo, no {dim_observacion!r}")
-        if not _es_entero_positivo(dim_accion):
-            raise ValueError(f"dim_accion debe ser un entero positivo, no {dim_accion!r}")
-        if not isinstance(continua, (bool, np.bool_)):
-            raise ValueError(f"continua debe ser un booleano, no {continua!r}")
-        if (isinstance(capas_ocultas, (str, bytes)) or not isinstance(capas_ocultas, Sequence)
-                or not all(_es_entero_positivo(c) for c in capas_ocultas)):
-            raise ValueError(
-                f"capas_ocultas debe ser una lista de enteros positivos, no {capas_ocultas!r}")
-        if not isinstance(activacion, str) or activacion not in ACTIVACIONES:
-            raise ValueError(
-                f"activacion desconocida: {activacion!r}; opciones: {sorted(ACTIVACIONES)}")
+        _comprobar_dimensiones(dim_observacion, dim_accion, continua)
+        _comprobar_arquitectura(capas_ocultas, activacion)
         if continua and not _es_real_finito(log_std_inicial):
             raise ValueError("Con acciones continuas log_std_inicial debe ser un real finito, "
                              f"no {log_std_inicial!r}")
         if not continua and log_std_inicial is not None:
             raise ValueError("Con acciones discretas log_std_inicial debe ser None")
 
+        super().__init__(dim_observacion, dim_accion, capas_ocultas, activacion)
         self.dim_observacion = int(dim_observacion)
         self.dim_accion = int(dim_accion)
         self.continua = bool(continua)
-        capas: list[nn.Module] = []
-        entrada = self.dim_observacion
-        for tamano in capas_ocultas:
-            capas += [nn.Linear(entrada, int(tamano)), ACTIVACIONES[activacion]()]
-            entrada = int(tamano)
-        capas.append(nn.Linear(entrada, self.dim_accion))
-        self.red = nn.Sequential(*capas)
-        lineales = [capa for capa in self.red if isinstance(capa, nn.Linear)]
-        for capa in lineales[:-1]:
-            nn.init.xavier_uniform_(capa.weight)
-        nn.init.zeros_(lineales[-1].weight)
-        for capa in lineales:
-            nn.init.zeros_(capa.bias)
         self.log_std = (nn.Parameter(torch.full((self.dim_accion,), float(log_std_inicial)))
                         if self.continua else None)
-        self.register_buffer("media", torch.zeros(self.dim_observacion))
-        self.register_buffer("escala", torch.ones(self.dim_observacion))
 
     def ajustar_normalizacion(self, estados: torch.Tensor, epsilon: float) -> None:
         """Fija la normalización de observaciones a partir de estados de train.
@@ -149,20 +237,7 @@ class PoliticaBC(nn.Module):
         Raises:
             ValueError: Si estados o epsilon no son válidos.
         """
-        if (not isinstance(estados, torch.Tensor) or estados.ndim != 2
-                or estados.shape[1] != self.dim_observacion or len(estados) == 0
-                or not estados.is_floating_point()):
-            raise ValueError(f"Se esperaban estados reales [N, {self.dim_observacion}] con N > 0")
-        if not torch.isfinite(estados).all():
-            raise ValueError("Los estados para normalizar deben ser finitos")
-        if not _es_real_finito(epsilon) or epsilon <= 0:
-            raise ValueError(f"epsilon debe ser un real positivo finito, no {epsilon!r}")
-        datos = estados.detach().to(torch.float64)
-        media = datos.mean(dim=0)
-        desviacion = datos.std(dim=0, unbiased=False)
-        escala = torch.where(desviacion > float(epsilon), desviacion, torch.ones_like(desviacion))
-        self.media.copy_(media)
-        self.escala.copy_(escala)
+        self._ajustar_normalizacion(estados, epsilon, "estados")
 
     def forward(self, estados: torch.Tensor) -> torch.Tensor:
         """Devuelve logits o medias [B, dim_accion] de estados [B, dim_observacion].
@@ -170,10 +245,8 @@ class PoliticaBC(nn.Module):
         Raises:
             ValueError: Si estados no tiene forma [B, dim_observacion].
         """
-        if estados.ndim != 2 or estados.shape[1] != self.dim_observacion:
-            raise ValueError(f"Se esperaban estados [B, {self.dim_observacion}], "
-                             f"no {tuple(estados.shape)}")
-        return self.red((estados - self.media) / self.escala)
+        _comprobar_estados(estados, self.dim_observacion)
+        return self._red_normalizada(estados)
 
     def distribucion(self, estados: torch.Tensor) -> Distribution:
         """Devuelve la distribución de las acciones para estados [B, dim_observacion].
@@ -203,18 +276,7 @@ class PoliticaBC(nn.Module):
         Raises:
             ValueError: Si las acciones no tienen la forma, el tipo o el rango esperados.
         """
-        if self.continua:
-            if (acciones.shape != (len(estados), self.dim_accion)
-                    or not acciones.is_floating_point()):
-                raise ValueError(f"Se esperaban acciones reales [{len(estados)}, "
-                                 f"{self.dim_accion}], no {acciones.dtype} {tuple(acciones.shape)}")
-        else:
-            if (acciones.shape != (len(estados),) or acciones.is_floating_point()
-                    or acciones.is_complex() or acciones.dtype == torch.bool):
-                raise ValueError(f"Se esperaban acciones enteras [{len(estados)}], "
-                                 f"no {acciones.dtype} {tuple(acciones.shape)}")
-            if len(acciones) and (acciones.min() < 0 or acciones.max() >= self.dim_accion):
-                raise ValueError(f"Las acciones discretas deben estar en [0, {self.dim_accion})")
+        _comprobar_acciones(acciones, len(estados), self.dim_accion, self.continua)
         if self.continua:
             # Equivale a distribucion(...).log_prob, que con un batch vacío falla en
             # Independent: se suman las componentes de la gaussiana diagonal.
@@ -253,6 +315,127 @@ def construir_politica_bc(cfg: dict, espacio_observacion: spaces.Space,
             raise ValueError("Con acciones continuas la configuración necesita bc.log_std_inicial")
         return PoliticaBC(dim_observacion, int(espacio_accion.shape[0]), True,
                           bcfg["capas_ocultas"], bcfg["activacion"], bcfg["log_std_inicial"])
+    raise ValueError(
+        "Espacio de acción no compatible: se admite Discrete o Box de una dimensión")
+
+
+class Discriminador(_PerceptronNormalizado):
+    """Discriminador de GAIL: puntúa si un par (estado, acción) parece del experto.
+
+    Devuelve un logit por par; D = sigmoid(logit) es la probabilidad de que el
+    par venga del experto (etiqueta 1) y no del agente (etiqueta 0). Como en el
+    código original de GAIL (TransitionClassifier):
+
+    - Con acciones Discrete la red recibe solo el estado y tiene una salida por
+      acción; el logit es el de la acción tomada.
+    - Con acciones Box recibe el estado y la acción concatenados y tiene una
+      única salida.
+
+    La arquitectura es la de la política (paper, sección 6) y la inicialización
+    la del original, con la capa de salida a cero: al empezar todos los logits
+    valen 0 y D = 0.5. La normalización de la entrada (el estado, o estado y
+    acción con Box) se ajusta con ajustar_normalizacion; hasta entonces es la
+    identidad. Las acciones discretas van como índices en [0, dim_accion), ya
+    sin el start del espacio.
+    """
+
+    def __init__(self, dim_observacion: int, dim_accion: int, continua: bool,
+                 capas_ocultas: Sequence[int], activacion: str) -> None:
+        """Crea la red.
+
+        Args:
+            dim_observacion: Entero positivo, tamaño del estado.
+            dim_accion: Entero positivo: n del espacio Discrete o tamaño del Box.
+            continua: True para acciones Box y False para Discrete.
+            capas_ocultas: Tamaños enteros positivos de cada capa oculta. Va en configs/.
+            activacion: Clave de ACTIVACIONES. Va en configs/.
+
+        Raises:
+            ValueError: Si algún argumento no es válido.
+        """
+        _comprobar_dimensiones(dim_observacion, dim_accion, continua)
+        if continua:
+            super().__init__(dim_observacion + dim_accion, 1, capas_ocultas, activacion)
+        else:
+            super().__init__(dim_observacion, dim_accion, capas_ocultas, activacion)
+        self.dim_observacion = int(dim_observacion)
+        self.dim_accion = int(dim_accion)
+        self.continua = bool(continua)
+
+    def _entrada(self, estados: torch.Tensor, acciones: torch.Tensor) -> torch.Tensor:
+        """Comprueba el par y devuelve la entrada de la red [B, dim_entrada]."""
+        _comprobar_estados(estados, self.dim_observacion)
+        _comprobar_acciones(acciones, len(estados), self.dim_accion, self.continua)
+        if self.continua:
+            return torch.cat([estados, acciones.to(estados.dtype)], dim=1)
+        return estados
+
+    def ajustar_normalizacion(self, estados: torch.Tensor, acciones: torch.Tensor,
+                              epsilon: float) -> None:
+        """Fija la normalización de la entrada con pares de train.
+
+        Con acciones Box se normalizan estado y acción, como el original; con
+        Discrete, solo el estado. Mismo cálculo que PoliticaBC.ajustar_normalizacion.
+
+        Args:
+            estados: Tensor real finito [N, dim_observacion] con N >= 1.
+            acciones: Índices [N] o reales [N, dim_accion], según el tipo de acción.
+            epsilon: Real positivo finito. Va en configs/.
+
+        Raises:
+            ValueError: Si los pares o epsilon no son válidos.
+        """
+        if not isinstance(estados, torch.Tensor) or not isinstance(acciones, torch.Tensor):
+            raise ValueError("Se esperaban estados y acciones como tensores")
+        self._ajustar_normalizacion(self._entrada(estados, acciones), epsilon,
+                                    "pares" if self.continua else "estados")
+
+    def forward(self, estados: torch.Tensor, acciones: torch.Tensor) -> torch.Tensor:
+        """Devuelve el logit [B] de cada par (estado, acción).
+
+        Args:
+            estados: Tensor real [B, dim_observacion].
+            acciones: Índices enteros [B] en [0, dim_accion) o reales [B, dim_accion].
+
+        Raises:
+            ValueError: Si estados o acciones no tienen la forma, el tipo o el rango esperados.
+        """
+        salida = self._red_normalizada(self._entrada(estados, acciones))
+        if self.continua:
+            return salida[:, 0]
+        # dim=1 son las acciones: se elige la columna de la acción de cada par.
+        return salida.gather(1, acciones.long().unsqueeze(1)).squeeze(1)
+
+
+def construir_discriminador(cfg: dict, espacio_observacion: spaces.Space,
+                            espacio_accion: spaces.Space) -> Discriminador:
+    """Construye el discriminador de GAIL a partir de la configuración y los espacios.
+
+    Args:
+        cfg: Configuración resuelta con gail.discriminador.capas_ocultas y activacion.
+        espacio_observacion: Box de una dimensión del entorno.
+        espacio_accion: Discrete o Box de una dimensión del entorno.
+
+    Returns:
+        Un Discriminador con dim_observacion y dim_accion tomados de los espacios.
+
+    Raises:
+        ValueError: Si falta alguna clave o los espacios no son compatibles.
+    """
+    gcfg = cfg.get("gail") if isinstance(cfg, dict) else None
+    dcfg = gcfg.get("discriminador") if isinstance(gcfg, dict) else None
+    if not isinstance(dcfg, dict) or not {"capas_ocultas", "activacion"} <= dcfg.keys():
+        raise ValueError("La configuración necesita gail.discriminador.capas_ocultas "
+                         "y gail.discriminador.activacion")
+    if not isinstance(espacio_observacion, spaces.Box) or len(espacio_observacion.shape) != 1:
+        raise ValueError("Espacio de observación no compatible: se admite Box de una dimensión")
+    dim_observacion = int(espacio_observacion.shape[0])
+    if isinstance(espacio_accion, spaces.Discrete):
+        return Discriminador(dim_observacion, int(espacio_accion.n), False,
+                             dcfg["capas_ocultas"], dcfg["activacion"])
+    if isinstance(espacio_accion, spaces.Box) and len(espacio_accion.shape) == 1:
+        return Discriminador(dim_observacion, int(espacio_accion.shape[0]), True,
+                             dcfg["capas_ocultas"], dcfg["activacion"])
     raise ValueError(
         "Espacio de acción no compatible: se admite Discrete o Box de una dimensión")
 
