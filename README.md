@@ -49,6 +49,10 @@ Licencia: <licencia del dataset>.
 ## Ejecución
 
 ```bash
+# Experto TRPO (no se versiona): se regenera con la misma semilla de la config.
+# Medido: 53 s en CPU para CartPole. --sin-wandb si no hay cuenta de W&B.
+python scripts/entrenar_experto.py --entorno cartpole
+
 # Smoke test: el pipeline entero en miniatura. Menos de 5 minutos en CPU.
 python run.py --smoke --entorno cartpole
 

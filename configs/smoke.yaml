@@ -2,6 +2,7 @@
 # pipeline de comprobación. W&B se mantiene desactivado.
 experimento:
   nombre: smoke
+  repeticiones: 1  # El smoke usa una sola repetición.
 datos:
   subset: 64
   batch_size: 8

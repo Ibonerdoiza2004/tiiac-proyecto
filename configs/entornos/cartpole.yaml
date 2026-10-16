@@ -1,4 +1,11 @@
-# Perfil activo de CartPole.
+# Perfil activo de CartPole. Los tamaños del experimento se repiten aquí aunque
+# coincidan con default.yaml, para que no cambien si cambia la base.
+experimento:
+  repeticiones: 7  # Código original de GAIL (im_classic_pipeline.yaml, runs).
+demostraciones:
+  partidas_train: 10  # Igual al subconjunto mayor.
+  partidas_validacion: 5  # Elección propia; el paper separa 70/30 los pares.
+  subconjuntos: [1, 4, 7, 10]  # Paper, figura 1; código original (dataset_num_trajs).
 entorno:
   id: CartPole-v1  # Gymnasium; v1 permite hasta 500 pasos por episodio.
 bc:
@@ -14,12 +21,15 @@ trpo:
   cg_damping: 0.1  # Código original de GAIL.
   pasos_por_iteracion: 5000  # Paper Ho y Ermon (2016), tabla 2.
   n_entornos: 1  # Una instancia por defecto; configurable para TRPO vectorizado.
+  normalizar_observaciones: false  # Elección propia: en CartPole no hace falta.
+  batch_size_valor: 250  # Divide los 5000 pasos de cada iteración.
 experto:
   pasos_totales: 100000  # Presupuesto inicial elegido para el proyecto; falta medir.
   # Elección propia: máximo de CartPole-v1 (el umbral de Gymnasium es 475), como el
   # experto perfecto del paper (200 ± 0 en CartPole-v0, tabla 1).
   retorno_objetivo: 500
 gail:
+  iteraciones: 300  # Paper, tabla 2 (el código original usa max_iter 301).
   # Código original de GAIL: −log(1 − D), porque las partidas terminan al fallar
   # (cuts_off_on_success: false en im_classic_pipeline.yaml).
   recompensa: menos_log_uno_menos_d

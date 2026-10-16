@@ -34,7 +34,7 @@ def test_todos_los_entornos_activos_resuelven_base_y_smoke(entorno):
     )
 
     assert normal["entorno"] == perfil["entorno"]
-    assert normal["trpo"]["n_entornos"] == 1
+    assert normal["trpo"]["n_entornos"] == perfil["trpo"]["n_entornos"]
     assert normal["bc"]["frecuencia_pares"] == perfil["bc"]["frecuencia_pares"]
     assert normal["origen"]["entorno"] == entorno.value
     assert normal["origen"]["archivos"] == [
@@ -42,6 +42,7 @@ def test_todos_los_entornos_activos_resuelven_base_y_smoke(entorno):
     ]
     assert mini["entrenamiento"]["max_steps"] == 10
     assert mini["wandb"]["modo"] == "disabled"
+    assert mini["experimento"]["repeticiones"] == 1
     assert mini["origen"]["archivos"] == normal["origen"]["archivos"]
 
 
@@ -147,3 +148,61 @@ def test_config_resuelta_se_integra_con_politica_y_loaders_bc():
         assert len(validacion.dataset) > 0
     finally:
         env.close()
+
+
+TAMANOS = [("experimento", "repeticiones"), ("demostraciones", "partidas_train"),
+           ("demostraciones", "partidas_validacion"), ("demostraciones", "subconjuntos"),
+           ("gail", "iteraciones")]
+
+
+@pytest.mark.parametrize("entorno", list(TipoEntorno))
+def test_cada_perfil_fija_sus_tamanos_del_experimento(entorno):
+    """Los tamaños están en el perfil, no solo en la base."""
+    perfil = yaml.safe_load(
+        (RAIZ / "configs" / "entornos" / f"{entorno.value}.yaml").read_text(encoding="utf-8"))
+    cfg = resolver_configuracion(BASE, entorno)
+    for seccion, clave in TAMANOS:
+        assert clave in perfil.get(seccion, {}), f"{entorno.value}: falta {seccion}.{clave}"
+        assert cfg[seccion][clave] == perfil[seccion][clave]
+
+
+def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
+    base = yaml.safe_load(BASE.read_text(encoding="utf-8"))
+    base["experimento"]["repeticiones"] = 3
+    base["demostraciones"].update(partidas_train=30, partidas_validacion=9,
+                                  subconjuntos=[5, 30])
+    base["gail"]["iteraciones"] = 20
+    (tmp_path / "entornos").mkdir()
+    (tmp_path / "base.yaml").write_text(yaml.safe_dump(base), encoding="utf-8")
+    perfil = RAIZ / "configs" / "entornos" / "cartpole.yaml"
+    (tmp_path / "entornos" / "cartpole.yaml").write_text(perfil.read_text(encoding="utf-8"),
+                                                         encoding="utf-8")
+    cfg = resolver_configuracion(tmp_path / "base.yaml", "cartpole")
+    assert cfg["experimento"]["repeticiones"] == 7
+    assert cfg["demostraciones"] == {"partidas_train": 10, "partidas_validacion": 5,
+                                     "subconjuntos": [1, 4, 7, 10]}
+    assert cfg["gail"]["iteraciones"] == 300
+
+
+@pytest.mark.parametrize("entorno", list(TipoEntorno))
+@pytest.mark.parametrize("smoke", [False, True], ids=["normal", "smoke"])
+def test_los_tamanos_del_experimento_son_coherentes(entorno, smoke):
+    ajustes = (yaml.safe_load((RAIZ / "configs" / "smoke.yaml").read_text(encoding="utf-8"))
+               if smoke else None)
+    cfg = resolver_configuracion(BASE, entorno, ajustes)
+    demostraciones = cfg["demostraciones"]
+    for valor in (cfg["experimento"]["repeticiones"], cfg["gail"]["iteraciones"],
+                  demostraciones["partidas_validacion"]):
+        assert isinstance(valor, int) and not isinstance(valor, bool) and valor > 0
+    # crear_splits acepta las cantidades: subconjuntos crecientes dentro de train.
+    total = demostraciones["partidas_train"] + demostraciones["partidas_validacion"]
+    trayectorias = [Trayectoria(i, np.zeros((3, 4), np.float32), np.zeros(3, np.int64),
+                                np.zeros((3, 4), np.float32), np.zeros(3, np.float32),
+                                np.array([False, False, True]), np.zeros(3, bool))
+                    for i in range(total)]
+    splits = crear_splits(trayectorias, demostraciones["partidas_train"],
+                          demostraciones["partidas_validacion"],
+                          demostraciones["subconjuntos"], crear_generador(0), "a" * 64)
+    assert sorted(splits.subconjuntos) == demostraciones["subconjuntos"]
+    assert len(splits.train) == demostraciones["subconjuntos"][-1]
+

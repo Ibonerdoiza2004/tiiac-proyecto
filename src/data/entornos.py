@@ -6,10 +6,11 @@ from collections.abc import Callable
 from typing import Any
 
 import gymnasium as gym
+import numpy as np
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv
 
-from src.utils.seed import sembrar_entorno, sembrar_entorno_vectorizado
+from src.utils.seed import sembrar_entorno, sembrar_entorno_vectorizado, validar_semilla
 
 
 def crear_entorno(
@@ -54,7 +55,7 @@ def crear_entorno(
 def crear_entorno_vectorizado(
     cfg: dict[str, Any], n_entornos: int, semilla: int,
 ) -> VecEnv:
-    """Crea un DummyVecEnv con Monitor y una semilla distinta por instancia.
+    """Crea un DummyVecEnv con Monitor y una semilla independiente por instancia.
 
     El Monitor queda dentro del vectorizador para conservar las recompensas
     reales aunque un VecEnvWrapper exterior cambie las recompensas entregadas
@@ -63,7 +64,8 @@ def crear_entorno_vectorizado(
     Args:
         cfg: configuración resuelta que contiene ``entorno.id``.
         n_entornos: número de instancias, debe ser entero positivo.
-        semilla: semilla base no negativa; cada instancia usa ``semilla + i``.
+        semilla: semilla base no negativa; las de cada instancia salen de
+            ``semillas_independientes`` y no se solapan entre bases cercanas.
 
     Returns:
         ``DummyVecEnv`` listo para resetear y usar.
@@ -71,18 +73,19 @@ def crear_entorno_vectorizado(
     Raises:
         ValueError: si el número de entornos o la semilla no son válidos.
     """
-    if (isinstance(n_entornos, bool) or not isinstance(n_entornos, int)
-            or n_entornos <= 0):
+    if (isinstance(n_entornos, (bool, np.bool_))
+            or not isinstance(n_entornos, (int, np.integer)) or n_entornos <= 0):
         raise ValueError("n_entornos debe ser un entero positivo")
-    if isinstance(semilla, bool) or not isinstance(semilla, int) or semilla < 0:
-        raise ValueError("semilla debe ser un entero no negativo")
+    # Se comprueba antes de crear los entornos, para no dejar ninguno abierto.
+    validar_semilla(semilla)
 
     def crear_fabrica() -> Callable[[], gym.Env]:
         """Crea una fábrica aislada para una instancia del vectorizador."""
         def fabrica() -> gym.Env:
+            """Crea una instancia sin sembrar, envuelta en Monitor; se siembra después."""
             return Monitor(crear_entorno(cfg, None))
         return fabrica
 
-    venv = DummyVecEnv([crear_fabrica() for _ in range(n_entornos)])
+    venv = DummyVecEnv([crear_fabrica() for _ in range(int(n_entornos))])
     sembrar_entorno_vectorizado(venv, semilla)
     return venv

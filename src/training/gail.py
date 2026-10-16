@@ -330,8 +330,10 @@ class EntornoRecompensaGAIL(VecEnvWrapper):
         """
         if self._observaciones is None:
             raise RuntimeError("Hay que llamar a reset antes del primer paso")
+        # El entorno recibe la misma copia que se puntúa y se guarda: si quien
+        # llama cambia su array antes de step_wait, no se desincronizan.
         self._acciones = np.array(actions, copy=True)
-        self.venv.step_async(actions)
+        self.venv.step_async(self._acciones)
 
     def step_wait(self) -> VecEnvStepReturn:
         """Da el paso y sustituye la recompensa por la del discriminador."""

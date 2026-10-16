@@ -21,7 +21,8 @@ from torch.utils.data import (
     TensorDataset,
 )
 
-from src.data.loaders import DatasetTransiciones, construir_loaders_bc, submuestrear_pares
+from src.data.loaders import (DatasetTransiciones, construir_loaders_bc, submuestrear_pares,
+                              tensores_de_pares)
 from src.data.splits import crear_splits
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import ACTIVACIONES, PoliticaBC, construir_politica_bc
@@ -482,6 +483,18 @@ def test_dataset_copia_los_arrays_del_lote():
 def test_dataset_rechaza_lotes_no_validos(estados, acciones, espacio, mensaje):
     with pytest.raises(ValueError, match=mensaje):
         DatasetTransiciones(_lote(estados, acciones), espacio)
+
+
+@pytest.mark.parametrize("estados", [np.asarray(1.0), 1.0, np.float32(2.0), np.asarray(3)])
+@pytest.mark.parametrize("espacio", [DISCRETO, CONTINUO], ids=["discreto", "continuo"])
+def test_estados_escalares_dan_value_error(estados, espacio):
+    # Regresión: len() de un escalar daba TypeError antes de comprobar la forma.
+    with pytest.raises(ValueError, match="Los estados deben ser números"):
+        tensores_de_pares(estados, np.zeros(1, np.int64), espacio)
+    lote = LoteTransiciones(np.asarray(estados), np.zeros(1, np.int64),
+                            np.zeros(1, np.int64), np.zeros(1, np.int64))
+    with pytest.raises(ValueError, match="Los estados deben ser números"):
+        DatasetTransiciones(lote, espacio)
 
 
 def test_dataset_rechaza_lo_que_no_es_un_lote_o_ids_incoherentes():
