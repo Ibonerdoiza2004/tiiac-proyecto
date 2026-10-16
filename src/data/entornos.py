@@ -82,6 +82,7 @@ def crear_entorno_vectorizado(
     def crear_fabrica() -> Callable[[], gym.Env]:
         """Crea una fábrica aislada para una instancia del vectorizador."""
         def fabrica() -> gym.Env:
+            """Crea una instancia sin sembrar, envuelta en Monitor; se siembra después."""
             return Monitor(crear_entorno(cfg, None))
         return fabrica
 

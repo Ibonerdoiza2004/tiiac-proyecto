@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import random
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import gymnasium as gym
 import numpy as np
@@ -95,6 +97,25 @@ def semillas_independientes(semilla: int, cantidad: int) -> list[int]:
     return [int(hija.generate_state(1)[0]) for hija in hijas]
 
 
+@contextmanager
+def generador_torch_aislado(semilla: int) -> Iterator[None]:
+    """Siembra el generador global de PyTorch solo dentro del bloque.
+
+    Al salir, el generador vuelve exactamente al estado que tenía. Sirve para
+    que algo aleatorio que usa el generador global sin aceptar uno propio (como
+    muestrear acciones con predict de sb3 al evaluar) dependa solo de su
+    semilla y no altere lo que venga después, por ejemplo el entrenamiento.
+    Solo afecta a la CPU, donde corren los modelos del proyecto.
+
+    Raises:
+        ValueError: si la semilla no es un entero no negativo.
+    """
+    semilla_validada = validar_semilla(semilla)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(semilla_validada)
+        yield
+
+
 def sembrar_entorno(env: gym.Env, semilla: int) -> None:
     """Inicializa el RNG del entorno y sus espacios de observación y acción.
 
@@ -117,6 +138,33 @@ def sembrar_entorno(env: gym.Env, semilla: int) -> None:
     env.action_space.seed(semilla_validada)
     env.observation_space.seed(semilla_validada)
     env.reset(seed=semilla_validada)
+
+
+def reiniciar_con_semilla(env: gym.Env, semilla: int) -> tuple[np.ndarray, dict]:
+    """Empieza una partida con una semilla concreta y la devuelve.
+
+    A diferencia de sembrar_entorno, no gasta ningún reset: la partida que
+    devuelve es la primera de esa semilla. Sirve para evaluar cada episodio con
+    su propia semilla, igual para todas las políticas. También siembra los
+    espacios, por si el entorno los muestrea.
+
+    Args:
+        env: entorno Gymnasium, posiblemente envuelto por ``Monitor``.
+        semilla: semilla entera no negativa.
+
+    Returns:
+        La observación inicial y el diccionario info de ``reset``.
+
+    Raises:
+        TypeError: si ``env`` no es un entorno Gymnasium.
+        ValueError: si la semilla no es un entero no negativo.
+    """
+    semilla_validada = validar_semilla(semilla)
+    if not isinstance(env, gym.Env):
+        raise TypeError("env debe ser un entorno Gymnasium")
+    env.action_space.seed(semilla_validada)
+    env.observation_space.seed(semilla_validada)
+    return env.reset(seed=semilla_validada)
 
 
 def sembrar_entorno_vectorizado(venv: VecEnv, semilla: int) -> None:

@@ -64,10 +64,36 @@ trpo:
   cg_damping: null
   pasos_por_iteracion: null
   n_entornos: null
+  # Normalizacion de observaciones con VecNormalize (sin normalizar la
+  # recompensa). El original la usa; en CartPole sobra y en MuJoCo hace falta.
+  normalizar_observaciones: false
+  limite_normalizacion: 10.0       # recorte tras normalizar (valor de sb3)
+  # Ventajas estandarizadas antes del paso de la politica, como el original.
+  normalizar_ventajas: true
+  # Paso de la politica (valores por defecto de sb3-contrib).
+  pasos_gradiente_conjugado: 15
+  busqueda_lineal_factor: 0.8
+  busqueda_lineal_maximo: 10
+  # Red de valor: el original da un paso de region de confianza; sb3 usa Adam
+  # por minibatches (diferencia documentada). batch_size_valor debe dividir los
+  # pasos de cada iteracion: 250 divide 5000.
+  learning_rate_valor: 0.001
+  pasos_valor: 10
+  batch_size_valor: 250
 
 experto:
   pasos_totales: null
   retorno_objetivo: null
+  # Semilla base del experto; de ella salen las del modelo, los entornos de
+  # entrenamiento y los de evaluacion (semillas_independientes).
+  semilla: 1000
+  # Cada cuantas iteraciones se evalua y con cuantos episodios. Se evalua la
+  # politica estocastica, la que graba las demostraciones; se guarda la mejor
+  # y se para al alcanzar retorno_objetivo (eleccion propia: el original usa
+  # un snapshot fijo).
+  evaluar_cada: 2
+  episodios_evaluacion: 10
+  evaluacion_determinista: false
 
 gail:
   # Iteraciones de GAIL (paper, tabla 2: 300 en los entornos clasicos; el codigo

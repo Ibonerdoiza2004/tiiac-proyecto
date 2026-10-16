@@ -6,8 +6,10 @@ import pytest
 from gymnasium import spaces
 
 from src.data.entornos import crear_entorno, crear_entorno_vectorizado
-from src.utils.seed import (crear_generador, sembrar_entorno, sembrar_entorno_vectorizado,
-                            semillas_independientes, validar_semilla)
+from src.utils.seed import (crear_generador, generador_torch_aislado, reiniciar_con_semilla,
+                            sembrar_entorno,
+                            sembrar_entorno_vectorizado, semillas_independientes,
+                            validar_semilla)
 
 
 CFG = {"entorno": {"id": "CartPole-v1"}}
@@ -188,3 +190,44 @@ def test_sembrar_rechaza_objetos_que_no_son_entornos():
         sembrar_entorno(object(), 1)
     with pytest.raises(TypeError, match="VecEnv"):
         sembrar_entorno_vectorizado(object(), 1)
+
+
+def test_reiniciar_con_semilla_da_la_primera_partida_de_esa_semilla():
+    env, otro = crear_entorno(CFG, None), crear_entorno(CFG, None)
+    try:
+        # Sin gastar ningún reset: coincide con reset(seed=...) directo.
+        observacion, _ = reiniciar_con_semilla(env, 12)
+        assert np.array_equal(observacion, otro.reset(seed=12)[0])
+        # Tras otras partidas, la misma semilla vuelve a dar la misma partida.
+        env.reset()
+        assert np.array_equal(reiniciar_con_semilla(env, 12)[0], observacion)
+        assert not np.array_equal(reiniciar_con_semilla(env, 13)[0], observacion)
+        # Siembra también los espacios.
+        reiniciar_con_semilla(env, 12)
+        reiniciar_con_semilla(otro, 12)
+        assert env.action_space.sample() == otro.action_space.sample()
+        with pytest.raises(ValueError, match="entero no negativo"):
+            reiniciar_con_semilla(env, -1)
+        with pytest.raises(TypeError, match="entorno Gymnasium"):
+            reiniciar_con_semilla(object(), 1)
+    finally:
+        env.close()
+        otro.close()
+
+
+def test_generador_torch_aislado_depende_de_su_semilla_y_restaura_el_global():
+    import torch
+    estado = torch.get_rng_state()
+    with generador_torch_aislado(4):
+        a = torch.rand(3)
+    assert torch.equal(torch.get_rng_state(), estado)
+    torch.rand(5)
+    with generador_torch_aislado(4):
+        b = torch.rand(3)
+    with generador_torch_aislado(5):
+        c = torch.rand(3)
+    assert torch.equal(a, b) and not torch.equal(a, c)
+    with pytest.raises(ValueError, match="entero no negativo"):
+        with generador_torch_aislado(-1):
+            pass
+
