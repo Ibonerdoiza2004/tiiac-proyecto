@@ -101,6 +101,26 @@ def _config_trpo(cfg: dict) -> dict:
     return tcfg
 
 
+def _semilla_valida(valor: object) -> bool:
+    """Indica si valor es una semilla válida según validar_semilla, la única comprobación."""
+    try:
+        validar_semilla(valor)
+    except ValueError:
+        return False
+    return True
+
+
+def _a_json(valor: object) -> object:
+    """Convierte escalares de NumPy a tipos de Python para guardarlos en JSON.
+
+    Raises:
+        TypeError: Si el valor no se puede convertir, como hace json por defecto.
+    """
+    if isinstance(valor, (np.integer, np.floating, np.bool_)):
+        return valor.item()
+    raise TypeError(f"{type(valor).__name__} no se puede guardar en JSON")
+
+
 def _config_experto(cfg: dict) -> dict:
     """Devuelve la sección experto comprobada.
 
@@ -113,7 +133,7 @@ def _config_experto(cfg: dict) -> dict:
     reglas = {
         "pasos_totales": _es_entero_positivo,
         "retorno_objetivo": _es_real,
-        "semilla": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
+        "semilla": _semilla_valida,
         "evaluar_cada": _es_entero_positivo,
         "episodios_evaluacion": _es_entero_positivo,
         "evaluacion_determinista": lambda v: isinstance(v, bool),
@@ -246,7 +266,7 @@ def normalizar_observacion(observacion: np.ndarray,
 
 
 def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, determinista: bool,
-                    estadisticas: dict[str, Any] | None = None) -> dict[str, float]:
+                    estadisticas: dict[str, Any] | None = None) -> dict[str, Any]:
     """Juega episodios completos con el modelo y mide el retorno real.
 
     Evaluación mínima para elegir el experto; la de la rama
@@ -366,8 +386,9 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         raise ValueError("experto.pasos_totales debe ser múltiplo de trpo.pasos_por_iteracion "
                          f"({ecfg['pasos_totales']} entre {tcfg['pasos_por_iteracion']}): cada "
                          "iteración recoge un bloque completo y se pasaría del presupuesto")
+    semilla_base = validar_semilla(ecfg["semilla"])
     semilla_modelo, semilla_entornos, semilla_evaluacion = semillas_independientes(
-        ecfg["semilla"], 3)
+        semilla_base, 3)
     fijar_seed(semilla_modelo)
     venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semilla_entornos)
     if tcfg["normalizar_observaciones"]:
@@ -415,7 +436,7 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         "objetivo_alcanzado": alcanzado,
         "evaluaciones": historial,
         "segundos": segundos,
-        "semillas": {"base": ecfg["semilla"], "modelo": semilla_modelo,
+        "semillas": {"base": semilla_base, "modelo": semilla_modelo,
                      "entornos": semilla_entornos, "evaluacion": semilla_evaluacion},
         "normalizacion": mejor["estadisticas"],
     }
@@ -460,7 +481,8 @@ def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
     metadatos = {"configuracion": cfg, "resumen": resumen, "codigo": estado_git(),
                  "entorno_ejecucion": _versiones_y_hardware()}
     # Se serializa antes de crear nada: un NaN no deja una carpeta a medias.
-    texto = json.dumps(metadatos, ensure_ascii=False, indent=2, allow_nan=False)
+    texto = json.dumps(metadatos, ensure_ascii=False, indent=2, allow_nan=False,
+                       default=_a_json)
     directorio.mkdir(parents=True, exist_ok=True)
     with (directorio / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
         archivo.write(texto)

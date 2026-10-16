@@ -395,7 +395,8 @@ def test_el_experto_normaliza_si_lo_pide_el_perfil():
 
 
 @pytest.mark.parametrize("clave,valor", [
-    ("pasos_totales", 0), ("retorno_objetivo", "500"), ("semilla", -1),
+    ("pasos_totales", 0), ("retorno_objetivo", "500"), ("semilla", -1), ("semilla", True),
+    ("semilla", 1.5), ("semilla", np.int64(-3)),
     ("evaluar_cada", 0), ("episodios_evaluacion", 1.5), ("evaluacion_determinista", "no"),
 ])
 def test_entrenar_experto_rechaza_configuraciones_no_validas(clave, valor):
@@ -655,4 +656,24 @@ def test_el_script_no_entrena_si_la_salida_esta_ocupada(ocupado, monkeypatch, tm
     assert script.main() == 2
     assert not entrenado
     assert "elige otra --salida" in capsys.readouterr().err
+
+
+def test_la_semilla_del_experto_admite_enteros_de_numpy(tmp_path):
+    # Regresión: experto.semilla tenía su propia comprobación y rechazaba np.int64,
+    # que validar_semilla (la única del proyecto) acepta. También se debe poder
+    # guardar: experto.json convierte los escalares de NumPy.
+    con_python, con_numpy = _cfg(), _cfg()
+    con_numpy["experto"]["semilla"] = np.int64(con_python["experto"]["semilla"])
+    modelo, resumen = entrenar_experto(con_numpy)
+    assert resumen["evaluaciones"] == entrenar_experto(con_python)[1]["evaluaciones"]
+    assert type(resumen["semillas"]["base"]) is int
+    guardar_experto(tmp_path / "experto", modelo, con_numpy, resumen)
+    _, metadatos = cargar_experto(tmp_path / "experto")
+    assert metadatos["configuracion"]["experto"]["semilla"] == con_python["experto"]["semilla"]
+
+
+def test_evaluar_retorno_anota_lo_que_devuelve():
+    import typing
+    devuelve = typing.get_type_hints(evaluar_retorno)["return"]
+    assert typing.get_args(devuelve)[1] is typing.Any
 
