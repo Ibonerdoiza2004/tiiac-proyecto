@@ -72,10 +72,19 @@ def _es_entero(valor: object) -> bool:
     return isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
 
 
-def _comprobar_cantidades(
+def comprobar_cantidades(
     cantidad_train: int, cantidad_validacion: int, cantidades_subconjuntos: Sequence[int],
 ) -> None:
-    """Rechaza cantidades que no sean enteros positivos coherentes entre sí."""
+    """Rechaza cantidades que no sean enteros positivos coherentes entre sí.
+
+    Es la comprobación que aplica crear_splits. Sirve también para validar la
+    configuración antes de grabar unas demostraciones que luego no se podrían
+    repartir.
+
+    Raises:
+        ValueError: Cantidades no enteras o no positivas, subconjuntos vacíos o
+            no estrictamente crecientes, o un subconjunto mayor que train.
+    """
     for nombre, valor in (("cantidad_train", cantidad_train),
                           ("cantidad_validacion", cantidad_validacion)):
         if not _es_entero(valor) or valor <= 0:
@@ -131,7 +140,7 @@ def crear_splits(
         ValueError: Cantidades incoherentes, IDs no enteros o repetidos, un total
             distinto del pedido, generador o huella no válidos.
     """
-    _comprobar_cantidades(cantidad_train, cantidad_validacion, cantidades_subconjuntos)
+    comprobar_cantidades(cantidad_train, cantidad_validacion, cantidades_subconjuntos)
     _comprobar_huella(huella_dataset)
     if not isinstance(generador, np.random.Generator):
         raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")

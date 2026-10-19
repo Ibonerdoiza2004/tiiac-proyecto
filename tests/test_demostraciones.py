@@ -1,4 +1,5 @@
-"""Pruebas de validación, guardado, carga, integridad de episodios y rechazo de datos inválidos."""
+"""Pruebas de grabación, validación, guardado, carga, integridad de episodios y
+rechazo de datos inválidos."""
 
 import gc
 import io
@@ -15,10 +16,19 @@ import numpy as np
 import pytest
 from gymnasium import spaces
 
+import torch
+from gymnasium.envs.classic_control import CartPoleEnv
+
 from src.data.demostraciones import (
-    cargar_demostraciones, guardar_demostraciones, validar_demostraciones,
+    ARCHIVO_DEMOSTRACIONES, ARCHIVO_SPLITS, cargar_demostraciones, config_demostraciones,
+    generar_dataset, grabar_demostraciones, guardar_demostraciones, huella_partidas,
+    jugar_partida, retorno_partida, validar_demostraciones,
 )
+from src.data.entornos import crear_entorno
+from src.data.splits import cargar_splits, crear_splits, huella_archivo
 from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria
+from src.utils.configuracion import resolver_configuracion
+from src.utils.seed import crear_generador, semillas_independientes
 
 OBSERVACION = spaces.Box(-np.inf, np.inf, (4,), np.float32)
 DISCRETA = spaces.Discrete(2)
@@ -844,3 +854,374 @@ def test_carga_cierra_el_archivo_si_el_zip_esta_danado(
     with pytest.raises(ValueError, match="dañado"):
         cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
     gc.collect()
+
+
+
+# --- grabación ---------------------------------------------------------------------
+# Políticas fijas en lugar del experto, para no entrenar nada: equilibrio aguanta
+# las 500 partidas de CartPole-v1 (truncadas) y cero cae enseguida (terminadas).
+
+RAIZ = Path(__file__).resolve().parent.parent
+
+
+def _equilibrio(observacion: np.ndarray) -> int:
+    """Empuja hacia el lado al que cae el palo."""
+    return int(observacion[2] + 0.5 * observacion[3] > 0)
+
+
+def _cero(observacion: np.ndarray) -> int:
+    """Empuja siempre a la izquierda."""
+    return 0
+
+
+def _al_azar_con_pytorch(observacion: np.ndarray) -> int:
+    """Muestrea con el generador global de PyTorch, como predict de sb3."""
+    return int(torch.rand(()) < 0.5)
+
+
+def _par_constante(observacion: np.ndarray) -> np.ndarray:
+    """Acción continua fija dentro de los límites de Pendulum."""
+    return np.array([0.5], dtype=np.float32)
+
+
+def _cfg_demostraciones(entorno: str = "CartPole-v1", **cambios: Any) -> dict[str, Any]:
+    """Configuración del proyecto con un dataset pequeño: 4 + 2 partidas."""
+    cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
+    cfg["entorno"]["id"] = entorno
+    cfg["demostraciones"].update(partidas_train=4, partidas_validacion=2, subconjuntos=[1, 4])
+    cfg["demostraciones"].update(cambios)
+    return cfg
+
+
+def _metadatos_grabacion() -> dict[str, object]:
+    return {"entorno": "CartPole-v1", "experto": "política fija de prueba",
+            "procedencia": "tests", "configuracion_experto": {}}
+
+
+@pytest.mark.parametrize("politica,truncada", [(_equilibrio, True), (_cero, False)],
+                         ids=["truncada", "terminada"])
+def test_jugar_partida_devuelve_una_partida_completa_y_valida(politica, truncada) -> None:
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        partida = jugar_partida(entorno, politica, 3, 7)
+        validar_demostraciones([partida], entorno.observation_space, entorno.action_space)
+    finally:
+        entorno.close()
+    assert partida.id_episodio == 7
+    assert (partida.numero_pasos == 500) is truncada
+    assert (bool(partida.truncados[-1]), bool(partida.terminados[-1])) == (truncada, not truncada)
+    assert not (partida.terminados[:-1] | partida.truncados[:-1]).any()
+    assert partida.estados.shape == (partida.numero_pasos, 4)
+    assert partida.estados.dtype == np.float32
+    assert partida.acciones.shape == (partida.numero_pasos,)
+    assert partida.acciones.dtype.kind == "i"
+    assert partida.recompensas_originales.dtype == np.float64
+    # CartPole da 1 por paso: el retorno es la longitud.
+    assert retorno_partida(partida) == partida.numero_pasos
+
+
+def test_jugar_partida_empieza_por_el_primer_estado_de_su_semilla() -> None:
+    # A diferencia de sembrar_entorno, que gasta un reset.
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    otro = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        inicial, _ = otro.reset(seed=11)
+        partida = jugar_partida(entorno, _cero, 11, 0)
+    finally:
+        entorno.close()
+        otro.close()
+    np.testing.assert_array_equal(partida.estados[0], inicial)
+    np.testing.assert_array_equal(partida.estados[1:], partida.siguientes_estados[:-1])
+
+
+def test_jugar_partida_es_reproducible_y_no_altera_pytorch() -> None:
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        estado = torch.get_rng_state()
+        a = jugar_partida(entorno, _al_azar_con_pytorch, 5, 0)
+        assert torch.equal(torch.get_rng_state(), estado)
+        torch.rand(9)  # el generador global cambia y no debe influir
+        b = jugar_partida(entorno, _al_azar_con_pytorch, 5, 0)
+        c = jugar_partida(entorno, _al_azar_con_pytorch, 6, 0)
+    finally:
+        entorno.close()
+    assert huella_partidas([a]) == huella_partidas([b]) != huella_partidas([c])
+
+
+def test_jugar_partida_con_acciones_continuas() -> None:
+    entorno = crear_entorno({"entorno": {"id": "Pendulum-v1"}}, None)
+    try:
+        partida = jugar_partida(entorno, _par_constante, 2, 0)
+        validar_demostraciones([partida], entorno.observation_space, entorno.action_space)
+    finally:
+        entorno.close()
+    assert partida.numero_pasos == 200 and partida.truncados[-1]
+    assert partida.acciones.shape == (200, 1) and partida.acciones.dtype == np.float32
+    assert (partida.acciones == 0.5).all()
+
+
+def test_jugar_partida_no_comparte_arrays_con_la_politica() -> None:
+    # Una política que modifica la observación recibida no cambia lo grabado:
+    # cada estado se copia al guardarlo.
+    def destructiva(observacion: np.ndarray) -> int:
+        accion = _equilibrio(observacion)
+        observacion[:] = 99.0
+        return accion
+
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        partida = jugar_partida(entorno, destructiva, 1, 0)
+    finally:
+        entorno.close()
+    assert not (partida.estados == 99.0).any()
+    assert not (partida.siguientes_estados == 99.0).any()
+    np.testing.assert_array_equal(partida.estados[1:], partida.siguientes_estados[:-1])
+
+
+@pytest.mark.parametrize("semilla", [-1, 1.5, True, "3", None])
+def test_jugar_partida_rechaza_semillas_no_validas(semilla: Any) -> None:
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        with pytest.raises(ValueError, match="semilla"):
+            jugar_partida(entorno, _cero, semilla, 0)
+    finally:
+        entorno.close()
+
+
+@pytest.mark.parametrize("identificador", [True, 1.5, "0", ID_EPISODIO_MAXIMO + 1, None])
+def test_jugar_partida_rechaza_ids_no_validos(identificador: Any) -> None:
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        with pytest.raises(ValueError, match="id_episodio"):
+            jugar_partida(entorno, _cero, 0, identificador)
+    finally:
+        entorno.close()
+
+
+def test_jugar_partida_exige_un_entorno_con_limite_de_pasos() -> None:
+    sin_limite = CartPoleEnv()  # sin TimeLimit: una buena política no acabaría nunca
+    try:
+        with pytest.raises(ValueError, match="límite de pasos"):
+            jugar_partida(sin_limite, _equilibrio, 0, 0)
+    finally:
+        sin_limite.close()
+    with pytest.raises(TypeError, match="Gymnasium"):
+        jugar_partida(object(), _equilibrio, 0, 0)
+
+
+def test_grabar_usa_una_semilla_independiente_por_partida() -> None:
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        cuatro = grabar_demostraciones(entorno, _al_azar_con_pytorch, 4, 8)
+        dos = grabar_demostraciones(entorno, _al_azar_con_pytorch, 2, 8)
+        sueltas = [jugar_partida(entorno, _al_azar_con_pytorch, semilla, i)
+                   for i, semilla in enumerate(semillas_independientes(8, 4))]
+    finally:
+        entorno.close()
+    assert [p.id_episodio for p in cuatro] == [0, 1, 2, 3]
+    assert huella_partidas(cuatro) == huella_partidas(sueltas)
+    # Cada partida depende solo de su semilla: grabar menos da las primeras.
+    assert huella_partidas(dos) == huella_partidas(cuatro[:2])
+    assert len({huella_partidas([p]) for p in cuatro}) == 4
+
+
+@pytest.mark.parametrize("partidas", [0, -1, True, 2.0, "3"])
+def test_grabar_rechaza_un_numero_de_partidas_no_valido(partidas: Any) -> None:
+    entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)
+    try:
+        with pytest.raises(ValueError, match="cantidad"):
+            grabar_demostraciones(entorno, _cero, partidas, 0)
+    finally:
+        entorno.close()
+
+
+def test_grabar_rechaza_acciones_fuera_del_espacio() -> None:
+    # Pendulum recorta la acción por dentro, así que solo la validación lo detecta.
+    entorno = crear_entorno({"entorno": {"id": "Pendulum-v1"}}, None)
+    try:
+        with pytest.raises(ValueError, match="fuera de los límites"):
+            grabar_demostraciones(entorno, lambda o: np.array([5.0], np.float32), 1, 0)
+    finally:
+        entorno.close()
+
+
+def test_retorno_partida_suma_en_orden_paso_a_paso() -> None:
+    # Regresión: sum de Python 3.12 compensa el redondeo y daba 1.0; acumulando
+    # paso a paso, como durante la partida, el 1.0 se pierde y queda 0.0. Con
+    # sum, evaluar_retorno cambiaba el último decimal de los retornos de Pendulum.
+    partida = Trayectoria(**{**_campos(3), "recompensas_originales":
+                             np.array([1e16, 1.0, -1e16])})
+    assert sum(partida.recompensas_originales.tolist()) == 1.0
+    assert retorno_partida(partida) == 0.0
+
+
+@pytest.mark.parametrize("campo", ["estados", "acciones", "siguientes_estados",
+                                   "recompensas_originales", "terminados", "truncados"])
+def test_huella_partidas_cambia_con_cualquier_campo(campo: str) -> None:
+    base = _campos(3)
+    original = huella_partidas([Trayectoria(**base)])
+    cambiado = dict(base)
+    cambiado[campo] = base[campo].copy()
+    cambiado[campo][0] = not cambiado[campo][0] if campo in ("terminados", "truncados") \
+        else cambiado[campo][0] + 1
+    assert huella_partidas([Trayectoria(**cambiado)]) != original
+    assert huella_partidas([Trayectoria(**base)]) == original
+
+
+def test_huella_partidas_distingue_id_tipo_y_orden() -> None:
+    a, b = _trayectoria(3, 0), _trayectoria(4, 1)
+    original = huella_partidas([a, b])
+    assert huella_partidas([b, a]) != original
+    assert huella_partidas([_trayectoria(3, 5), b]) != original
+    # Mismos bytes con otro tipo (ceros enteros y reales) o con otra forma.
+    enteras = Trayectoria(**{**_campos(3), "acciones": np.zeros(3, np.int64)})
+    reales = Trayectoria(**{**_campos(3), "acciones": np.zeros(3, np.float64)})
+    assert enteras.acciones.tobytes() == reales.acciones.tobytes()
+    assert huella_partidas([enteras]) != huella_partidas([reales])
+    matriz = Trayectoria(**{**_campos(3), "estados": a.estados.reshape(4, 3)})
+    assert huella_partidas([matriz]) != huella_partidas([a])
+    no_contiguo = Trayectoria(**{**_campos(3), "estados": np.asfortranarray(a.estados)})
+    assert huella_partidas([no_contiguo]) == huella_partidas([a])
+    for invalido in ("abc", [object()], None):
+        with pytest.raises(ValueError, match="Trayectoria"):
+            huella_partidas(invalido)
+
+
+def test_huella_partidas_no_depende_de_los_metadatos(
+    tmp_path: Path, metadatos: dict[str, object],
+) -> None:
+    trayectorias = [_trayectoria(3, 0), _trayectoria(2, 1)]
+    otros = {**metadatos, "procedencia": "otro commit"}
+    rutas = [_guardar(tmp_path / "a.npz", trayectorias, metadatos),
+             _guardar(tmp_path / "b.npz", trayectorias, otros)]
+    assert huella_archivo(rutas[0]) != huella_archivo(rutas[1])
+    cargadas = [cargar_demostraciones(r, OBSERVACION, DISCRETA)[0] for r in rutas]
+    assert huella_partidas(cargadas[0]) == huella_partidas(cargadas[1]) \
+        == huella_partidas(trayectorias)
+
+
+def test_config_demostraciones_de_cartpole_es_valida_y_es_una_copia() -> None:
+    cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
+    dcfg = config_demostraciones(cfg)
+    assert dcfg == cfg["demostraciones"]
+    assert dcfg["determinista"] is False  # el original graba con el experto estocástico
+    dcfg["semilla"] = 1
+    assert cfg["demostraciones"]["semilla"] != 1
+    config_demostraciones(_cfg_demostraciones(semilla=np.int64(4)))
+
+
+@pytest.mark.parametrize("cambios,mensaje", [
+    ({"semilla": -1}, "demostraciones.semilla"),
+    ({"semilla": True}, "demostraciones.semilla"),
+    ({"semilla": 1.5}, "demostraciones.semilla"),
+    ({"determinista": "no"}, "demostraciones.determinista"),
+    ({"determinista": 0}, "demostraciones.determinista"),
+    ({"partidas_train": 0}, "cantidad_train"),
+    ({"partidas_validacion": 0}, "cantidad_validacion"),
+    ({"subconjuntos": [1, 9]}, "supera"),
+    ({"subconjuntos": [4, 1]}, "crecientes"),
+    ({"subconjuntos": []}, "no vacía"),
+])
+def test_config_demostraciones_rechaza_valores_no_validos(cambios: dict, mensaje: str) -> None:
+    with pytest.raises(ValueError, match=mensaje):
+        config_demostraciones(_cfg_demostraciones(**cambios))
+
+
+@pytest.mark.parametrize("clave", ["partidas_train", "partidas_validacion", "subconjuntos",
+                                   "semilla", "determinista"])
+def test_config_demostraciones_exige_cada_clave(clave: str) -> None:
+    cfg = _cfg_demostraciones()
+    del cfg["demostraciones"][clave]
+    with pytest.raises(ValueError, match=f"demostraciones.{clave}"):
+        config_demostraciones(cfg)
+    with pytest.raises(ValueError, match="sección demostraciones"):
+        config_demostraciones({})
+
+
+@pytest.mark.parametrize("entorno,politica", [("CartPole-v1", _equilibrio),
+                                              ("Pendulum-v1", _par_constante)],
+                         ids=["discreto", "continuo"])
+def test_generar_dataset_guarda_partidas_y_splits_coherentes(
+    tmp_path: Path, entorno: str, politica: Any,
+) -> None:
+    cfg = _cfg_demostraciones(entorno)
+    resultado = generar_dataset(cfg, politica, tmp_path / "datos", _metadatos_grabacion())
+    assert resultado["demostraciones"] == tmp_path / "datos" / ARCHIVO_DEMOSTRACIONES
+    assert resultado["splits"] == tmp_path / "datos" / ARCHIVO_SPLITS
+    espacios = crear_entorno(cfg, None)
+    try:
+        partidas, guardados = cargar_demostraciones(resultado["demostraciones"],
+                                                    espacios.observation_space,
+                                                    espacios.action_space)
+    finally:
+        espacios.close()
+    assert [p.id_episodio for p in partidas] == list(range(6))
+    assert resultado["huella_dataset"] == huella_archivo(resultado["demostraciones"])
+    assert resultado["huella_splits"] == huella_archivo(resultado["splits"])
+    assert resultado["huella_partidas"] == huella_partidas(partidas)
+    splits = cargar_splits(resultado["splits"], resultado["huella_dataset"], range(6))
+    assert (len(splits.train), len(splits.validacion)) == (4, 2)
+    assert sorted(splits.subconjuntos) == [1, 4]
+    assert [list(splits.train), list(splits.validacion)] == [resultado["train"],
+                                                             resultado["validacion"]]
+    grabacion = guardados["grabacion"]
+    semilla_partidas, semilla_splits = semillas_independientes(cfg["demostraciones"]["semilla"], 2)
+    assert grabacion == {"semilla": cfg["demostraciones"]["semilla"],
+                         "semilla_partidas": semilla_partidas, "semilla_splits": semilla_splits,
+                         "partidas": 6, "determinista": False,
+                         "huella_partidas": resultado["huella_partidas"],
+                         "retornos": resultado["retornos"], "longitudes": resultado["longitudes"]}
+    assert resultado["retornos"] == [retorno_partida(p) for p in partidas]
+    assert resultado["pasos"] == sum(p.numero_pasos for p in partidas)
+    # El reparto usa su propia semilla, no la base ni la de las partidas.
+    esperados = crear_splits(partidas, 4, 2, [1, 4], crear_generador(semilla_splits),
+                             resultado["huella_dataset"])
+    assert esperados == splits
+    assert {k: guardados[k] for k in _metadatos_grabacion()} == _metadatos_grabacion()
+
+
+def test_generar_dataset_es_reproducible_byte_a_byte(tmp_path: Path) -> None:
+    cfg = _cfg_demostraciones()
+    a = generar_dataset(cfg, _al_azar_con_pytorch, tmp_path / "a", _metadatos_grabacion())
+    b = generar_dataset(cfg, _al_azar_con_pytorch, tmp_path / "b", _metadatos_grabacion())
+    assert (a["huella_dataset"], a["huella_splits"]) == (b["huella_dataset"], b["huella_splits"])
+    otra = generar_dataset(_cfg_demostraciones(semilla=7), _al_azar_con_pytorch, tmp_path / "c",
+                           _metadatos_grabacion())
+    assert otra["huella_partidas"] != a["huella_partidas"]
+
+
+def test_generar_dataset_no_sobrescribe(tmp_path: Path) -> None:
+    cfg = _cfg_demostraciones()
+    resultado = generar_dataset(cfg, _equilibrio, tmp_path, _metadatos_grabacion())
+    with pytest.raises(FileExistsError):
+        generar_dataset(cfg, _cero, tmp_path, _metadatos_grabacion())
+    assert huella_archivo(resultado["demostraciones"]) == resultado["huella_dataset"]
+    assert huella_archivo(resultado["splits"]) == resultado["huella_splits"]
+
+
+def test_generar_dataset_no_deja_un_npz_sin_splits(tmp_path: Path) -> None:
+    # Si los splits no se pueden guardar, se borra el NPZ que acaba de crear,
+    # y el archivo que ya estaba se conserva.
+    (tmp_path / ARCHIVO_SPLITS).write_text("de otro dataset", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        generar_dataset(_cfg_demostraciones(), _equilibrio, tmp_path, _metadatos_grabacion())
+    assert not (tmp_path / ARCHIVO_DEMOSTRACIONES).exists()
+    assert (tmp_path / ARCHIVO_SPLITS).read_text(encoding="utf-8") == "de otro dataset"
+
+
+@pytest.mark.parametrize("cfg_cambios,metadatos,mensaje", [
+    ({"subconjuntos": [1, 9]}, None, "supera"),
+    ({"semilla": -1}, None, "semilla"),
+    ({}, {"grabacion": 1}, "grabacion"),
+    ({}, "no es un diccionario", "grabacion"),
+    ({}, {"entorno": "CartPole-v1"}, "Metadatos obligatorios"),
+])
+def test_generar_dataset_falla_sin_crear_archivos(
+    tmp_path: Path, cfg_cambios: dict, metadatos: Any, mensaje: str,
+) -> None:
+    if isinstance(metadatos, dict) and "grabacion" in metadatos:
+        metadatos = {**_metadatos_grabacion(), **metadatos}
+    with pytest.raises(ValueError, match=mensaje):
+        generar_dataset(_cfg_demostraciones(**cfg_cambios), _equilibrio, tmp_path / "datos",
+                        _metadatos_grabacion() if metadatos is None else metadatos)
+    assert not (tmp_path / "datos").exists()

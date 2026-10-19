@@ -1,20 +1,37 @@
-"""Validación, guardado y carga de episodios completos en NPZ con un manifiesto JSON versionado."""
+"""Grabación, validación, guardado y carga de episodios completos.
+
+Las partidas se guardan en NPZ con un manifiesto JSON versionado. generar_dataset
+graba las partidas con una política, las guarda y crea sus splits; es lo que usa
+scripts/get_data.py con el experto TRPO.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tokenize
 import zipfile
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 from numpy.typing import NDArray
 
+from src.data.entornos import crear_entorno
+from src.data.splits import comprobar_cantidades, crear_splits, guardar_splits, huella_archivo
 from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria, es_id_episodio
+from src.utils.seed import (crear_generador, generador_torch_aislado, reiniciar_con_semilla,
+                            semillas_independientes, validar_semilla)
+
+Politica = Callable[[NDArray[Any]], Any]
+"""Recibe una observación en bruto del entorno y devuelve la acción que se le pasa a step."""
+
+ARCHIVO_DEMOSTRACIONES = "demostraciones.npz"
+ARCHIVO_SPLITS = "splits.json"
 
 _CAMPOS = (
     "estados", "acciones", "siguientes_estados", "recompensas_originales",
@@ -378,3 +395,222 @@ def cargar_demostraciones(
         raise ValueError(f"Archivo de demostraciones dañado o ilegible: {origen}") from exc
     validar_demostraciones(trayectorias, espacio_observacion, espacio_accion)
     return trayectorias, manifiesto["metadatos"]
+
+
+def jugar_partida(entorno: gym.Env, politica: Politica, semilla: int,
+                  id_episodio: int) -> Trayectoria:
+    """Juega una partida completa con la política y la devuelve como Trayectoria.
+
+    La partida empieza con reiniciar_con_semilla, así que es la primera de esa
+    semilla, y todo ocurre dentro de generador_torch_aislado(semilla): una
+    política que muestrea con el generador global de PyTorch (como predict de
+    sb3) da la misma partida con la misma semilla y no altera lo que venga
+    después. Las observaciones se guardan en bruto, tal como las da el entorno;
+    si la política normaliza, lo hace por dentro. Las recompensas son las del
+    entorno, en float64.
+
+    Args:
+        entorno: Entorno Gymnasium con límite de pasos (TimeLimit), como los de
+            crear_entorno.
+        politica: Función de observación a acción.
+        semilla: Semilla no negativa de la partida.
+        id_episodio: Identificador de la partida (es_id_episodio).
+
+    Returns:
+        La partida, sin validar frente a los espacios (grabar_demostraciones lo hace).
+
+    Raises:
+        TypeError: Si entorno no es un entorno Gymnasium.
+        ValueError: Si el entorno no tiene límite de pasos, o la semilla o el
+            identificador no son válidos.
+    """
+    if not isinstance(entorno, gym.Env):
+        raise TypeError("entorno debe ser un entorno Gymnasium")
+    if entorno.spec is None or entorno.spec.max_episode_steps is None:
+        raise ValueError("El entorno necesita un límite de pasos (TimeLimit) para que la "
+                         "partida termine")
+    if not es_id_episodio(id_episodio):
+        raise ValueError(f"id_episodio debe ser un entero del rango de int64, no {id_episodio!r}")
+    semilla = validar_semilla(semilla)
+    estados, acciones, siguientes, recompensas, terminados, truncados = [], [], [], [], [], []
+    with generador_torch_aislado(semilla):
+        observacion, _ = reiniciar_con_semilla(entorno, semilla)
+        fin = False
+        while not fin:
+            # Copia antes de llamar a la política, por si modifica la observación.
+            estados.append(np.array(observacion))
+            accion = politica(observacion)
+            siguiente, recompensa, terminado, truncado, _ = entorno.step(accion)
+            acciones.append(np.array(accion))
+            siguientes.append(np.array(siguiente))
+            recompensas.append(float(recompensa))
+            terminados.append(bool(terminado))
+            truncados.append(bool(truncado))
+            observacion, fin = siguiente, terminado or truncado
+    return Trayectoria(
+        id_episodio=int(id_episodio), estados=np.stack(estados), acciones=np.stack(acciones),
+        siguientes_estados=np.stack(siguientes),
+        recompensas_originales=np.asarray(recompensas, dtype=np.float64),
+        terminados=np.asarray(terminados, dtype=bool), truncados=np.asarray(truncados, dtype=bool))
+
+
+def retorno_partida(trayectoria: Trayectoria) -> float:
+    """Suma las recompensas originales en orden, paso a paso.
+
+    Da el mismo valor que acumular la recompensa durante la partida. No se usa
+    sum, que desde Python 3.12 compensa el redondeo y puede cambiar el último
+    decimal respecto a la suma paso a paso.
+    """
+    retorno = 0.0
+    for recompensa in trayectoria.recompensas_originales.tolist():
+        retorno += recompensa
+    return retorno
+
+def huella_partidas(trayectorias: Sequence[Trayectoria]) -> str:
+    """Calcula una huella SHA-256 del contenido de las partidas, sin metadatos.
+
+    Recorre las partidas en orden y, de cada una, su id_episodio y el dtype,
+    la forma y los bytes de cada array. A diferencia de huella_archivo del NPZ,
+    no cambia con los metadatos (commit, versiones), así que sirve para
+    comprobar que una regeneración da exactamente las mismas partidas.
+
+    Raises:
+        ValueError: Si no es una secuencia de objetos Trayectoria.
+    """
+    if (isinstance(trayectorias, (str, bytes)) or not isinstance(trayectorias, Sequence)
+            or not all(isinstance(t, Trayectoria) for t in trayectorias)):
+        raise ValueError("Se requiere una secuencia de objetos Trayectoria")
+    resumen = hashlib.sha256()
+    for trayectoria in trayectorias:
+        resumen.update(f"id={int(trayectoria.id_episodio)};".encode())
+        for campo in _CAMPOS:
+            valor = np.ascontiguousarray(getattr(trayectoria, campo))
+            resumen.update(f"{campo}:{valor.dtype.str}:{valor.shape};".encode())
+            resumen.update(valor.tobytes())
+    return resumen.hexdigest()
+
+def grabar_demostraciones(entorno: gym.Env, politica: Politica, partidas: int,
+                          semilla: int) -> list[Trayectoria]:
+    """Juega partidas con la política y las valida frente a los espacios del entorno.
+
+    La partida i usa la semilla i de semillas_independientes(semilla, partidas)
+    y tiene id_episodio i. Así cada partida depende solo de su semilla: grabar
+    menos partidas con la misma semilla da las primeras de grabar más. Se
+    guardan todas, sin filtrar por retorno, como el código original.
+
+    Args:
+        entorno: Entorno Gymnasium con límite de pasos; quien llama lo cierra.
+        politica: Función de observación a acción.
+        partidas: Número de partidas, entero positivo.
+        semilla: Semilla base no negativa.
+
+    Returns:
+        Las partidas en orden de id_episodio.
+
+    Raises:
+        ValueError: Partidas o semilla no válidas, o partidas incompatibles con
+            los espacios del entorno (por ejemplo, acciones fuera de sus límites).
+    """
+    semillas = semillas_independientes(validar_semilla(semilla), partidas)
+    trayectorias = [jugar_partida(entorno, politica, semilla_partida, indice)
+                    for indice, semilla_partida in enumerate(semillas)]
+    validar_demostraciones(trayectorias, entorno.observation_space, entorno.action_space)
+    return trayectorias
+
+
+def config_demostraciones(cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """Devuelve la sección demostraciones comprobada.
+
+    partidas_train, partidas_validacion y subconjuntos deben poder repartirse
+    con crear_splits (comprobar_cantidades); semilla pasa por validar_semilla
+    y determinista es booleano.
+
+    Raises:
+        ValueError: Si falta la sección o alguna clave, o algún valor no es válido.
+    """
+    dcfg = cfg.get("demostraciones") if isinstance(cfg, Mapping) else None
+    if not isinstance(dcfg, Mapping):
+        raise ValueError("La configuración necesita la sección demostraciones")
+    claves = ("partidas_train", "partidas_validacion", "subconjuntos", "semilla", "determinista")
+    for clave in claves:
+        if clave not in dcfg:
+            raise ValueError(f"Falta demostraciones.{clave} en la configuración")
+    comprobar_cantidades(dcfg["partidas_train"], dcfg["partidas_validacion"],
+                         dcfg["subconjuntos"])
+    try:
+        validar_semilla(dcfg["semilla"])
+    except ValueError as error:
+        raise ValueError(f"demostraciones.semilla no es válida: {error}") from error
+    if not isinstance(dcfg["determinista"], bool):
+        raise ValueError(f"demostraciones.determinista debe ser booleano, "
+                         f"no {dcfg['determinista']!r}")
+    return dict(dcfg)
+
+
+def generar_dataset(cfg: Mapping[str, Any], politica: Politica, directorio: str | Path,
+                    metadatos: Mapping[str, object]) -> dict[str, Any]:
+    """Graba las demostraciones de la configuración, las guarda y crea sus splits.
+
+    De demostraciones.semilla salen dos semillas independientes: la de las
+    partidas y la del reparto. Se graban partidas_train + partidas_validacion
+    partidas en el entorno de la configuración, se guardan en
+    directorio/demostraciones.npz con los metadatos recibidos más un apartado
+    grabacion (semillas, huella_partidas, retornos y longitudes), y se
+    reparten con crear_splits
+    en directorio/splits.json, con la huella del NPZ. No sobrescribe: si falla
+    después de guardar el NPZ, lo borra para no dejar un dataset sin splits.
+
+    Args:
+        cfg: Configuración resuelta con entorno.id y la sección demostraciones.
+        politica: Función de observación a acción, por ejemplo el experto.
+        directorio: Carpeta de salida; se crea si no existe.
+        metadatos: Metadatos obligatorios de guardar_demostraciones (entorno,
+            experto, procedencia, configuracion_experto), sin la clave grabacion.
+
+    Returns:
+        Rutas de los dos archivos, huella_dataset y huella_splits (SHA-256 de
+        cada archivo), huella_partidas (solo del contenido),
+        IDs de train y validación, pasos totales, retornos y longitudes.
+
+    Raises:
+        ValueError: Configuración o metadatos no válidos, o partidas
+            incompatibles con el entorno.
+        FileExistsError: Alguno de los archivos ya existe.
+    """
+    dcfg = config_demostraciones(cfg)
+    if not isinstance(metadatos, Mapping) or "grabacion" in metadatos:
+        raise ValueError("metadatos debe ser un diccionario sin la clave grabacion, "
+                         "que añade generar_dataset")
+    semilla = validar_semilla(dcfg["semilla"])
+    semilla_partidas, semilla_splits = semillas_independientes(semilla, 2)
+    total = dcfg["partidas_train"] + dcfg["partidas_validacion"]
+    entorno = crear_entorno(dict(cfg), None)
+    try:
+        trayectorias = grabar_demostraciones(entorno, politica, total, semilla_partidas)
+        espacio_observacion, espacio_accion = entorno.observation_space, entorno.action_space
+    finally:
+        entorno.close()
+    retornos = [retorno_partida(t) for t in trayectorias]
+    longitudes = [t.numero_pasos for t in trayectorias]
+    contenido = huella_partidas(trayectorias)
+    grabacion = {"semilla": semilla, "semilla_partidas": semilla_partidas,
+                 "semilla_splits": semilla_splits, "partidas": total,
+                 "determinista": dcfg["determinista"], "huella_partidas": contenido,
+                 "retornos": retornos, "longitudes": longitudes}
+    directorio = Path(directorio)
+    ruta_demostraciones = guardar_demostraciones(
+        directorio / ARCHIVO_DEMOSTRACIONES, trayectorias, {**metadatos, "grabacion": grabacion},
+        espacio_observacion, espacio_accion)
+    try:
+        huella = huella_archivo(ruta_demostraciones)
+        splits = crear_splits(trayectorias, dcfg["partidas_train"], dcfg["partidas_validacion"],
+                              dcfg["subconjuntos"], crear_generador(semilla_splits), huella)
+        ruta_splits = guardar_splits(directorio / ARCHIVO_SPLITS, splits)
+    except BaseException:
+        ruta_demostraciones.unlink(missing_ok=True)
+        raise
+    return {"demostraciones": ruta_demostraciones, "splits": ruta_splits,
+            "huella_dataset": huella, "huella_splits": huella_archivo(ruta_splits),
+            "huella_partidas": contenido,
+            "train": list(splits.train), "validacion": list(splits.validacion),
+            "pasos": sum(longitudes), "retornos": retornos, "longitudes": longitudes}

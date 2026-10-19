@@ -39,12 +39,26 @@ pip install -r requirements.txt
 
 ## Datos
 
+Las demostraciones no se descargan: se graban con nuestro experto TRPO, y ni
+el experto ni los datos se versionan. Se obtienen con:
+
 ```bash
-python scripts/get_data.py
+python scripts/entrenar_experto.py --entorno cartpole
+python scripts/get_data.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha>
 ```
 
-Descarga <dataset> de <origen oficial> y verifica el SHA-256. Ocupa <N> GB.
-Licencia: <licencia del dataset>.
+`get_data.py` graba 15 partidas con el experto estocástico, como el código
+original, sin filtrarlas. Escribe `demostraciones.npz` y `splits.json` (10
+partidas de train con subconjuntos 1, 4, 7 y 10, y 5 de validación) en
+`data/demostraciones/cartpole/<fecha>` e imprime las huellas SHA-256. Las
+semillas salen de `demostraciones.semilla` en `configs/default.yaml`. Con
+`--huella-esperada <huella de las partidas>` comprueba que una regeneración da
+las mismas partidas. Medido el 19 de octubre en CPU (WSL2, 12 núcleos):
+CartPole, 7401 pasos y 244 KB en 6 s.
+
+Procedencia: datos propios, generados en `CartPole-v1` de Gymnasium (licencia
+MIT). Datos congelados: pendiente de acordar en el equipo; cuando se congelen,
+aquí irán su ubicación y sus huellas.
 
 ## Ejecución
 
