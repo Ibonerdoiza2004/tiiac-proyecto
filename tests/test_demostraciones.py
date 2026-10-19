@@ -978,6 +978,51 @@ def test_jugar_partida_no_comparte_arrays_con_la_politica() -> None:
     np.testing.assert_array_equal(partida.estados[1:], partida.siguientes_estados[:-1])
 
 
+
+class _EntornoConBuffer(gym.Env):
+    """Contador que devuelve su propio estado interno, sin copiarlo, en reset y step.
+
+    Los entornos de Gymnasium no garantizan devolver arrays nuevos; los de
+    CartPole o Pendulum lo hacen, este no.
+    """
+
+    observation_space = spaces.Box(-100.0, 100.0, (1,), np.float32)
+    action_space = spaces.Discrete(2)
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        super().reset(seed=seed)
+        self.estado = np.zeros(1, np.float32)
+        return self.estado, {}
+
+    def step(self, accion: int):
+        self.estado += 1.0  # en el mismo array que se devolvió antes
+        return self.estado, 1.0, False, False, {}
+
+
+_ID_BUFFER = "TiiacEntornoConBuffer-v0"
+if _ID_BUFFER not in gym.registry:
+    gym.register(_ID_BUFFER, entry_point=_EntornoConBuffer, max_episode_steps=5)
+
+
+def test_una_politica_que_modifica_su_entrada_no_cambia_la_partida() -> None:
+    """Regresión (revisión del PR): la política recibía el array del entorno; si
+    el entorno lo reutilizaba como estado interno, modificarlo cambiaba la
+    partida y la validación no lo detectaba."""
+    def destructiva(observacion: np.ndarray) -> int:
+        observacion[:] = 50.0
+        return 0
+
+    partidas = []
+    for politica in (_cero, destructiva):
+        entorno = gym.make(_ID_BUFFER, disable_env_checker=True)
+        try:
+            partidas.append(jugar_partida(entorno, politica, 0, 0))
+        finally:
+            entorno.close()
+    np.testing.assert_array_equal(partidas[1].estados.ravel(), [0, 1, 2, 3, 4])
+    np.testing.assert_array_equal(partidas[1].siguientes_estados.ravel(), [1, 2, 3, 4, 5])
+    assert huella_partidas([partidas[1]]) == huella_partidas([partidas[0]])
+
 @pytest.mark.parametrize("semilla", [-1, 1.5, True, "3", None])
 def test_jugar_partida_rechaza_semillas_no_validas(semilla: Any) -> None:
     entorno = crear_entorno({"entorno": {"id": "CartPole-v1"}}, None)

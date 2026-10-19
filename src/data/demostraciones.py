@@ -406,7 +406,8 @@ def jugar_partida(entorno: gym.Env, politica: Politica, semilla: int,
     política que muestrea con el generador global de PyTorch (como predict de
     sb3) da la misma partida con la misma semilla y no altera lo que venga
     después. Las observaciones se guardan en bruto, tal como las da el entorno;
-    si la política normaliza, lo hace por dentro. Las recompensas son las del
+    si la política normaliza, lo hace por dentro. La política recibe una copia
+    de cada observación, así que modificarla no cambia la partida. Las recompensas son las del
     entorno, en float64.
 
     Args:
@@ -437,9 +438,10 @@ def jugar_partida(entorno: gym.Env, politica: Politica, semilla: int,
         observacion, _ = reiniciar_con_semilla(entorno, semilla)
         fin = False
         while not fin:
-            # Copia antes de llamar a la política, por si modifica la observación.
+            # La política recibe su propia copia: si modificara la observación, no
+            # alteraría ni el estado guardado ni un buffer que el entorno reutilice.
             estados.append(np.array(observacion))
-            accion = politica(observacion)
+            accion = politica(np.array(observacion))
             siguiente, recompensa, terminado, truncado, _ = entorno.step(accion)
             acciones.append(np.array(accion))
             siguientes.append(np.array(siguiente))
