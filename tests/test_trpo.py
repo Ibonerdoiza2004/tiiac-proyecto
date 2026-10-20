@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -21,11 +22,16 @@ import src.training.trpo as trpo
 from src.data.entornos import crear_entorno, crear_entorno_vectorizado
 from src.models.factory import construir_discriminador
 from src.training.gail import EntornoRecompensaGAIL
-from src.training.trpo import (cargar_experto, crear_trpo, entrenar_experto,
-                               estadisticas_normalizacion, evaluar_retorno, guardar_experto,
-                               iteracion_trpo, normalizar_observacion)
+from src.data.demostraciones import (generar_dataset, huella_partidas, jugar_partida,
+                                     retorno_partida)
+from src.data.splits import huella_archivo
+from src.training.trpo import (cargar_experto, cargar_politica_experto, crear_trpo,
+                               entrenar_experto, estadisticas_normalizacion, evaluar_retorno,
+                               guardar_experto, iteracion_trpo, normalizar_observacion,
+                               politica_trpo)
 from src.utils.configuracion import resolver_configuracion
-from src.utils.seed import fijar_seed, reiniciar_con_semilla
+from src.utils.seed import (fijar_seed, generador_torch_aislado, reiniciar_con_semilla,
+                            semillas_independientes)
 
 RAIZ = Path(__file__).resolve().parent.parent
 ENTORNOS = pytest.mark.parametrize("entorno", ["CartPole-v1", "Pendulum-v1"],
@@ -677,3 +683,230 @@ def test_evaluar_retorno_anota_lo_que_devuelve():
     devuelve = typing.get_type_hints(evaluar_retorno)["return"]
     assert typing.get_args(devuelve)[1] is typing.Any
 
+
+
+
+# --- política del experto y grabación de demostraciones ---------------------------
+
+@ENTORNOS
+@pytest.mark.parametrize("determinista", [True, False])
+def test_politica_trpo_es_predict_sobre_la_observacion_normalizada(entorno, determinista):
+    cfg = _cfg(entorno)
+    modelo, venv = _agente(cfg)
+    venv.close()
+    estadisticas = {"media": [0.3] * modelo.observation_space.shape[0],
+                    "varianza": [2.0] * modelo.observation_space.shape[0],
+                    "epsilon": 1e-8, "limite": 10.0}
+    observacion = modelo.observation_space.sample()
+    for est in (None, estadisticas):
+        politica = politica_trpo(modelo, determinista, est)
+        with generador_torch_aislado(0):
+            esperada, _ = modelo.predict(normalizar_observacion(observacion, est),
+                                         deterministic=determinista)
+        with generador_torch_aislado(0):
+            np.testing.assert_array_equal(politica(observacion), esperada)
+
+
+def test_politica_trpo_rechaza_lo_que_no_es_trpo_o_un_modo_no_booleano():
+    modelo, venv = _agente(_cfg())
+    venv.close()
+    with pytest.raises(ValueError, match="TRPO"):
+        politica_trpo(object(), True)
+    for modo in (1, "no", None):
+        with pytest.raises(ValueError, match="determinista"):
+            politica_trpo(modelo, modo)
+
+
+@ENTORNOS
+def test_evaluar_retorno_juega_las_mismas_partidas_que_jugar_partida(entorno):
+    cfg = _cfg(entorno)
+    modelo, venv = _agente(cfg)
+    venv.close()
+    resultado = evaluar_retorno(modelo, cfg, 3, 9, False)
+    entorno_ = crear_entorno(cfg, None)
+    try:
+        partidas = [jugar_partida(entorno_, politica_trpo(modelo, False), semilla, i)
+                    for i, semilla in enumerate(semillas_independientes(9, 3))]
+    finally:
+        entorno_.close()
+    assert resultado["retornos"] == [retorno_partida(p) for p in partidas]
+    assert resultado["longitud_media"] == np.mean([p.numero_pasos for p in partidas])
+
+
+@pytest.fixture(scope="module")
+def experto_guardado(tmp_path_factory):
+    """Experto de CartPole con un presupuesto mínimo, guardado como lo hace el script."""
+    cfg = _cfg()
+    modelo, resumen = entrenar_experto(cfg)
+    directorio = tmp_path_factory.mktemp("experto") / "cartpole"
+    guardar_experto(directorio, modelo, cfg, resumen)
+    return directorio
+
+
+def _cfg_grabacion(**cambios) -> dict:
+    cfg = _cfg()
+    cfg["demostraciones"].update(partidas_train=4, partidas_validacion=2, subconjuntos=[1, 4])
+    cfg["demostraciones"].update(cambios)
+    return cfg
+
+
+@pytest.mark.parametrize("determinista", [True, False])
+def test_cargar_politica_experto_juega_como_el_experto(experto_guardado, determinista):
+    cfg = _cfg_grabacion(determinista=determinista)
+    politica, _ = cargar_politica_experto(experto_guardado, cfg)
+    modelo, _ = cargar_experto(experto_guardado)
+    entorno = crear_entorno(cfg, None)
+    try:
+        cargada = jugar_partida(entorno, politica, 4, 0)
+        directa = jugar_partida(entorno, politica_trpo(modelo, determinista), 4, 0)
+    finally:
+        entorno.close()
+    assert huella_partidas([cargada]) == huella_partidas([directa])
+
+
+def test_cargar_politica_experto_describe_su_procedencia(experto_guardado):
+    cfg = _cfg_grabacion()
+    _, metadatos = cargar_politica_experto(experto_guardado, cfg)
+    _, guardado = cargar_experto(experto_guardado)
+    assert set(metadatos) == {"entorno", "experto", "procedencia", "configuracion_experto"}
+    assert metadatos["entorno"] == "CartPole-v1"
+    experto = metadatos["experto"]
+    assert experto["huella_modelo"] == huella_archivo(experto_guardado / "modelo.zip")
+    assert experto["huella_metadatos"] == huella_archivo(experto_guardado / "experto.json")
+    resumen = guardado["resumen"]
+    assert (experto["mejor_retorno"], experto["mejor_iteracion"], experto["pasos"],
+            experto["objetivo_alcanzado"]) == (resumen["mejor_retorno"], resumen["mejor_iteracion"],
+                                               resumen["pasos"], resumen["objetivo_alcanzado"])
+    assert experto["codigo"] == guardado["codigo"]
+    # Sin rutas absolutas: fuera de la carpeta de trabajo solo queda el nombre.
+    assert experto["directorio"] == "cartpole"
+    assert set(metadatos["procedencia"]) == {"generador", "codigo", "entorno_ejecucion",
+                                             "configuracion_demostraciones"}
+    assert metadatos["procedencia"]["configuracion_demostraciones"] == cfg["demostraciones"]
+    assert metadatos["configuracion_experto"] == guardado["configuracion"]
+    json.dumps(metadatos, allow_nan=False)
+
+
+def test_la_ruta_del_experto_se_guarda_relativa_a_la_carpeta_de_trabajo(
+        experto_guardado, monkeypatch):
+    monkeypatch.chdir(experto_guardado.parent.parent)
+    _, metadatos = cargar_politica_experto(experto_guardado, _cfg_grabacion())
+    assert metadatos["experto"]["directorio"] == f"{experto_guardado.parent.name}/cartpole"
+
+
+def test_regenerar_con_el_experto_da_el_mismo_archivo(experto_guardado, tmp_path):
+    # Regresión de diseño: con la fecha en los metadatos, cada regeneración daba
+    # otro NPZ y otra huella aunque las partidas fueran idénticas.
+    cfg = _cfg_grabacion()
+    huellas = []
+    for nombre in ("a", "b"):
+        politica, metadatos = cargar_politica_experto(experto_guardado, cfg)
+        huellas.append(generar_dataset(cfg, politica, tmp_path / nombre, metadatos)
+                       ["huella_dataset"])
+    assert huellas[0] == huellas[1]
+
+
+def test_cargar_politica_experto_rechaza_otro_entorno_y_carpetas_sin_experto(
+        experto_guardado, tmp_path):
+    with pytest.raises(ValueError, match="se entrenó en 'CartPole-v1'"):
+        cargar_politica_experto(experto_guardado, {**_cfg_grabacion(),
+                                                   "entorno": {"id": "Pendulum-v1"}})
+    with pytest.raises(FileNotFoundError, match="modelo.zip"):
+        cargar_politica_experto(tmp_path, _cfg_grabacion())
+    with pytest.raises(ValueError, match="demostraciones.determinista"):
+        cargar_politica_experto(experto_guardado, _cfg_grabacion(determinista="no"))
+
+
+def test_la_politica_del_experto_aplica_su_normalizacion(tmp_path):
+    cfg = _cfg("Pendulum-v1", normalizar_observaciones=True)
+    cfg["experto"].update(pasos_totales=128)
+    modelo, resumen = entrenar_experto(cfg)
+    assert resumen["normalizacion"] is not None
+    guardar_experto(tmp_path / "experto", modelo, cfg, resumen)
+    cfg["demostraciones"]["determinista"] = True
+    politica, _ = cargar_politica_experto(tmp_path / "experto", cfg)
+    observacion = np.array([0.5, -0.5, 3.0], dtype=np.float32)
+    con, _ = modelo.predict(normalizar_observacion(observacion, resumen["normalizacion"]),
+                            deterministic=True)
+    sin, _ = modelo.predict(observacion, deterministic=True)
+    np.testing.assert_array_equal(politica(observacion), con)
+    assert not np.array_equal(con, sin)
+
+
+# --- scripts/get_data.py ----------------------------------------------------------
+
+def _script_datos():
+    """Carga scripts/get_data.py como módulo."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("get_data", RAIZ / "scripts" / "get_data.py")
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    return modulo
+
+
+def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tmp_path,
+                                                            monkeypatch, capsys):
+    script = _script_datos()
+    argumentos = ["get_data.py", "--experto", str(experto_guardado)]
+    monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "a")])
+    assert script.main() == 0
+    salida = capsys.readouterr().out
+    huella = re.search(r"huella de las partidas: ([0-9a-f]{64})", salida).group(1)
+    assert "15 partidas" in salida  # 10 + 5 del perfil de CartPole
+    npz = tmp_path / "a" / "demostraciones.npz"
+    assert npz.is_file() and (tmp_path / "a" / "splits.json").is_file()
+    assert f"huella de demostraciones.npz: {huella_archivo(npz)}" in salida
+
+    monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "b"),
+                                     "--huella-esperada", huella])
+    assert script.main() == 0
+    assert "coinciden con las congeladas" in capsys.readouterr().out
+
+    monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "c"),
+                                     "--huella-esperada", "0" * 64])
+    assert script.main() == 1
+    assert "no coincide" in capsys.readouterr().err
+    assert (tmp_path / "c" / "demostraciones.npz").is_file()  # se conserva para compararlo
+
+
+@pytest.mark.parametrize("caso,mensaje", [
+    ("salida ocupada", "elige otra --salida"),
+    ("sin experto", "error con el experto"),
+    ("config", "error de configuración"),
+])
+def test_get_data_no_graba_si_algo_no_es_valido(caso, mensaje, experto_guardado, tmp_path,
+                                                 monkeypatch, capsys):
+    script = _script_datos()
+    salida = tmp_path / "datos"
+    argumentos = ["get_data.py", "--experto", str(experto_guardado), "--salida", str(salida)]
+    if caso == "salida ocupada":
+        salida.mkdir()
+        (salida / "algo.txt").write_text("x", encoding="utf-8")
+    elif caso == "sin experto":
+        argumentos[2] = str(tmp_path / "no-existe")
+    else:
+        argumentos += ["--config", str(tmp_path / "no-existe.yaml")]
+    grabado = []
+    monkeypatch.setattr(script, "generar_dataset", lambda *a: grabado.append(1))
+    monkeypatch.setattr("sys.argv", argumentos)
+    assert script.main() == 2
+    assert not grabado
+    assert mensaje in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("codigo,aviso", [
+    ({"commit": "a" * 40, "cambios_sin_commit": False}, None),
+    ({"commit": "a" * 40, "cambios_sin_commit": True}, "cambios sin commit"),
+    ({"commit": None, "cambios_sin_commit": None}, "no se pudo leer el commit"),
+])
+def test_get_data_avisa_del_estado_de_git(codigo, aviso, monkeypatch, tmp_path, capsys):
+    script = _script_datos()
+    metadatos = {"entorno": "CartPole-v1", "experto": {}, "configuracion_experto": {},
+                 "procedencia": {"codigo": codigo}}
+    monkeypatch.setattr(script, "cargar_politica_experto",
+                        lambda directorio, cfg: (lambda o: int(o[2] > 0), metadatos))
+    monkeypatch.setattr("sys.argv", ["get_data.py", "--experto", "x",
+                                     "--salida", str(tmp_path / "datos")])
+    assert script.main() == 0
+    error = capsys.readouterr().err
+    assert (aviso in error) if aviso else "aviso" not in error

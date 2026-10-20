@@ -7,6 +7,9 @@
 - entrenar_experto entrena con la recompensa real, evalúa cada cierto número de
   bloques y se queda con el mejor modelo.
 - guardar_experto y cargar_experto guardan el modelo y sus metadatos.
+- politica_trpo convierte el modelo en una función de observación a acción, la
+  que usan evaluar_retorno y la grabación de demostraciones (jugar_partida);
+  cargar_politica_experto la prepara desde un experto guardado.
 
 Las semillas salen de src/utils/seed.py: nunca se pasa seed= a TRPO, porque sb3
 volvería a sembrar los generadores globales y los entornos por su cuenta.
@@ -32,10 +35,12 @@ from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 
+from src.data.demostraciones import (Politica, config_demostraciones, jugar_partida,
+                                     retorno_partida)
 from src.data.entornos import crear_entorno, crear_entorno_vectorizado
+from src.data.splits import huella_archivo
 from src.models.factory import ACTIVACIONES
-from src.utils.seed import (fijar_seed, generador_torch_aislado, reiniciar_con_semilla,
-                            semillas_independientes, validar_semilla)
+from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
 from src.utils.tracking import registrar
 
 _ARCHIVO_MODELO = "modelo.zip"
@@ -265,16 +270,48 @@ def normalizar_observacion(observacion: np.ndarray,
     return np.clip((observacion - media) / escala, -limite, limite).astype(np.float32)
 
 
+def politica_trpo(modelo: TRPO, determinista: bool,
+                  estadisticas: dict[str, Any] | None = None) -> Politica:
+    """Convierte el modelo en una función de observación en bruto a acción.
+
+    Aplica la normalización del experto (normalizar_observacion) antes de
+    predict, así que recibe las observaciones tal como las da el entorno. Con
+    determinista False muestrea la acción con el generador global de PyTorch;
+    jugar_partida lo aísla por partida.
+
+    Args:
+        modelo: Agente TRPO.
+        determinista: True para la acción más probable, False para muestrear.
+        estadisticas: De estadisticas_normalizacion si el modelo normaliza.
+
+    Raises:
+        ValueError: Si modelo no es un TRPO o determinista no es booleano.
+    """
+    if not isinstance(modelo, TRPO):
+        raise ValueError("modelo debe ser un TRPO de sb3-contrib")
+    if not isinstance(determinista, bool):
+        raise ValueError(f"determinista debe ser booleano, no {determinista!r}")
+
+    def politica(observacion: np.ndarray) -> np.ndarray:
+        """Devuelve la acción del modelo para una observación en bruto."""
+        accion, _ = modelo.predict(normalizar_observacion(observacion, estadisticas),
+                                   deterministic=determinista)
+        return accion
+
+    return politica
+
+
 def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, determinista: bool,
                     estadisticas: dict[str, Any] | None = None) -> dict[str, Any]:
     """Juega episodios completos con el modelo y mide el retorno real.
 
     Evaluación mínima para elegir el experto; la de la rama
-    evaluacion-checkpoints la sustituirá. Cada episodio usa su propia semilla,
-    derivada de semilla con semillas_independientes, tanto para el entorno como
-    para las acciones muestreadas (generador_torch_aislado). Así la misma semilla
-    da siempre el mismo resultado, cada episodio no depende de cuántos haya y
-    evaluar no altera el generador global, es decir, el entrenamiento.
+    evaluacion-checkpoints la sustituirá. Cada episodio es una partida de
+    jugar_partida con su propia semilla, derivada de semilla con
+    semillas_independientes, tanto para el entorno como para las acciones
+    muestreadas. Así la misma semilla da siempre el mismo resultado, cada
+    episodio no depende de cuántos haya y evaluar no altera el generador
+    global, es decir, el entrenamiento.
 
     Args:
         modelo: Agente TRPO.
@@ -294,24 +331,15 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
     if not _es_entero_positivo(episodios):
         raise ValueError(f"episodios debe ser un entero positivo, no {episodios!r}")
     semillas = semillas_independientes(validar_semilla(semilla), episodios)
+    politica = politica_trpo(modelo, determinista, estadisticas)
     entorno = crear_entorno(cfg, None)
-    retornos, longitudes = [], []
     try:
-        for semilla_episodio in semillas:
-            with generador_torch_aislado(semilla_episodio):
-                observacion, _ = reiniciar_con_semilla(entorno, semilla_episodio)
-                retorno, longitud, terminado = 0.0, 0, False
-                while not terminado:
-                    accion, _ = modelo.predict(normalizar_observacion(observacion, estadisticas),
-                                               deterministic=determinista)
-                    observacion, recompensa, fin, corte, _ = entorno.step(accion)
-                    retorno += float(recompensa)
-                    longitud += 1
-                    terminado = fin or corte
-            retornos.append(retorno)
-            longitudes.append(longitud)
+        partidas = [jugar_partida(entorno, politica, semilla_episodio, indice)
+                    for indice, semilla_episodio in enumerate(semillas)]
     finally:
         entorno.close()
+    retornos = [retorno_partida(p) for p in partidas]
+    longitudes = [p.numero_pasos for p in partidas]
     return {"retorno_medio": float(np.mean(retornos)),
             "retorno_desviacion": float(np.std(retornos)),
             "longitud_media": float(np.mean(longitudes)),
@@ -506,3 +534,69 @@ def cargar_experto(directorio: Path) -> tuple[TRPO, dict[str, Any]]:
     with (directorio / _ARCHIVO_METADATOS).open(encoding="utf-8") as archivo:
         metadatos = json.load(archivo)
     return TRPO.load(directorio / _ARCHIVO_MODELO, device="cpu"), metadatos
+
+
+def _ruta_registrada(ruta: Path) -> str:
+    """Ruta relativa a la carpeta de trabajo, o solo el nombre: nunca una ruta absoluta."""
+    try:
+        return ruta.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return ruta.name
+
+
+def cargar_politica_experto(directorio: Path, cfg: dict) -> tuple[Politica, dict[str, Any]]:
+    """Prepara un experto guardado para grabar demostraciones y describe su procedencia.
+
+    Carga el experto con cargar_experto, comprueba que se entrenó en el
+    entorno de la configuración y crea su política con politica_trpo, en el
+    modo de demostraciones.determinista y con la normalización guardada.
+
+    Los metadatos son los que exige guardar_demostraciones. No llevan la
+    fecha: así regenerar las demostraciones con el mismo código, experto y
+    máquina da un archivo idéntico, con la misma huella.
+
+    Args:
+        directorio: Carpeta de guardar_experto.
+        cfg: Configuración resuelta con entorno.id y la sección demostraciones.
+
+    Returns:
+        La política y los metadatos: entorno; experto (carpeta, huellas de
+        modelo.zip y experto.json, resultado de su entrenamiento y su commit);
+        procedencia (generador, código con el que se graba, versiones,
+        hardware y sección demostraciones); y configuracion_experto.
+
+    Raises:
+        FileNotFoundError: Si falta modelo.zip o experto.json.
+        ValueError: Si la configuración no es válida o el experto es de otro entorno.
+    """
+    dcfg = config_demostraciones(cfg)
+    directorio = Path(directorio)
+    modelo, metadatos_experto = cargar_experto(directorio)
+    entorno = cfg["entorno"]["id"]
+    entorno_experto = metadatos_experto.get("configuracion", {}).get("entorno", {}).get("id")
+    if entorno_experto != entorno:
+        raise ValueError(f"El experto se entrenó en {entorno_experto!r} y la configuración "
+                         f"pide {entorno!r}")
+    resumen = metadatos_experto["resumen"]
+    politica = politica_trpo(modelo, dcfg["determinista"], resumen["normalizacion"])
+    metadatos = {
+        "entorno": entorno,
+        "experto": {
+            "directorio": _ruta_registrada(directorio),
+            "huella_modelo": huella_archivo(directorio / _ARCHIVO_MODELO),
+            "huella_metadatos": huella_archivo(directorio / _ARCHIVO_METADATOS),
+            "mejor_retorno": resumen["mejor_retorno"],
+            "mejor_iteracion": resumen["mejor_iteracion"],
+            "pasos": resumen["pasos"],
+            "objetivo_alcanzado": resumen["objetivo_alcanzado"],
+            "codigo": metadatos_experto.get("codigo"),
+        },
+        "procedencia": {
+            "generador": "experto TRPO propio (sb3-contrib), sin filtrar partidas",
+            "codigo": estado_git(),
+            "entorno_ejecucion": _versiones_y_hardware(),
+            "configuracion_demostraciones": dcfg,
+        },
+        "configuracion_experto": metadatos_experto["configuracion"],
+    }
+    return politica, metadatos

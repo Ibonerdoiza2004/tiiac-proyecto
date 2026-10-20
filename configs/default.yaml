@@ -31,6 +31,12 @@ demostraciones:
   partidas_validacion: 5
   # Subconjuntos anidados de train (paper, figura 1; dataset_num_trajs).
   subconjuntos: [1, 4, 7, 10]
+  # Semilla base de la grabacion; de ella salen la de cada partida y la del
+  # reparto en splits (semillas_independientes).
+  semilla: 2000
+  # El original graba con el experto estocastico (deterministic_expert: false
+  # en im_classic_pipeline.yaml) y guarda todas las partidas, sin filtrarlas.
+  determinista: false
 
 bc:
   # Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh.
