@@ -774,9 +774,8 @@ def test_cargar_politica_experto_describe_su_procedencia(experto_guardado):
     assert experto["huella_modelo"] == huella_archivo(experto_guardado / "modelo.zip")
     assert experto["huella_metadatos"] == huella_archivo(experto_guardado / "experto.json")
     resumen = guardado["resumen"]
-    assert (experto["mejor_retorno"], experto["mejor_iteracion"], experto["pasos"],
-            experto["objetivo_alcanzado"]) == (resumen["mejor_retorno"], resumen["mejor_iteracion"],
-                                               resumen["pasos"], resumen["objetivo_alcanzado"])
+    claves = ("mejor_retorno", "mejor_iteracion", "pasos", "objetivo_alcanzado")
+    assert [experto[clave] for clave in claves] == [resumen[clave] for clave in claves]
     assert experto["codigo"] == guardado["codigo"]
     # Sin rutas absolutas: fuera de la carpeta de trabajo solo queda el nombre.
     assert experto["directorio"] == "cartpole"
@@ -910,3 +909,45 @@ def test_get_data_avisa_del_estado_de_git(codigo, aviso, monkeypatch, tmp_path, 
     assert script.main() == 0
     error = capsys.readouterr().err
     assert (aviso in error) if aviso else "aviso" not in error
+
+
+def test_bc_aprende_de_las_demostraciones_grabadas_con_el_experto(experto_guardado, tmp_path):
+    """Integración de punta a punta: experto guardado → demostraciones y splits en
+    disco → carga con comprobación de huella → BC con cada subconjunto."""
+    from src.data.demostraciones import cargar_demostraciones
+    from src.data.splits import cargar_splits
+    from src.training.loop import entrenar_bc_subconjunto
+    from src.utils.seed import crear_generador
+
+    cfg = _cfg_grabacion()
+    cfg["bc"].update(epocas_maximas=3, paciencia=1)
+    politica, metadatos = cargar_politica_experto(experto_guardado, cfg)
+    resultado = generar_dataset(cfg, politica, tmp_path / "datos", metadatos)
+    entorno = crear_entorno(cfg, None)
+    espacio_observacion, espacio_accion = entorno.observation_space, entorno.action_space
+    try:
+        trayectorias, guardados = cargar_demostraciones(
+            resultado["demostraciones"], espacio_observacion, espacio_accion)
+        splits = cargar_splits(resultado["splits"], huella_archivo(resultado["demostraciones"]),
+                               [t.id_episodio for t in trayectorias])
+        assert guardados["grabacion"]["huella_partidas"] == resultado["huella_partidas"]
+        resumenes = []
+        for cantidad in cfg["demostraciones"]["subconjuntos"]:
+            fijar_seed(0)
+            politica_bc, resumen = entrenar_bc_subconjunto(
+                trayectorias, splits, cantidad, espacio_observacion, espacio_accion, cfg,
+                crear_generador(0))
+            resumenes.append(resumen)
+            assert math.isfinite(resumen["val_perdida"]) and 1 <= resumen["mejor_epoca"] <= 3
+
+            def actuar(observacion, red=politica_bc):
+                with torch.no_grad():
+                    entrada = torch.as_tensor(observacion, dtype=torch.float32).unsqueeze(0)
+                    return int(red.eval()(entrada).argmax(dim=1))
+            partida = jugar_partida(entorno, actuar, 7, 0)
+            assert partida.numero_pasos >= 1
+    finally:
+        entorno.close()
+    # Más partidas de train dan más pares; la validación es la misma para todos.
+    assert resumenes[0]["pares_train"] < resumenes[1]["pares_train"]
+    assert len({r["pares_validacion"] for r in resumenes}) == 1

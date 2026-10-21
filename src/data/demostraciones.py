@@ -131,7 +131,8 @@ def _validar_trayectoria(
             f"{contexto}: estados debe tener forma [T, {espacio_observacion.shape[0]}]")
     for campo in ("estados", "siguientes_estados"):
         if not _dentro_de_caja(arrays[campo], espacio_observacion):
-            raise ValueError(f"{contexto}: {campo} fuera de los límites del espacio de observación")
+            raise ValueError(
+                f"{contexto}: {campo} fuera de los límites del espacio de observación")
     acciones = arrays["acciones"]
     if isinstance(espacio_accion, spaces.Discrete):
         if acciones.ndim != 1 or acciones.dtype.kind not in "iu":
@@ -324,7 +325,8 @@ def _leer_manifiesto(archivo: np.lib.npyio.NpzFile) -> dict[str, Any]:
     prefijos = [episodio["prefijo"] for episodio in episodios]
     if len(set(prefijos)) != len(prefijos):
         raise ValueError("El manifiesto repite prefijos de episodio")
-    esperados = {"manifiesto"} | {f"{prefijo}_{campo}" for prefijo in prefijos for campo in _CAMPOS}
+    esperados = {"manifiesto"} | {f"{prefijo}_{campo}"
+                                  for prefijo in prefijos for campo in _CAMPOS}
     if set(archivo.files) != esperados:
         faltan = sorted(esperados - set(archivo.files))
         sobran = sorted(set(archivo.files) - esperados)
