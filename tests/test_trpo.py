@@ -255,7 +255,10 @@ def test_evaluar_retorno_es_reproducible(entorno, determinista):
     torch.rand(7)  # el generador global cambia y no debe influir
     b = evaluar_retorno(modelo, cfg, 3, 9, determinista)
     assert a == b
-    assert set(a) == {"retorno_medio", "retorno_desviacion", "longitud_media", "retornos"}
+    assert set(a) == {"retorno_medio", "retorno_desviacion", "longitud_media",
+                      "retornos", "longitudes"}
+    assert len(a["longitudes"]) == len(a["retornos"]) == 3
+    assert a["longitud_media"] == np.mean(a["longitudes"])
     assert len(a["retornos"]) == 3
 
 

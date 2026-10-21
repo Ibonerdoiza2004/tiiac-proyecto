@@ -35,11 +35,11 @@ from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 
-from src.data.demostraciones import (Politica, config_demostraciones, jugar_partida,
-                                     retorno_partida)
+from src.data.demostraciones import Politica, config_demostraciones
 from src.data.entornos import crear_entorno, crear_entorno_vectorizado
 from src.data.splits import huella_archivo
 from src.models.factory import ACTIVACIONES
+from src.training.evaluacion import evaluar_politica
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
 from src.utils.tracking import registrar
 
@@ -305,13 +305,9 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
                     estadisticas: dict[str, Any] | None = None) -> dict[str, Any]:
     """Juega episodios completos con el modelo y mide el retorno real.
 
-    Evaluación mínima para elegir el experto; la de la rama
-    evaluacion-checkpoints la sustituirá. Cada episodio es una partida de
-    jugar_partida con su propia semilla, derivada de semilla con
-    semillas_independientes, tanto para el entorno como para las acciones
-    muestreadas. Así la misma semilla da siempre el mismo resultado, cada
-    episodio no depende de cuántos haya y evaluar no altera el generador
-    global, es decir, el entrenamiento.
+    Usa el protocolo común de evaluacion-checkpoints. Cada episodio recibe una
+    semilla derivada de semilla, compartible con BC y GAIL, y la recompensa es
+    la real del entorno incluso si el modelo se entrenó con GAIL.
 
     Args:
         modelo: Agente TRPO.
@@ -328,22 +324,7 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
     Raises:
         ValueError: Si episodios o semilla no son válidos.
     """
-    if not _es_entero_positivo(episodios):
-        raise ValueError(f"episodios debe ser un entero positivo, no {episodios!r}")
-    semillas = semillas_independientes(validar_semilla(semilla), episodios)
-    politica = politica_trpo(modelo, determinista, estadisticas)
-    entorno = crear_entorno(cfg, None)
-    try:
-        partidas = [jugar_partida(entorno, politica, semilla_episodio, indice)
-                    for indice, semilla_episodio in enumerate(semillas)]
-    finally:
-        entorno.close()
-    retornos = [retorno_partida(p) for p in partidas]
-    longitudes = [p.numero_pasos for p in partidas]
-    return {"retorno_medio": float(np.mean(retornos)),
-            "retorno_desviacion": float(np.std(retornos)),
-            "longitud_media": float(np.mean(longitudes)),
-            "retornos": retornos}
+    return evaluar_politica(modelo, cfg, episodios, semilla, determinista, estadisticas)
 
 
 def estado_git() -> dict[str, Any]:
