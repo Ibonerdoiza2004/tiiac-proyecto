@@ -58,7 +58,7 @@ def _es_real(valor: object) -> bool:
             and math.isfinite(valor))
 
 
-def _config_trpo(cfg: dict) -> dict:
+def config_trpo(cfg: dict) -> dict:
     """Devuelve la sección trpo comprobada.
 
     Raises:
@@ -182,7 +182,7 @@ def crear_trpo(cfg: dict, venv: VecEnv) -> TRPO:
         ValueError: Si la configuración o los espacios no son válidos, o si el
             VecEnv no tiene trpo.n_entornos instancias.
     """
-    tcfg = _config_trpo(cfg)
+    tcfg = config_trpo(cfg)
     if not isinstance(venv, VecEnv):
         raise ValueError("venv debe ser un VecEnv")
     if venv.num_envs != tcfg["n_entornos"]:
@@ -370,7 +370,7 @@ def estado_git() -> dict[str, Any]:
     return {"commit": commit, "cambios_sin_commit": bool(cambios)}
 
 
-def _versiones_y_hardware() -> dict[str, Any]:
+def versiones_y_hardware() -> dict[str, Any]:
     """Versiones de las librerías y descripción del hardware, para los metadatos."""
     return {
         "python": platform.python_version(),
@@ -409,7 +409,7 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         ValueError: Si la configuración no es válida o experto.pasos_totales no es
             múltiplo de trpo.pasos_por_iteracion.
     """
-    tcfg, ecfg = _config_trpo(cfg), _config_experto(cfg)
+    tcfg, ecfg = config_trpo(cfg), _config_experto(cfg)
     if ecfg["pasos_totales"] % tcfg["pasos_por_iteracion"]:
         raise ValueError("experto.pasos_totales debe ser múltiplo de trpo.pasos_por_iteracion "
                          f"({ecfg['pasos_totales']} entre {tcfg['pasos_por_iteracion']}): cada "
@@ -507,7 +507,7 @@ def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
         raise ValueError("modelo debe ser un TRPO de sb3-contrib")
     directorio = comprobar_directorio_libre(directorio)
     metadatos = {"configuracion": cfg, "resumen": resumen, "codigo": estado_git(),
-                 "entorno_ejecucion": _versiones_y_hardware()}
+                 "entorno_ejecucion": versiones_y_hardware()}
     # Se serializa antes de crear nada: un NaN no deja una carpeta a medias.
     texto = json.dumps(metadatos, ensure_ascii=False, indent=2, allow_nan=False,
                        default=_a_json)
@@ -536,7 +536,7 @@ def cargar_experto(directorio: Path) -> tuple[TRPO, dict[str, Any]]:
     return TRPO.load(directorio / _ARCHIVO_MODELO, device="cpu"), metadatos
 
 
-def _ruta_registrada(ruta: Path) -> str:
+def ruta_registrada(ruta: Path) -> str:
     """Ruta relativa a la carpeta de trabajo, o solo el nombre: nunca una ruta absoluta."""
     try:
         return ruta.resolve().relative_to(Path.cwd().resolve()).as_posix()
@@ -582,7 +582,7 @@ def cargar_politica_experto(directorio: Path, cfg: dict) -> tuple[Politica, dict
     metadatos = {
         "entorno": entorno,
         "experto": {
-            "directorio": _ruta_registrada(directorio),
+            "directorio": ruta_registrada(directorio),
             "huella_modelo": huella_archivo(directorio / _ARCHIVO_MODELO),
             "huella_metadatos": huella_archivo(directorio / _ARCHIVO_METADATOS),
             "mejor_retorno": resumen["mejor_retorno"],
@@ -594,7 +594,7 @@ def cargar_politica_experto(directorio: Path, cfg: dict) -> tuple[Politica, dict
         "procedencia": {
             "generador": "experto TRPO propio (sb3-contrib), sin filtrar partidas",
             "codigo": estado_git(),
-            "entorno_ejecucion": _versiones_y_hardware(),
+            "entorno_ejecucion": versiones_y_hardware(),
             "configuracion_demostraciones": dcfg,
         },
         "configuracion_experto": metadatos_experto["configuracion"],

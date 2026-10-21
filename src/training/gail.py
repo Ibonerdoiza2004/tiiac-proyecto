@@ -16,13 +16,17 @@ iteracion_gail encadena una iteración completa: un bloque de TRPO con la
 recompensa del discriminador, su actualización y el reajuste de la red de valor.
 entrenar_gail monta las piezas de una repetición con un subconjunto de partidas
 y repite la iteración, registrando un retorno de validación cada cierto tiempo.
+guardar_gail y cargar_gail guardan el resultado como el experto, con el
+discriminador y la procedencia de los datos (procedencia_datos).
 """
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -35,15 +39,21 @@ from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecNormalize
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
+from src.data.demostraciones import huella_partidas
 from src.data.entornos import crear_entorno_vectorizado
 from src.data.loaders import pares_de_subconjunto, tensores_de_pares
-from src.data.splits import SplitsDemostraciones
+from src.data.splits import SplitsDemostraciones, huella_archivo
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, construir_discriminador
-from src.training.trpo import (_config_trpo, crear_trpo, estadisticas_normalizacion,
-                               evaluar_retorno, iteracion_trpo)
+from src.training.trpo import (comprobar_directorio_libre, config_trpo, crear_trpo,
+                               estado_git, estadisticas_normalizacion, evaluar_retorno,
+                               iteracion_trpo, ruta_registrada, versiones_y_hardware)
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
 from src.utils.tracking import registrar
+
+_ARCHIVO_MODELO = "modelo.zip"
+_ARCHIVO_DISCRIMINADOR = "discriminador.pt"
+_ARCHIVO_METADATOS = "gail.json"
 
 # −log(1 − D) da recompensas >= 0: favorece alargar las partidas, para entornos
 # que terminan al fallar (CartPole). log D da recompensas <= 0: favorece
@@ -722,7 +732,7 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
             válidos. Todo se comprueba antes de crear los entornos salvo que
             los pares encajen con sus espacios, que se comprueba antes de jugar.
     """
-    gcfg, tcfg = _config_gail(cfg), _config_trpo(cfg)
+    gcfg, tcfg = _config_gail(cfg), config_trpo(cfg)
     _config_discriminador(cfg)
     ecfg = cfg.get("experimento") if isinstance(cfg, dict) else None
     if not isinstance(ecfg, dict) or "semilla_repeticiones" not in ecfg:
@@ -779,3 +789,142 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         "normalizacion": normalizacion,
     }
     return agente, discriminador, resumen
+
+
+def procedencia_datos(ruta_demostraciones: Path, ruta_splits: Path,
+                      trayectorias: Sequence[Trayectoria]) -> dict[str, str]:
+    """Describe con qué datos se entrenó, para los metadatos de guardar_gail.
+
+    Args:
+        ruta_demostraciones: NPZ de demostraciones del que salen las partidas.
+        ruta_splits: JSON de splits usado.
+        trayectorias: Las partidas cargadas de ese NPZ.
+
+    Returns:
+        Las rutas (relativas a la carpeta de trabajo, o solo el nombre), la
+        huella de cada archivo (huella_dataset, huella_splits) y la del
+        contenido de las partidas (huella_partidas), que no cambia con los
+        metadatos del NPZ.
+
+    Raises:
+        FileNotFoundError: Si falta alguno de los archivos.
+        ValueError: Si trayectorias no es una secuencia de Trayectoria.
+    """
+    ruta_demostraciones, ruta_splits = Path(ruta_demostraciones), Path(ruta_splits)
+    return {
+        "demostraciones": ruta_registrada(ruta_demostraciones),
+        "splits": ruta_registrada(ruta_splits),
+        "huella_dataset": huella_archivo(ruta_demostraciones),
+        "huella_splits": huella_archivo(ruta_splits),
+        "huella_partidas": huella_partidas(trayectorias),
+    }
+
+
+def _para_json(valor: object) -> object:
+    """Copia valor con tipos de JSON: escalares de NumPy a Python y nan o infinitos a None.
+
+    Raises:
+        TypeError: Si hay algo que no se puede guardar en JSON.
+    """
+    if isinstance(valor, dict):
+        return {clave: _para_json(v) for clave, v in valor.items()}
+    if isinstance(valor, (list, tuple)):
+        return [_para_json(v) for v in valor]
+    if isinstance(valor, (np.integer, np.floating, np.bool_)):
+        valor = valor.item()
+    if isinstance(valor, float) and not math.isfinite(valor):
+        return None
+    if valor is None or isinstance(valor, (str, int, float, bool)):
+        return valor
+    raise TypeError(f"{type(valor).__name__} no se puede guardar en JSON")
+
+
+def guardar_gail(directorio: Path, agente: TRPO, discriminador: Discriminador, cfg: dict,
+                 resumen: dict[str, Any], datos: dict[str, str]) -> None:
+    """Guarda un entrenamiento de GAIL en un directorio nuevo, como el experto.
+
+    - modelo.zip: el agente TRPO (agente.save).
+    - discriminador.pt: el state_dict del discriminador (pesos y
+      normalización), sin el optimizador.
+    - gail.json: la configuración resuelta, el resumen de entrenar_gail
+      (cantidad, repetición, IDs de las partidas, semillas, medidas,
+      validaciones, tiempo y normalización), la procedencia de los datos
+      (procedencia_datos), los argumentos para reconstruir el discriminador,
+      el commit de git y si había cambios sin commit, las versiones y el
+      hardware. Es JSON estricto: las medidas no definidas (nan, por ejemplo
+      el retorno de una iteración en la que no terminó ninguna partida) se
+      guardan como null.
+
+    No sobrescribe (comprobar_directorio_libre) y lo comprueba todo antes de
+    crear la carpeta.
+
+    Raises:
+        FileExistsError: Si el directorio existe con contenido.
+        ValueError: Si las piezas no son válidas, los datos no son aquellos con
+            los que se entrenó (huella del NPZ distinta de la del resumen) o el
+            discriminador no corresponde a la configuración.
+    """
+    if not isinstance(agente, TRPO):
+        raise ValueError("agente debe ser un TRPO de sb3-contrib")
+    if not isinstance(discriminador, Discriminador):
+        raise ValueError("discriminador debe ser un Discriminador")
+    claves_datos = {"demostraciones", "splits", "huella_dataset", "huella_splits",
+                    "huella_partidas"}
+    if not isinstance(datos, dict) or set(datos) != claves_datos:
+        raise ValueError("datos debe ser el diccionario de procedencia_datos")
+    if not isinstance(resumen, dict) or datos["huella_dataset"] != resumen.get("huella_dataset"):
+        raise ValueError("Las demostraciones no son las del entrenamiento: la huella del NPZ "
+                         "no coincide con la de los splits usados")
+    dcfg = cfg.get("gail", {}).get("discriminador", {}) if isinstance(cfg, dict) else {}
+    argumentos = {"dim_observacion": discriminador.dim_observacion,
+                  "dim_accion": discriminador.dim_accion, "continua": discriminador.continua,
+                  "capas_ocultas": dcfg.get("capas_ocultas"), "activacion": dcfg.get("activacion")}
+    try:
+        Discriminador(**argumentos).load_state_dict(discriminador.state_dict())
+    except (RuntimeError, ValueError, TypeError) as error:
+        raise ValueError("El discriminador no corresponde a gail.discriminador de la "
+                         f"configuración: {error}") from error
+    directorio = comprobar_directorio_libre(directorio)
+    metadatos = {"configuracion": cfg, "resumen": resumen, "datos": datos,
+                 "discriminador": argumentos, "codigo": estado_git(),
+                 "entorno_ejecucion": versiones_y_hardware()}
+    # Se serializa antes de crear nada: un valor no válido no deja una carpeta a medias.
+    texto = json.dumps(_para_json(metadatos), ensure_ascii=False, indent=2, allow_nan=False)
+    directorio.mkdir(parents=True, exist_ok=True)
+    with (directorio / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
+        archivo.write(texto)
+    torch.save(discriminador.state_dict(), directorio / _ARCHIVO_DISCRIMINADOR)
+    agente.save(directorio / _ARCHIVO_MODELO)
+
+
+def cargar_gail(directorio: Path) -> tuple[TRPO, Discriminador, dict[str, Any]]:
+    """Carga un entrenamiento guardado con guardar_gail, en CPU.
+
+    El discriminador se reconstruye con los argumentos de gail.json y se carga
+    con weights_only=True (solo tensores, sin ejecutar código del archivo); se
+    deja en modo evaluación.
+
+    Returns:
+        El agente, el discriminador y los metadatos; las estadísticas de
+        normalización están en metadatos["resumen"]["normalizacion"] (None si
+        no normaliza), para politica_trpo.
+
+    Raises:
+        FileNotFoundError: Si falta alguno de los tres archivos.
+        ValueError: Si el discriminador guardado no corresponde a sus argumentos.
+    """
+    directorio = Path(directorio)
+    for nombre in (_ARCHIVO_MODELO, _ARCHIVO_DISCRIMINADOR, _ARCHIVO_METADATOS):
+        if not (directorio / nombre).is_file():
+            raise FileNotFoundError(f"Falta {nombre} en {directorio}")
+    with (directorio / _ARCHIVO_METADATOS).open(encoding="utf-8") as archivo:
+        metadatos = json.load(archivo)
+    discriminador = Discriminador(**metadatos["discriminador"])
+    estado = torch.load(directorio / _ARCHIVO_DISCRIMINADOR, map_location="cpu",
+                        weights_only=True)
+    try:
+        discriminador.load_state_dict(estado)
+    except RuntimeError as error:
+        raise ValueError(f"discriminador.pt no corresponde a gail.json: {error}") from error
+    discriminador.eval()
+    return TRPO.load(directorio / _ARCHIVO_MODELO, device="cpu"), discriminador, metadatos

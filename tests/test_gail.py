@@ -10,6 +10,7 @@ paso; CartPole y TRPO solo se usan para comprobar que todo encaja con sb3.
 from __future__ import annotations
 
 import copy
+import json
 import math
 from pathlib import Path
 
@@ -1643,3 +1644,390 @@ def test_entrenar_gail_cierra_los_entornos_si_falla(fallo, monkeypatch):
     with pytest.raises((RuntimeError, ValueError)):
         gail.entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0)
     assert cerrados == [True]
+
+
+# --- guardado y carga de GAIL -------------------------------------------------------
+# El NPZ de estas pruebas son bytes cualquiera: procedencia_datos solo calcula su
+# huella. Los splits se crean con esa huella, como en generar_dataset.
+
+def _datos_en_disco(carpeta: Path):
+    from src.data.splits import crear_splits, guardar_splits, huella_archivo
+    trayectorias, _ = _datos_gail()
+    ruta_npz = carpeta / "datos" / "demostraciones.npz"
+    ruta_npz.parent.mkdir(parents=True)
+    ruta_npz.write_bytes(b"demostraciones de prueba")
+    splits = crear_splits(trayectorias, 4, 2, (1, 4), crear_generador(0),
+                          huella_archivo(ruta_npz))
+    ruta_splits = guardar_splits(carpeta / "datos" / "splits.json", splits)
+    return trayectorias, splits, ruta_npz, ruta_splits
+
+
+def _entrenado(carpeta: Path, cfg=None):
+    """Entrena 2 iteraciones con datos en disco y devuelve todo lo que necesita guardar_gail."""
+    from src.training.gail import entrenar_gail, procedencia_datos
+    trayectorias, splits, ruta_npz, ruta_splits = _datos_en_disco(carpeta)
+    cfg = cfg or _cfg_gail(iteraciones=2)
+    agente, discriminador, resumen = entrenar_gail(cfg, trayectorias, splits, 4, 1)
+    return agente, discriminador, cfg, resumen, procedencia_datos(ruta_npz, ruta_splits,
+                                                                  trayectorias)
+
+
+def _json_estricto(ruta: Path) -> dict:
+    def rechazar(constante):
+        raise ValueError(f"constante no estándar: {constante}")
+    return json.loads(ruta.read_text(encoding="utf-8"), parse_constant=rechazar)
+
+
+def test_guardar_y_cargar_gail_conserva_agente_discriminador_y_metadatos(tmp_path):
+    from src.training.gail import cargar_gail, guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path)
+    destino = tmp_path / "gail" / "cantidad_4_rep_1"
+    guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
+    assert sorted(p.name for p in destino.iterdir()) == ["discriminador.pt", "gail.json",
+                                                          "modelo.zip"]
+
+    cargado, d_cargado, metadatos = cargar_gail(destino)
+    assert _iguales(_estado(cargado.policy), _estado(agente.policy))
+    assert _iguales(_estado(d_cargado), _estado(discriminador)) and not d_cargado.training
+    observaciones = crear_generador(2).normal(scale=0.1, size=(20, 4)).astype(np.float32)
+    np.testing.assert_array_equal(cargado.predict(observaciones, deterministic=True)[0],
+                                  agente.predict(observaciones, deterministic=True)[0])
+    estados = torch.as_tensor(observaciones)
+    acciones = torch.zeros(20, dtype=torch.int64)
+    with torch.no_grad():
+        assert torch.equal(d_cargado(estados, acciones), discriminador.eval()(estados, acciones))
+
+    assert set(metadatos) == {"configuracion", "resumen", "datos", "discriminador", "codigo",
+                              "entorno_ejecucion"}
+    assert metadatos["datos"] == datos
+    assert metadatos["discriminador"] == {"dim_observacion": 4, "dim_accion": 2,
+                                          "continua": False, "capas_ocultas": [8],
+                                          "activacion": cfg["gail"]["discriminador"]["activacion"]}
+    for clave in ("cantidad", "repeticion", "ids_partidas", "pares_expertos", "semillas",
+                  "huella_dataset", "pasos", "segundos", "normalizacion"):
+        assert metadatos["resumen"][clave] == resumen[clave]
+    assert len(metadatos["resumen"]["historial"]) == 2
+    assert metadatos["configuracion"]["gail"] == cfg["gail"]
+    assert set(metadatos["codigo"]) == {"commit", "cambios_sin_commit"}
+    assert "torch" in metadatos["entorno_ejecucion"]
+
+
+def test_procedencia_de_los_datos(tmp_path, monkeypatch):
+    from src.data.demostraciones import huella_partidas
+    from src.data.splits import huella_archivo
+    from src.training.gail import procedencia_datos
+    trayectorias, _, ruta_npz, ruta_splits = _datos_en_disco(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    datos = procedencia_datos(ruta_npz, ruta_splits, trayectorias)
+    assert datos == {"demostraciones": "datos/demostraciones.npz", "splits": "datos/splits.json",
+                     "huella_dataset": huella_archivo(ruta_npz),
+                     "huella_splits": huella_archivo(ruta_splits),
+                     "huella_partidas": huella_partidas(trayectorias)}
+    # Fuera de la carpeta de trabajo solo se guarda el nombre: nunca una ruta absoluta.
+    monkeypatch.chdir(tmp_path / "datos")
+    fuera = procedencia_datos(ruta_npz, ruta_splits, trayectorias)
+    assert (fuera["demostraciones"], fuera["splits"]) == ("demostraciones.npz", "splits.json")
+    monkeypatch.chdir(RAIZ)
+    lejos = procedencia_datos(ruta_npz, ruta_splits, trayectorias)
+    assert not any(Path(lejos[c]).is_absolute() for c in ("demostraciones", "splits"))
+    with pytest.raises(FileNotFoundError):
+        procedencia_datos(tmp_path / "no_existe.npz", ruta_splits, trayectorias)
+    with pytest.raises(ValueError, match="Trayectoria"):
+        procedencia_datos(ruta_npz, ruta_splits, "partidas")
+
+
+def test_gail_json_es_estricto_y_guarda_nan_como_null(tmp_path):
+    from src.training.gail import guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path)
+    resumen = copy.deepcopy(resumen)
+    resumen["historial"][0].update(retorno_real_medio=float("nan"),
+                                   longitud_media=np.float32("inf"), partidas=np.int64(0))
+    guardar_gail(tmp_path / "gail", agente, discriminador, cfg, resumen, datos)
+    guardado = _json_estricto(tmp_path / "gail" / "gail.json")["resumen"]["historial"][0]
+    assert guardado["retorno_real_medio"] is None and guardado["longitud_media"] is None
+    assert guardado["partidas"] == 0 and isinstance(guardado["partidas"], int)
+
+
+def test_guardar_gail_admite_carpeta_vacia_y_no_sobrescribe(tmp_path):
+    from src.training.gail import guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path)
+    vacia = tmp_path / "vacia"
+    vacia.mkdir()
+    guardar_gail(vacia, agente, discriminador, cfg, resumen, datos)
+    contenido = {p.name: p.read_bytes() for p in vacia.iterdir()}
+    with pytest.raises(FileExistsError):
+        guardar_gail(vacia, agente, discriminador, cfg, resumen, datos)
+    assert {p.name: p.read_bytes() for p in vacia.iterdir()} == contenido
+    archivo = tmp_path / "archivo"
+    archivo.write_text("x")
+    with pytest.raises(FileExistsError):
+        guardar_gail(archivo, agente, discriminador, cfg, resumen, datos)
+    # Una carpeta con cualquier otro archivo tampoco: no se mezclan resultados.
+    ocupada = tmp_path / "ocupada"
+    ocupada.mkdir()
+    (ocupada / "notas.txt").write_text("x")
+    with pytest.raises(FileExistsError):
+        guardar_gail(ocupada, agente, discriminador, cfg, resumen, datos)
+    assert [p.name for p in ocupada.iterdir()] == ["notas.txt"]
+
+
+@pytest.mark.parametrize("caso,error,mensaje", [
+    ("agente", ValueError, "TRPO"),
+    ("discriminador", ValueError, "Discriminador"),
+    ("datos_incompletos", ValueError, "procedencia_datos"),
+    ("otros_datos", ValueError, "huella del NPZ"),
+    ("otra_arquitectura", ValueError, "no corresponde a gail.discriminador"),
+    ("sin_config_discriminador", ValueError, "no corresponde a gail.discriminador"),
+    ("valor_no_json", TypeError, "no se puede guardar"),
+])
+def test_guardar_gail_lo_comprueba_todo_antes_de_crear_la_carpeta(tmp_path, caso, error,
+                                                                  mensaje):
+    from src.training.gail import guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path)
+    argumentos = {"agente": agente, "discriminador": discriminador, "cfg": cfg,
+                  "resumen": resumen, "datos": datos}
+    otra_cfg = copy.deepcopy(cfg)
+    otra_cfg["gail"]["discriminador"]["capas_ocultas"] = [16]
+    sin_d = copy.deepcopy(cfg)
+    del sin_d["gail"]["discriminador"]
+    argumentos.update({
+        "agente": {"agente": discriminador},
+        "discriminador": {"discriminador": agente.policy},
+        "datos_incompletos": {"datos": {"huella_dataset": datos["huella_dataset"]}},
+        "otros_datos": {"datos": {**datos, "huella_dataset": "b" * 64}},
+        "otra_arquitectura": {"cfg": otra_cfg},
+        "sin_config_discriminador": {"cfg": sin_d},
+        "valor_no_json": {"resumen": {**resumen, "raro": object()}},
+    }[caso])
+    destino = tmp_path / "gail"
+    with pytest.raises(error, match=mensaje):
+        guardar_gail(destino, **argumentos)
+    assert not destino.exists()
+
+
+@pytest.mark.parametrize("falta", ["modelo.zip", "discriminador.pt", "gail.json"])
+def test_cargar_gail_exige_los_tres_archivos(tmp_path, falta):
+    from src.training.gail import cargar_gail, guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path)
+    guardar_gail(tmp_path / "gail", agente, discriminador, cfg, resumen, datos)
+    (tmp_path / "gail" / falta).unlink()
+    with pytest.raises(FileNotFoundError, match=falta):
+        cargar_gail(tmp_path / "gail")
+
+
+def test_cargar_gail_rechaza_un_discriminador_que_no_corresponde(tmp_path):
+    from src.training.gail import cargar_gail, guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path)
+    guardar_gail(tmp_path / "gail", agente, discriminador, cfg, resumen, datos)
+    otro = Discriminador(4, 2, False, [16], "tanh")
+    torch.save(otro.state_dict(), tmp_path / "gail" / "discriminador.pt")
+    with pytest.raises(ValueError, match="no corresponde a gail.json"):
+        cargar_gail(tmp_path / "gail")
+
+
+def test_cargar_gail_solo_acepta_tensores(tmp_path):
+    """weights_only=True: un archivo con objetos de Python no se ejecuta al cargar."""
+    import pickle
+
+    from src.training.gail import cargar_gail, guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path)
+    guardar_gail(tmp_path / "gail", agente, discriminador, cfg, resumen, datos)
+    torch.save({"objeto": _RunFalso()}, tmp_path / "gail" / "discriminador.pt")
+    with pytest.raises(pickle.UnpicklingError):
+        cargar_gail(tmp_path / "gail")
+
+
+def test_guardar_gail_con_normalizacion_conserva_sus_estadisticas(tmp_path):
+    from src.training.gail import cargar_gail, guardar_gail
+    from src.training.trpo import politica_trpo
+    cfg = _cfg_gail(iteraciones=2)
+    cfg["trpo"]["normalizar_observaciones"] = True
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path, cfg)
+    guardar_gail(tmp_path / "gail", agente, discriminador, cfg, resumen, datos)
+    cargado, _, metadatos = cargar_gail(tmp_path / "gail")
+    estadisticas = metadatos["resumen"]["normalizacion"]
+    assert estadisticas == resumen["normalizacion"] and estadisticas is not None
+    # Con las estadísticas guardadas, el modelo cargado juega igual que el original.
+    original = politica_trpo(agente, True, resumen["normalizacion"])
+    recuperada = politica_trpo(cargado, True, estadisticas)
+    for observacion in crear_generador(4).normal(scale=0.1, size=(10, 4)).astype(np.float32):
+        assert np.array_equal(original(observacion), recuperada(observacion))
+
+
+# --- scripts/entrenar_gail.py -------------------------------------------------------
+# Datos reales de CartPole grabados con una política fija (generar_dataset) y la
+# config reducida: el script se prueba de punta a punta sin experto.
+
+def _script_gail():
+    """Carga el script como módulo (scripts/ no es un paquete)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("entrenar_gail",
+                                                  RAIZ / "scripts" / "entrenar_gail.py")
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    return modulo
+
+
+def _cfg_script() -> dict:
+    cfg = _cfg_gail(iteraciones=2)
+    cfg["demostraciones"].update(partidas_train=4, partidas_validacion=2, subconjuntos=[1, 4])
+    cfg["experimento"]["repeticiones"] = 2
+    cfg["wandb"]["modo"] = "disabled"
+    return cfg
+
+
+@pytest.fixture(scope="module")
+def datos_grabados(tmp_path_factory):
+    from src.data.demostraciones import generar_dataset
+    carpeta = tmp_path_factory.mktemp("datos") / "cartpole"
+    generar_dataset(_cfg_script(), lambda observacion: np.int64(observacion[2] > 0), carpeta,
+                    {"entorno": "CartPole-v1", "experto": "política fija de prueba",
+                     "procedencia": "tests", "configuracion_experto": {}})
+    return carpeta
+
+
+def _preparar_script(monkeypatch, argumentos: list[str], cfg: dict | None = None):
+    script = _script_gail()
+    resueltas = []
+
+    def resolver(base, entorno, ajustes=None):
+        resueltas.append((base, entorno, ajustes))
+        return copy.deepcopy(cfg or _cfg_script())
+
+    monkeypatch.setattr(script, "resolver_configuracion", resolver)
+    monkeypatch.setattr("sys.argv", ["entrenar_gail.py", *argumentos])
+    return script, resueltas
+
+
+def test_el_script_entrena_y_guarda_cada_cantidad_y_repeticion(datos_grabados, tmp_path,
+                                                               monkeypatch, capsys):
+    from src.training.gail import cargar_gail
+    salida = tmp_path / "gail"
+    script, resueltas = _preparar_script(monkeypatch, [
+        "--datos", str(datos_grabados), "--cantidades", "1", "4", "--repeticiones", "1",
+        "--salida", str(salida), "--sin-wandb"])
+    assert script.main() == 0
+    assert resueltas[0][1:] == ("cartpole", {"wandb": {"modo": "disabled"}})
+    for cantidad in (1, 4):
+        _, _, metadatos = cargar_gail(salida / f"cantidad_{cantidad}" / "repeticion_1")
+        assert (metadatos["resumen"]["cantidad"], metadatos["resumen"]["repeticion"]) == \
+            (cantidad, 1)
+        assert metadatos["datos"]["huella_dataset"] == metadatos["resumen"]["huella_dataset"]
+    assert sorted(p.name for p in salida.iterdir()) == ["cantidad_1", "cantidad_4"]
+    salida_texto = capsys.readouterr().out
+    assert "cantidad 1, repetición 1: retorno de validación" in salida_texto
+    assert "2 entrenamientos guardados" in salida_texto
+
+
+def _resumen_falso(*_):
+    return "agente", "d", {"validaciones": [{"retorno_medio": 1.0, "iteracion": 2}],
+                           "pasos": 1, "segundos": 1.0}
+
+
+def test_el_script_entrena_por_defecto_todo_el_barrido(datos_grabados, tmp_path, monkeypatch):
+    llamadas = []
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados),
+                                               "--salida", str(tmp_path / "gail")])
+    monkeypatch.setattr(script, "entrenar_gail", lambda cfg, t, s, c, r, run:
+                        llamadas.append((c, r, run)) or _resumen_falso())
+    guardados = []
+    monkeypatch.setattr(script, "guardar_gail", lambda destino, *a: guardados.append(destino))
+    assert script.main() == 0
+    # demostraciones.subconjuntos × experimento.repeticiones, sin W&B (modo disabled).
+    assert llamadas == [(1, 0, None), (1, 1, None), (4, 0, None), (4, 1, None)]
+    assert guardados == [tmp_path / "gail" / f"cantidad_{c}" / f"repeticion_{r}"
+                         for c in (1, 4) for r in (0, 1)]
+
+
+def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monkeypatch):
+    cfg = _cfg_script()
+    cfg["wandb"]["modo"] = "offline"
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--cantidades",
+                                               "4", "--salida", str(tmp_path / "g")], cfg)
+    abiertos, recibidos = [], []
+
+    class _Run(_RunFalso):
+        def finish(self) -> None:
+            self.terminado = True
+
+    def abrir(cfg_run):
+        abiertos.append((cfg_run["experimento"]["nombre"], _Run()))
+        return abiertos[-1][1]
+
+    monkeypatch.setattr(script, "abrir_run", abrir)
+    monkeypatch.setattr(script, "entrenar_gail", lambda cfg, t, s, c, r, run:
+                        recibidos.append((cfg, run)) or _resumen_falso())
+    monkeypatch.setattr(script, "guardar_gail", lambda *a: None)
+    assert script.main() == 0
+    assert [nombre for nombre, _ in abiertos] == [f"{cfg['experimento']['nombre']}-gail-"
+                                                 f"cartpole-c4-r{r}" for r in (0, 1)]
+    assert [run for _, run in recibidos] == [run for _, run in abiertos]
+    assert all(run.terminado for _, run in abiertos)
+    # El nombre del run no cambia la configuración con la que se entrena y se guarda.
+    assert all(c["experimento"]["nombre"] == cfg["experimento"]["nombre"] for c, _ in recibidos)
+
+
+@pytest.mark.parametrize("caso,mensaje", [
+    ("salida_ocupada", "elige otra --salida"),
+    ("sin_datos", "error con los datos"),
+    ("splits_de_otros_datos", "error con los datos"),
+    ("cantidad", "cantidades no válidas"),
+    ("cantidad_repetida", "cantidades no válidas"),
+    ("repeticion", "repeticiones no válidas"),
+    ("repeticion_negativa", "repeticiones no válidas"),
+    ("repeticion_repetida", "repeticiones no válidas"),
+])
+def test_el_script_no_entrena_si_algo_no_es_valido(caso, mensaje, datos_grabados, tmp_path,
+                                                   monkeypatch, capsys):
+    import shutil
+    datos, salida = datos_grabados, tmp_path / "gail"
+    extra = []
+    if caso == "salida_ocupada":
+        salida.mkdir()
+        (salida / "notas.txt").write_text("x")
+    elif caso == "sin_datos":
+        datos = tmp_path / "no_existe"
+    elif caso == "splits_de_otros_datos":
+        datos = tmp_path / "copia"
+        shutil.copytree(datos_grabados, datos)
+        with (datos / "demostraciones.npz").open("ab") as archivo:
+            archivo.write(b"\0")
+    else:
+        extra = {"cantidad": ["--cantidades", "2"],
+                 "cantidad_repetida": ["--cantidades", "4", "4"],
+                 "repeticion": ["--repeticiones", "2"],
+                 "repeticion_negativa": ["--repeticiones", "-1"],
+                 "repeticion_repetida": ["--repeticiones", "0", "0"]}[caso]
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos), "--salida", str(salida),
+                                               *extra])
+    entrenados = []
+    monkeypatch.setattr(script, "entrenar_gail", lambda *a: entrenados.append(1))
+    assert script.main() == 2
+    assert not entrenados
+    assert mensaje in capsys.readouterr().err
+
+
+def test_el_script_informa_de_una_configuracion_no_valida(monkeypatch, tmp_path, capsys):
+    script = _script_gail()
+    monkeypatch.setattr("sys.argv", ["entrenar_gail.py", "--datos", str(tmp_path),
+                                     "--config", str(tmp_path / "no_existe.yaml")])
+    assert script.main() == 2
+    assert "error de configuración" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("codigo,aviso", [
+    ({"commit": "a" * 40, "cambios_sin_commit": False}, None),
+    ({"commit": "a" * 40, "cambios_sin_commit": True}, "cambios sin commit"),
+    ({"commit": None, "cambios_sin_commit": None}, "no se pudo leer el commit"),
+])
+def test_el_script_avisa_del_estado_de_git(codigo, aviso, datos_grabados, tmp_path,
+                                           monkeypatch, capsys):
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--cantidades",
+                                               "1", "--repeticiones", "0", "--salida",
+                                               str(tmp_path / "g")])
+    monkeypatch.setattr(script, "entrenar_gail", _resumen_falso)
+    monkeypatch.setattr(script, "guardar_gail", lambda *a: None)
+    monkeypatch.setattr(script, "estado_git", lambda: codigo)
+    assert script.main() == 0
+    error = capsys.readouterr().err
+    assert (aviso in error) if aviso else "aviso" not in error

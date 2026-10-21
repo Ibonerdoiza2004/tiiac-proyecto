@@ -67,6 +67,12 @@ aquí irán su ubicación y sus huellas.
 # Medido: 53 s en CPU para CartPole. --sin-wandb si no hay cuenta de W&B.
 python scripts/entrenar_experto.py --entorno cartpole
 
+# GAIL (no se versiona): un entrenamiento por tamaño de subconjunto y repetición,
+# guardados en checkpoints/gail/<entorno>/<fecha>. --cantidades y --repeticiones
+# eligen una parte del barrido para repartirlo en varias sesiones.
+# Medido: unos 6 s por iteración en CPU para CartPole; presupuesto pendiente.
+python scripts/entrenar_gail.py --entorno cartpole --datos data/demostraciones/cartpole/<fecha>
+
 # Smoke test: el pipeline entero en miniatura. Menos de 5 minutos en CPU.
 python run.py --smoke --entorno cartpole
 
