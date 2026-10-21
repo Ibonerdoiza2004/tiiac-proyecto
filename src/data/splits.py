@@ -192,7 +192,8 @@ def validar_splits(splits: SplitsDemostraciones, ids_disponibles: Iterable[int])
         raise ValueError("Se esperaba un objeto SplitsDemostraciones")
     _comprobar_huella(splits.huella_dataset)
     disponibles = list(ids_disponibles)
-    if not all(es_id_episodio(i) for i in disponibles) or len(set(disponibles)) != len(disponibles):
+    if (not all(es_id_episodio(i) for i in disponibles)
+            or len(set(disponibles)) != len(disponibles)):
         raise ValueError("Los IDs disponibles deben ser enteros del rango de int64 sin repetir")
     for nombre, ids in (("train", splits.train), ("validacion", splits.validacion)):
         if not isinstance(ids, tuple) or not ids or not all(es_id_episodio(i) for i in ids):

@@ -7,6 +7,10 @@ experimento:
   # Repeticiones de BC y GAIL por cada subconjunto, con semillas de modelo
   # distintas (codigo original: runs 7 en los entornos clasicos, 1 en MuJoCo).
   repeticiones: 7
+  # Semilla base de las repeticiones. La repeticion r saca de ella sus semillas
+  # (modelo, pares, entornos y evaluacion) con semillas_repeticion; BC y GAIL
+  # comparten las de cada repeticion.
+  semilla_repeticiones: 3000
 
 datos:
   raiz: data/
@@ -37,6 +41,9 @@ demostraciones:
   # El original graba con el experto estocastico (deterministic_expert: false
   # en im_classic_pipeline.yaml) y guarda todas las partidas, sin filtrarlas.
   determinista: false
+  # BC y GAIL toman un par (estado, accion) de cada N pasos de cada partida,
+  # como el original (data_subsamp_freq). Depende del entorno: va en el perfil.
+  frecuencia_pares: null
 
 bc:
   # Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh.
@@ -49,9 +56,6 @@ bc:
   # Componentes con desviacion <= epsilon solo se centran.
   normalizar_observaciones: true
   epsilon_normalizacion: 1.0e-6
-  # Un par (estado, accion) de cada N pasos. Depende del entorno y se define
-  # en configs/entornos/.
-  frecuencia_pares: null
   # Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original).
   # Las epocas maximas y la paciencia son eleccion propia: el original entrena
   # un numero fijo de iteraciones y se queda con el mejor snapshot.
@@ -105,6 +109,13 @@ gail:
   # Iteraciones de GAIL (paper, tabla 2: 300 en los entornos clasicos; el codigo
   # original usa max_iter 301). Puede bajar al medir la regla 5/20.
   iteraciones: 300
+  # Retorno real de validacion durante el entrenamiento: solo se registra, no
+  # elige el modelo (se entrega el ultimo, como el paper). Determinista, como
+  # evalua el original las politicas aprendidas. Eleccion propia: cada 10
+  # iteraciones con 10 partidas (la evaluacion final usa 50).
+  evaluar_cada: 10
+  episodios_evaluacion: 10
+  evaluacion_determinista: true
   discriminador:
     # Misma arquitectura que la politica (paper, seccion 6).
     capas_ocultas: [100, 100]

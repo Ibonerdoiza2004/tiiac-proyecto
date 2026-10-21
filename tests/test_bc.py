@@ -38,15 +38,18 @@ DISCRETO = spaces.Discrete(2)
 CONTINUO = spaces.Box(-10.0, 10.0, shape=(2,), dtype=np.float32)
 CFG = {"bc": {
     "capas_ocultas": [100, 100], "activacion": "tanh", "log_std_inicial": 0.0,
-    "frecuencia_pares": 1, "batch_size": 8, "optimizador": "adam",
+    "batch_size": 8, "optimizador": "adam",
     "learning_rate": 0.01, "epocas_maximas": 50, "paciencia": 5,
     "normalizar_observaciones": True, "epsilon_normalizacion": 1e-6,
-}}
+}, "demostraciones": {"frecuencia_pares": 1}}
 TIPOS = pytest.mark.parametrize("continua", [False, True], ids=["discreta", "continua"])
 
 
 def _cfg(**cambios) -> dict:
+    """CFG con cambios en bc; frecuencia_pares va a demostraciones, donde vive."""
     cfg = copy.deepcopy(CFG)
+    if "frecuencia_pares" in cambios:
+        cfg["demostraciones"]["frecuencia_pares"] = cambios.pop("frecuencia_pares")
     cfg["bc"].update(cambios)
     return cfg
 
@@ -614,11 +617,14 @@ def test_loaders_rechazan_splits_de_otras_partidas():
 
 
 @pytest.mark.parametrize("cfg", [
-    {}, None, {"bc": {"batch_size": 8}}, {"bc": {"frecuencia_pares": 1}},
+    {}, None, {"bc": {"batch_size": 8}}, {"demostraciones": {"frecuencia_pares": 1}},
+    {"bc": {"batch_size": 8}, "demostraciones": {}},
+    # Regresión: la frecuencia ya no se lee de bc, donde estaba antes.
+    {"bc": {"batch_size": 8, "frecuencia_pares": 1}},
 ])
 def test_loaders_rechazan_configuracion_incompleta(cfg):
     trayectorias = _quince()
-    with pytest.raises(ValueError, match="bc.frecuencia_pares"):
+    with pytest.raises(ValueError, match="demostraciones.frecuencia_pares y bc.batch_size"):
         construir_loaders_bc(trayectorias, _splits(trayectorias), 4, DISCRETO, cfg,
                              crear_generador(0))
 
@@ -955,7 +961,8 @@ def test_con_normalizacion_el_entrenamiento_no_depende_de_la_escala_de_los_estad
         fijar_seed(3)
         politica = _politica(continua)
         resultado = entrenar_bc(
-            politica, _loader(transformar(estados), acciones, espacio, batch_size=16, barajar=True),
+            politica,
+            _loader(transformar(estados), acciones, espacio, batch_size=16, barajar=True),
             _loader(transformar(estados_val), acciones_val, espacio),
             _cfg(epocas_maximas=5, paciencia=5))
         return politica, resultado
@@ -989,7 +996,8 @@ def test_entrenar_bc_falla_si_la_perdida_no_es_finita():
     (False, "invalid values"),    # lo detecta torch.distributions
 ])
 def test_entrenar_bc_rechaza_estados_nan(normalizar, mensaje):
-    nan = DataLoader(TensorDataset(torch.full((4, 4), math.nan), torch.zeros(4, dtype=torch.int64)))
+    nan = DataLoader(TensorDataset(torch.full((4, 4), math.nan),
+                                   torch.zeros(4, dtype=torch.int64)))
     with pytest.raises(ValueError, match=mensaje):
         entrenar_bc(_politica(False), nan, nan, _cfg(normalizar_observaciones=normalizar))
 
@@ -1075,7 +1083,8 @@ def test_entrenar_bc_subconjunto_normaliza_con_las_partidas_del_subconjunto():
     politica, _ = entrenar_bc_subconjunto(trayectorias, splits, 4, OBSERVACION, DISCRETO,
                                           _cfg(epocas_maximas=1), crear_generador(0))
     por_id = {t.id_episodio: t for t in trayectorias}
-    estados = np.concatenate([por_id[i].estados for i in splits.subconjuntos[4]]).astype(np.float64)
+    estados = np.concatenate(
+        [por_id[i].estados for i in splits.subconjuntos[4]]).astype(np.float64)
     assert np.allclose(politica.media.numpy(), estados.mean(axis=0), rtol=1e-6)
     assert np.allclose(politica.escala.numpy(), estados.std(axis=0), rtol=1e-6)
 

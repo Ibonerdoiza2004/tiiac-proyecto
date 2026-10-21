@@ -223,7 +223,8 @@ def construir_loaders_bc(
             Tiene que haber un subconjunto de ese tamaño: splits.subconjuntos
             asocia cada tamaño con los IDs de sus partidas.
         espacio_accion: Espacio de acción del entorno.
-        cfg: Configuración resuelta con bc.frecuencia_pares y bc.batch_size.
+        cfg: Configuración resuelta con demostraciones.frecuencia_pares (común a BC
+            y GAIL) y bc.batch_size.
         generador: Generador de src.utils.seed.crear_generador.
 
     Raises:
@@ -231,8 +232,11 @@ def construir_loaders_bc(
             subconjunto, configuración incompleta o datos no válidos.
     """
     bcfg = cfg.get("bc") if isinstance(cfg, dict) else None
-    if not isinstance(bcfg, dict) or not {"frecuencia_pares", "batch_size"} <= bcfg.keys():
-        raise ValueError("La configuración necesita bc.frecuencia_pares y bc.batch_size")
+    dcfg = cfg.get("demostraciones") if isinstance(cfg, dict) else None
+    if (not isinstance(bcfg, dict) or "batch_size" not in bcfg
+            or not isinstance(dcfg, dict) or "frecuencia_pares" not in dcfg):
+        raise ValueError("La configuración necesita demostraciones.frecuencia_pares y "
+                         "bc.batch_size")
     batch_size = bcfg["batch_size"]
     if (isinstance(batch_size, (bool, np.bool_)) or not isinstance(batch_size, (int, np.integer))
             or batch_size < 1):
@@ -247,7 +251,7 @@ def construir_loaders_bc(
                          f"disponibles: {sorted(splits.subconjuntos)}")
 
     por_id = {int(t.id_episodio): t for t in trayectorias}
-    frecuencia = bcfg["frecuencia_pares"]
+    frecuencia = dcfg["frecuencia_pares"]
     validacion = submuestrear_pares([por_id[i] for i in splits.validacion], frecuencia, generador)
     train = submuestrear_pares([por_id[i] for i in splits.subconjuntos[cantidad]],
                                frecuencia, generador)

@@ -6,10 +6,9 @@ demostraciones:
   partidas_train: 10  # Igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia; el paper separa 70/30 los pares.
   subconjuntos: [1, 4, 7, 10]  # Paper, figura 1; código original (dataset_num_trajs).
+  frecuencia_pares: 10  # Código original de GAIL para CartPole (data_subsamp_freq).
 entorno:
   id: CartPole-v1  # Gymnasium; v1 permite hasta 500 pasos por episodio.
-bc:
-  frecuencia_pares: 10  # Código original de GAIL para CartPole.
 # La sección trpo la usan el experto y GAIL. El paper da gamma, gae_lambda y
 # los pares por iteración para GAIL; aplicarlos también al experto es elección propia.
 trpo:
@@ -30,6 +29,9 @@ experto:
   retorno_objetivo: 500
 gail:
   iteraciones: 300  # Paper, tabla 2 (el código original usa max_iter 301).
+  evaluar_cada: 10  # Elección propia: 30 mediciones en 300 iteraciones.
+  episodios_evaluacion: 10  # Elección propia; la evaluación final usa 50.
+  evaluacion_determinista: true  # Como evalúa el original las políticas aprendidas.
   # Código original de GAIL: −log(1 − D), porque las partidas terminan al fallar
   # (cuts_off_on_success: false en im_classic_pipeline.yaml).
   recompensa: menos_log_uno_menos_d
