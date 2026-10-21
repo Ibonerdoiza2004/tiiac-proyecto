@@ -9,7 +9,8 @@ Sigue el código original de GAIL (openai/imitation, TransitionClassifier):
   tantos pares expertos muestreados con reemplazo (muestrear_expertos y
   actualizar_discriminador).
 
-El bucle que alterna bloques de TRPO y actualizaciones vive en la rama gail.
+- Después de actualizarlo, reajustar_valor_tras_discriminador pone al día la red
+  de valor de TRPO con las recompensas del discriminador nuevo, como el original.
 """
 
 from __future__ import annotations
@@ -20,6 +21,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from gymnasium import spaces
+from sb3_contrib import TRPO
+from stable_baselines3.common.buffers import RolloutBuffer
+from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
@@ -343,6 +347,7 @@ class EntornoRecompensaGAIL(VecEnvWrapper):
         for info, original in zip(infos, recompensas_originales, strict=True):
             info["recompensa_original"] = float(original)
         self._estados_bloque.append(self._observaciones)
+        self._recompensas_bloque.append(np.array(recompensas, copy=True))
         self._acciones_bloque.append(self._acciones)
         self._ids_bloque.append(self._ids.copy())
         self._pasos_bloque.append(self._pasos.copy())
@@ -355,14 +360,21 @@ class EntornoRecompensaGAIL(VecEnvWrapper):
         return observaciones, recompensas, terminados, infos
 
     def iniciar_bloque(self) -> None:
-        """Descarta los pares acumulados para empezar un bloque nuevo."""
+        """Descarta los pares y las recompensas acumulados para empezar un bloque nuevo."""
         self._estados_bloque: list[np.ndarray] = []
+        self._recompensas_bloque: list[np.ndarray] = []
         self._acciones_bloque: list[np.ndarray] = []
         self._ids_bloque: list[np.ndarray] = []
         self._pasos_bloque: list[np.ndarray] = []
 
-    def extraer_lote(self) -> LoteTransiciones:
-        """Devuelve los pares acumulados desde iniciar_bloque y los descarta.
+    def extraer_bloque(self) -> tuple[LoteTransiciones, np.ndarray]:
+        """Devuelve los pares y las recompensas acumulados desde iniciar_bloque y los descarta.
+
+        Las recompensas son las que dio el discriminador en cada paso, con forma
+        [pasos, entornos]: la misma que el rollout_buffer de sb3, que las guarda
+        en el mismo orden. El par i del lote corresponde a la recompensa
+        [i // entornos, i % entornos]. reajustar_valor_tras_discriminador las
+        necesita para cambiarlas por las del discriminador actualizado.
 
         Raises:
             ValueError: Si no se ha dado ningún paso desde iniciar_bloque.
@@ -373,5 +385,155 @@ class EntornoRecompensaGAIL(VecEnvWrapper):
                                 np.concatenate(self._acciones_bloque),
                                 np.concatenate(self._ids_bloque),
                                 np.concatenate(self._pasos_bloque))
+        recompensas = np.stack(self._recompensas_bloque)
         self.iniciar_bloque()
-        return lote
+        return lote, recompensas
+
+    def extraer_lote(self) -> LoteTransiciones:
+        """Devuelve los pares acumulados desde iniciar_bloque y los descarta.
+
+        Igual que extraer_bloque, sin las recompensas.
+
+        Raises:
+            ValueError: Si no se ha dado ningún paso desde iniciar_bloque.
+        """
+        return self.extraer_bloque()[0]
+
+
+def _retornos_gae(recompensas: np.ndarray, valores: np.ndarray, inicios_episodio: np.ndarray,
+                  ultimos_valores: np.ndarray, ultimos_terminados: np.ndarray,
+                  gamma: float, lam: float) -> np.ndarray:
+    """Calcula los retornos TD(lambda) de un bloque con la fórmula de sb3.
+
+    Reproduce RolloutBuffer.compute_returns_and_advantage: ventajas GAE(lambda)
+    recorriendo el bloque hacia atrás y retornos = ventajas + valores. Los
+    arrays son [pasos, entornos], sin aplanar; ultimos_valores y
+    ultimos_terminados son del estado que sigue al último paso [entornos].
+    """
+    pasos = len(recompensas)
+    retornos = np.zeros(recompensas.shape, dtype=np.float32)
+    ventaja = np.zeros(recompensas.shape[1], dtype=np.float32)
+    for paso in reversed(range(pasos)):
+        if paso == pasos - 1:
+            no_terminal = 1.0 - ultimos_terminados.astype(np.float32)
+            siguientes = ultimos_valores
+        else:
+            no_terminal = 1.0 - inicios_episodio[paso + 1]
+            siguientes = valores[paso + 1]
+        delta = recompensas[paso] + gamma * siguientes * no_terminal - valores[paso]
+        ventaja = delta + gamma * lam * no_terminal * ventaja
+        retornos[paso] = ventaja + valores[paso]
+    return retornos
+
+
+def _recompensas_de_bloque(valor: object, nombre: str, forma: tuple[int, int]) -> np.ndarray:
+    """Comprueba que unas recompensas son reales, finitas y de la forma del bloque."""
+    array = np.asarray(valor)
+    if array.shape != forma or array.dtype.kind not in "iuf":
+        raise ValueError(f"{nombre} deben ser números reales {list(forma)} [pasos, entornos], "
+                         f"no {array.dtype} {array.shape}")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{nombre} deben ser finitas")
+    return array.astype(np.float32)
+
+
+def reajustar_valor_tras_discriminador(agente: TRPO, recompensas_anteriores: np.ndarray,
+                                       recompensas_nuevas: np.ndarray) -> dict[str, float]:
+    """Pone la red de valor al día con el discriminador recién actualizado.
+
+    El código original de GAIL, después de actualizar el discriminador, vuelve
+    a puntuar el lote con el discriminador nuevo y reajusta la red de valor con
+    esas recompensas, para que la siguiente iteración calcule las ventajas con
+    una red que corresponde al discriminador con el que se va a jugar. TRPO de
+    sb3 ajusta la red de valor dentro de learn(), antes de que se actualice el
+    discriminador, así que sin este paso iría siempre un discriminador por
+    detrás (decisión del 14 de octubre).
+
+    Se llama una vez por bloque, justo después de agente.learn() con un único
+    bloque de recogida y de actualizar el discriminador. Usa el rollout_buffer
+    que sb3 conserva hasta la siguiente recogida:
+
+    1. Suma a las recompensas del buffer la diferencia nuevas − anteriores. Así
+       se conserva el término gamma · V(estado final) que sb3 añade a las
+       partidas truncadas por límite de tiempo.
+    2. Recalcula los retornos con GAE, con gamma y gae_lambda del agente y los
+       valores de la red de valor actual.
+    3. Repite el ajuste de la red de valor de TRPO.train(): n_critic_updates
+       pasadas por minibatches de batch_size, error cuadrático y el optimizador
+       de la política, sin mover los parámetros de la política.
+
+    Diferencias con el original: los objetivos son retornos GAE(lambda), como
+    los que usa sb3 en cada bloque, y no retornos de Monte Carlo; y el ajuste
+    es el de sb3 (Adam por minibatches). Depende de atributos internos de sb3
+    (rollout_buffer, _last_obs, _last_episode_starts), válidos con las
+    versiones fijadas en requirements.txt. El orden de los minibatches sale del
+    generador global de NumPy, como en TRPO.train().
+
+    Args:
+        agente: TRPO con política MLP y observaciones de tipo array, tras learn().
+        recompensas_anteriores: Las que dio el discriminador durante el bloque,
+            [n_steps, n_envs] (EntornoRecompensaGAIL.extraer_bloque).
+        recompensas_nuevas: Las de los mismos pares con el discriminador
+            actualizado, con la misma forma.
+
+    Returns:
+        {"perdida_valor": media del error cuadrático de los minibatches}; nan
+        si n_critic_updates es 0.
+
+    Raises:
+        ValueError: Si el agente no es TRPO, su buffer no tiene un bloque recién
+            entrenado, ya se reajustó en este bloque o las recompensas no son
+            válidas.
+    """
+    if not isinstance(agente, TRPO):
+        raise ValueError(f"Se esperaba un agente TRPO de sb3-contrib, no {type(agente).__name__}")
+    buffer = agente.rollout_buffer
+    if type(buffer) is not RolloutBuffer:
+        raise ValueError("Solo se admite el RolloutBuffer de observaciones de tipo array")
+    if not buffer.full or not buffer.generator_ready or agente._last_obs is None:
+        raise ValueError("El buffer no tiene un bloque entrenado: llamar justo después de learn()")
+    # Aplicar dos veces la diferencia la sumaría dos veces al mismo bloque.
+    if getattr(agente, "_pasos_ultimo_reajuste", None) == agente.num_timesteps:
+        raise ValueError("Este bloque ya se reajustó: solo se puede reajustar una vez por bloque")
+    forma = (buffer.buffer_size, buffer.n_envs)
+    anteriores = _recompensas_de_bloque(recompensas_anteriores, "recompensas_anteriores", forma)
+    nuevas = _recompensas_de_bloque(recompensas_nuevas, "recompensas_nuevas", forma)
+
+    buffer.rewards += nuevas - anteriores
+    politica = agente.policy
+    with torch.no_grad():
+        valores_planos = politica.predict_values(
+            obs_as_tensor(buffer.observations, agente.device)).cpu().numpy()
+        ultimos_valores = politica.predict_values(
+            obs_as_tensor(agente._last_obs, agente.device)).cpu().numpy().flatten()
+    # El buffer guarda los datos aplanados entorno a entorno: índice = entorno · pasos + paso.
+    valores = valores_planos.reshape(buffer.n_envs, buffer.buffer_size).T
+    retornos = _retornos_gae(buffer.rewards, valores, buffer.episode_starts, ultimos_valores,
+                             np.asarray(agente._last_episode_starts), buffer.gamma,
+                             buffer.gae_lambda)
+    buffer.values = buffer.swap_and_flatten(valores.astype(np.float32))
+    buffer.returns = buffer.swap_and_flatten(retornos)
+    buffer.advantages = buffer.returns - buffer.values
+    agente._pasos_ultimo_reajuste = agente.num_timesteps
+
+    modo_previo = politica.training
+    politica.set_training_mode(True)
+    perdidas = []
+    try:
+        for _ in range(agente.n_critic_updates):
+            for datos in buffer.get(agente.batch_size):
+                prediccion = politica.predict_values(datos.observations)
+                perdida = F.mse_loss(datos.returns, prediccion.flatten())
+                politica.optimizer.zero_grad()
+                perdida.backward()
+                # Como TRPO.train(): el optimizador cubre toda la política, pero
+                # solo se mueven los parámetros de la red de valor.
+                for nombre, parametro in politica.named_parameters():
+                    if "value" not in nombre:
+                        parametro.grad = None
+                politica.optimizer.step()
+                perdidas.append(perdida.item())
+    finally:
+        politica.set_training_mode(modo_previo)
+    return {"perdida_valor": float(np.mean(perdidas)) if perdidas else float("nan")}
+

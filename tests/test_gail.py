@@ -831,3 +831,274 @@ def test_trpo_de_sb3_entrena_sobre_el_envoltorio_con_cartpole():
     # Con el discriminador inicial, cada paso recibe log 2; el retorno real lo da Monitor.
     assert np.allclose(agente.rollout_buffer.rewards[:-1], math.log(2))
     assert all(info["r"] == info["l"] for info in agente.ep_info_buffer)
+
+
+# --- recompensas del bloque y reajuste de la red de valor ----------------------------
+# Los agentes se entrenan en dos entornos deterministas: el primero termina sus
+# partidas cada 5 pasos y el segundo se trunca por tiempo cada 8. Con 16 pasos por
+# bloque hay partidas terminadas, truncadas (con el bootstrap de sb3) y cortadas.
+
+PASOS_BLOQUE = 16
+
+
+def _venv_reajuste(continuo: bool) -> DummyVecEnv:
+    espacio = _espacio_entorno(continuo)
+    return DummyVecEnv([
+        lambda: _EntornoContador(espacio, 5),
+        lambda: gym.wrappers.TimeLimit(_EntornoContador(espacio, 100), max_episode_steps=8),
+    ])
+
+
+def _agente_reajuste(continuo: bool, n_critic_updates: int = 3, semilla: int = 0) -> TRPO:
+    """TRPO pequeño entrenado un bloque."""
+    fijar_seed(semilla)
+    agente = TRPO("MlpPolicy", _venv_reajuste(continuo), n_steps=PASOS_BLOQUE, batch_size=8,
+                  n_critic_updates=n_critic_updates, device="cpu",
+                  policy_kwargs={"net_arch": {"pi": [8], "vf": [8]}})
+    agente.learn(PASOS_BLOQUE * 2)
+    return agente
+
+
+def _parametros(agente: TRPO, de_valor: bool) -> dict[str, torch.Tensor]:
+    return {nombre: p.detach().clone() for nombre, p in agente.policy.named_parameters()
+            if ("value" in nombre) == de_valor}
+
+
+def _recompensas_bloque(semilla: int) -> np.ndarray:
+    return crear_generador(semilla).normal(size=(PASOS_BLOQUE, 2)).astype(np.float32)
+
+
+@pytest.mark.parametrize("entornos", [1, 3])
+@pytest.mark.parametrize("gamma", [0.9, 0.995])
+@pytest.mark.parametrize("lam", [0.0, 0.97, 1.0])
+def test_retornos_gae_coinciden_con_sb3(entornos, gamma, lam):
+    from stable_baselines3.common.buffers import RolloutBuffer
+
+    from src.training.gail import _retornos_gae
+    pasos = 12
+    generador = crear_generador(entornos * 100 + int(lam * 10))
+    buffer = RolloutBuffer(pasos, spaces.Box(-1, 1, (2,)), spaces.Discrete(2), device="cpu",
+                           gae_lambda=lam, gamma=gamma, n_envs=entornos)
+    recompensas = generador.normal(size=(pasos, entornos)).astype(np.float32)
+    valores = generador.normal(size=(pasos, entornos)).astype(np.float32)
+    inicios = (generador.random((pasos, entornos)) < 0.3).astype(np.float32)
+    for paso in range(pasos):
+        buffer.add(np.zeros((entornos, 2), np.float32), np.zeros((entornos, 1)),
+                   recompensas[paso], inicios[paso], torch.tensor(valores[paso]),
+                   torch.zeros(entornos))
+    ultimos_valores = generador.normal(size=entornos).astype(np.float32)
+    ultimos_terminados = generador.random(entornos) < 0.5
+    buffer.compute_returns_and_advantage(torch.tensor(ultimos_valores), ultimos_terminados)
+    retornos = _retornos_gae(recompensas, valores, inicios, ultimos_valores, ultimos_terminados,
+                             gamma, lam)
+    assert retornos.dtype == np.float32
+    np.testing.assert_allclose(retornos, buffer.returns, rtol=1e-6, atol=1e-6)
+
+
+@TIPOS
+def test_reajuste_solo_mueve_la_red_de_valor(continuo):
+    from src.training.gail import reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(continuo)
+    actor, valor = _parametros(agente, False), _parametros(agente, True)
+    anteriores = _recompensas_bloque(1)
+    reajustar_valor_tras_discriminador(agente, anteriores, anteriores + 2.0)
+    assert all(torch.equal(p, _parametros(agente, False)[n]) for n, p in actor.items())
+    despues = _parametros(agente, True)
+    assert all(not torch.equal(p, despues[n]) for n, p in valor.items())
+    if continuo:
+        assert "log_std" in actor
+
+
+@TIPOS
+def test_reajuste_suma_la_diferencia_y_conserva_el_bootstrap(continuo):
+    from src.training.gail import reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(continuo)
+    antes = agente.rollout_buffer.rewards.copy()
+    # sb3 suma gamma · V(estado final) a la recompensa (2) del último paso de cada
+    # partida truncada: pasos 8 y 16 del segundo entorno, y solo esos.
+    truncados = np.zeros((PASOS_BLOQUE, 2), dtype=bool)
+    truncados[[7, 15], 1] = True
+    assert np.all(antes[truncados] != 2.0) and np.all(antes[~truncados] == 2.0)
+    anteriores, nuevas = _recompensas_bloque(1), _recompensas_bloque(2)
+    reajustar_valor_tras_discriminador(agente, anteriores, nuevas)
+    np.testing.assert_allclose(agente.rollout_buffer.rewards, antes + nuevas - anteriores,
+                               rtol=1e-6, atol=1e-6)
+
+
+@TIPOS
+def test_los_retornos_usan_la_red_de_valor_actual(continuo):
+    from src.training.gail import _retornos_gae, reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(continuo, n_critic_updates=5)
+    buffer = agente.rollout_buffer
+    with torch.no_grad():
+        planos = agente.policy.predict_values(torch.as_tensor(buffer.observations)).numpy()
+        ultimos = agente.policy.predict_values(torch.as_tensor(agente._last_obs)).numpy().ravel()
+    # learn ajustó la red de valor después de recoger: los valores guardados en el
+    # buffer son de antes y no sirven para los retornos nuevos.
+    assert not np.allclose(planos.ravel(), buffer.values.ravel())
+    valores = planos.reshape(2, PASOS_BLOQUE).T
+    anteriores, nuevas = _recompensas_bloque(1), _recompensas_bloque(2)
+    esperados = _retornos_gae(buffer.rewards + nuevas - anteriores, valores, buffer.episode_starts,
+                              ultimos, agente._last_episode_starts, agente.gamma,
+                              agente.gae_lambda)
+    reajustar_valor_tras_discriminador(agente, anteriores, nuevas)
+    np.testing.assert_allclose(buffer.returns.ravel(),
+                               buffer.swap_and_flatten(esperados).ravel(), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(buffer.values.ravel(), planos.ravel(), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(buffer.advantages, buffer.returns - buffer.values)
+
+
+@TIPOS
+def test_reajuste_acerca_la_red_de_valor_a_los_retornos_nuevos(continuo):
+    from src.training.gail import reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(continuo, n_critic_updates=10)
+    observaciones = torch.as_tensor(agente.rollout_buffer.observations)
+    anteriores = _recompensas_bloque(1)
+    resultado = reajustar_valor_tras_discriminador(agente, anteriores, anteriores + 3.0)
+    retornos = torch.as_tensor(agente.rollout_buffer.returns.ravel())
+    with torch.no_grad():
+        error = float(((agente.policy.predict_values(observaciones).ravel() - retornos) ** 2)
+                      .mean())
+    # Tras 10 pasadas el error es menor que la media de las pérdidas de las pasadas.
+    assert np.isfinite(resultado["perdida_valor"]) and error < resultado["perdida_valor"]
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")  # media vacía en los registros de sb3
+def test_sin_pasadas_del_critico_la_perdida_es_nan():
+    from src.training.gail import reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(False, n_critic_updates=0)
+    valor = _parametros(agente, True)
+    resultado = reajustar_valor_tras_discriminador(agente, _recompensas_bloque(1),
+                                                   _recompensas_bloque(2))
+    assert math.isnan(resultado["perdida_valor"])
+    assert all(torch.equal(p, _parametros(agente, True)[n]) for n, p in valor.items())
+
+
+@TIPOS
+def test_reajuste_es_reproducible(continuo):
+    from src.training.gail import reajustar_valor_tras_discriminador
+    resultados = []
+    for _ in range(2):
+        agente = _agente_reajuste(continuo, semilla=3)
+        reajustar_valor_tras_discriminador(agente, _recompensas_bloque(1), _recompensas_bloque(2))
+        resultados.append(_parametros(agente, True))
+    assert all(torch.equal(p, resultados[1][n]) for n, p in resultados[0].items())
+
+
+@pytest.mark.parametrize("modo", [False, True])
+def test_reajuste_restaura_el_modo_de_la_politica(modo):
+    from src.training.gail import reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(False)
+    agente.policy.set_training_mode(modo)
+    reajustar_valor_tras_discriminador(agente, _recompensas_bloque(1), _recompensas_bloque(2))
+    assert agente.policy.training is modo
+
+
+@pytest.mark.parametrize("cambio,mensaje", [
+    ("forma", r"\[16, 2\]"), ("traspuesta", r"\[16, 2\]"), ("bool", "reales"),
+    ("compleja", "reales"), ("nan", "finitas"), ("inf", "finitas"),
+])
+@pytest.mark.parametrize("cual", ["anteriores", "nuevas"])
+def test_reajuste_rechaza_recompensas_no_validas(cambio, mensaje, cual):
+    from src.training.gail import reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(False)
+    buenas = _recompensas_bloque(1)
+    marcada = np.arange(buenas.size).reshape(buenas.shape) == 3
+    malas = {"forma": buenas[:-1], "traspuesta": buenas.T, "bool": buenas > 0,
+             "compleja": buenas.astype(np.complex64),
+             "nan": np.where(marcada, np.nan, buenas),
+             "inf": np.where(marcada, np.inf, buenas)}[cambio]
+    antes = agente.rollout_buffer.rewards.copy()
+    argumentos = (malas, buenas) if cual == "anteriores" else (buenas, malas)
+    with pytest.raises(ValueError, match=f"recompensas_{cual}.*{mensaje}"):
+        reajustar_valor_tras_discriminador(agente, *argumentos)
+    np.testing.assert_array_equal(agente.rollout_buffer.rewards, antes)
+
+
+def test_reajuste_exige_un_bloque_recien_entrenado():
+    from src.training.gail import reajustar_valor_tras_discriminador
+    fijar_seed(0)
+    sin_entrenar = TRPO("MlpPolicy", _venv_reajuste(False), n_steps=PASOS_BLOQUE, batch_size=8,
+                        device="cpu")
+    ceros = np.zeros((PASOS_BLOQUE, 2))
+    with pytest.raises(ValueError, match="llamar justo después de learn"):
+        reajustar_valor_tras_discriminador(sin_entrenar, ceros, ceros)
+    # Recogido pero sin entrenar todavía (como en el callback on_rollout_end).
+    agente = _agente_reajuste(False)
+    agente.rollout_buffer.generator_ready = False
+    with pytest.raises(ValueError, match="llamar justo después de learn"):
+        reajustar_valor_tras_discriminador(agente, ceros, ceros)
+
+
+def test_reajuste_solo_una_vez_por_bloque():
+    from src.training.gail import reajustar_valor_tras_discriminador
+    agente = _agente_reajuste(False)
+    anteriores, nuevas = _recompensas_bloque(1), _recompensas_bloque(2)
+    reajustar_valor_tras_discriminador(agente, anteriores, nuevas)
+    recompensas = agente.rollout_buffer.rewards.copy()
+    with pytest.raises(ValueError, match="ya se reajustó"):
+        reajustar_valor_tras_discriminador(agente, anteriores, nuevas)
+    np.testing.assert_array_equal(agente.rollout_buffer.rewards, recompensas)
+    agente.learn(PASOS_BLOQUE * 2, reset_num_timesteps=False)
+    reajustar_valor_tras_discriminador(agente, anteriores, nuevas)  # bloque nuevo: se admite
+
+
+def test_reajuste_solo_admite_trpo():
+    from stable_baselines3 import PPO
+
+    from src.training.gail import reajustar_valor_tras_discriminador
+    fijar_seed(0)
+    ppo = PPO("MlpPolicy", _venv_reajuste(False), n_steps=PASOS_BLOQUE, batch_size=8,
+              device="cpu")
+    with pytest.raises(ValueError, match="TRPO"):
+        reajustar_valor_tras_discriminador(ppo, np.zeros((PASOS_BLOQUE, 2)),
+                                           np.zeros((PASOS_BLOQUE, 2)))
+
+
+@TIPOS
+def test_extraer_bloque_da_las_recompensas_de_cada_paso(continuo):
+    envuelto, _ = _envuelto(continuo)
+    envuelto.reset()
+    devueltas = []
+    for paso in range(5):
+        devueltas.append(envuelto.step(_acciones(continuo, paso))[1])
+    lote, recompensas = envuelto.extraer_bloque()
+    assert recompensas.shape == (5, 2) and recompensas.dtype == np.float32
+    np.testing.assert_array_equal(recompensas, np.stack(devueltas))
+    # El par i corresponde a la recompensa [i // entornos, i % entornos].
+    assert lote.numero_transiciones == recompensas.size
+    with pytest.raises(ValueError, match="No hay pares"):
+        envuelto.extraer_bloque()
+    envuelto.step(_acciones(continuo, 0))
+    envuelto.iniciar_bloque()
+    envuelto.step(_acciones(continuo, 1))
+    assert envuelto.extraer_bloque()[1].shape == (1, 2)
+
+
+def test_las_recompensas_del_bloque_coinciden_con_el_buffer_de_trpo():
+    """Integración: el orden de extraer_bloque es el del rollout_buffer de sb3, así que
+    puntuar el lote con el mismo discriminador no cambia las recompensas."""
+    from src.training.gail import calcular_recompensas_gail, reajustar_valor_tras_discriminador
+    cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
+    fijar_seed(0)
+    venv = crear_entorno_vectorizado(cfg, 2, 3)
+    discriminador = _con_pesos_aleatorios(
+        construir_discriminador(cfg, venv.observation_space, venv.action_space))
+    envuelto = EntornoRecompensaGAIL(venv, discriminador, cfg["gail"]["recompensa"])
+    agente = TRPO("MlpPolicy", envuelto, n_steps=32, batch_size=16, device="cpu")
+    try:
+        envuelto.iniciar_bloque()
+        agente.learn(64)
+        lote, anteriores = envuelto.extraer_bloque()
+        # 32 pasos de CartPole no llegan al límite de 500: sin bootstrap.
+        np.testing.assert_array_equal(agente.rollout_buffer.rewards, anteriores)
+        nuevas = calcular_recompensas_gail(discriminador, lote.estados, lote.acciones,
+                                           envuelto.action_space, cfg["gail"]["recompensa"])
+        nuevas = nuevas.reshape(anteriores.shape)
+        # Mismo orden; solo cambia el redondeo de float32 al puntuar lotes de otro tamaño.
+        np.testing.assert_allclose(nuevas, anteriores, rtol=1e-5, atol=1e-6)
+        reajustar_valor_tras_discriminador(agente, anteriores, nuevas)
+        np.testing.assert_allclose(agente.rollout_buffer.rewards, anteriores, rtol=1e-5,
+                                   atol=1e-6)
+    finally:
+        envuelto.close()
