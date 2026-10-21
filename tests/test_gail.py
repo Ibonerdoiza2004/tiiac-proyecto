@@ -21,7 +21,7 @@ import yaml
 from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from src.data.entornos import crear_entorno_vectorizado
 from src.data.tipos import LoteTransiciones
@@ -1102,3 +1102,544 @@ def test_las_recompensas_del_bloque_coinciden_con_el_buffer_de_trpo():
                                    atol=1e-6)
     finally:
         envuelto.close()
+
+
+# --- iteración de GAIL ------------------------------------------------------------
+# Mismos entornos deterministas que el reajuste: en cada bloque de 16 pasos hay
+# partidas terminadas, truncadas y cortadas. Los pasos internos se espían para
+# comprobar el orden y qué recibe cada uno.
+
+def _pares_expertos(continuo: bool, n: int = 40, semilla: int = 5) -> LoteTransiciones:
+    """Pares expertos inventados en el espacio de acción del entorno (Discrete con start 0)."""
+    lote = _lote(n, continuo, semilla, centro=2.0)
+    acciones = lote.acciones if continuo else lote.acciones + 1
+    return LoteTransiciones(lote.estados, acciones, lote.ids_episodio, lote.pasos)
+
+
+def _piezas_gail(continuo: bool, semilla: int = 0, normalizar: bool = False,
+                 norm_reward: bool = False):
+    """TRPO pequeño sobre el envoltorio, sin entrenar, y el optimizador del discriminador."""
+    fijar_seed(semilla)
+    discriminador = _con_pesos_aleatorios(_discriminador(continuo), semilla)
+    envuelto = EntornoRecompensaGAIL(_venv_reajuste(continuo), discriminador,
+                                     "menos_log_uno_menos_d")
+    capa = (VecNormalize(envuelto, norm_obs=True, norm_reward=norm_reward)
+            if normalizar or norm_reward else envuelto)
+    agente = TRPO("MlpPolicy", capa, n_steps=PASOS_BLOQUE, batch_size=8, n_critic_updates=3,
+                  device="cpu", policy_kwargs={"net_arch": {"pi": [8], "vf": [8]}})
+    return agente, envuelto, torch.optim.Adam(discriminador.parameters(), lr=0.01)
+
+
+def _estado(modulo: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {nombre: valor.detach().clone() for nombre, valor in modulo.state_dict().items()}
+
+
+def _iguales(a: dict[str, torch.Tensor], b: dict[str, torch.Tensor]) -> bool:
+    return a.keys() == b.keys() and all(torch.equal(a[n], b[n]) for n in a)
+
+
+def _espiar(monkeypatch, registro: dict) -> None:
+    """Sustituye los pasos de iteracion_gail por versiones que anotan lo que reciben."""
+    import src.training.gail as gail
+    originales = {nombre: getattr(gail, nombre) for nombre in (
+        "iteracion_trpo", "muestrear_expertos", "actualizar_discriminador",
+        "reajustar_valor_tras_discriminador")}
+    registro["orden"] = []
+
+    def trpo(agente):
+        discriminador = registro["discriminador"]
+        antes = _estado(discriminador)
+        resultado = originales["iteracion_trpo"](agente)
+        registro["fijo_en_el_bloque"] = _iguales(antes, _estado(discriminador))
+        registro["orden"].append("trpo")
+        return resultado
+
+    def muestrear(pares, cantidad, generador):
+        registro["orden"].append("muestrear")
+        registro["expertos"] = originales["muestrear_expertos"](pares, cantidad, generador)
+        return registro["expertos"]
+
+    def actualizar(discriminador, optimizador, lote_agente, lote_experto, espacio, cfg):
+        registro["orden"].append("discriminador")
+        registro.update(lote=lote_agente, experto_recibido=lote_experto,
+                        d_antes=copy.deepcopy(discriminador))
+        return originales["actualizar_discriminador"](discriminador, optimizador, lote_agente,
+                                                      lote_experto, espacio, cfg)
+
+    def reajustar(agente, anteriores, nuevas):
+        registro["orden"].append("reajuste")
+        registro.update(anteriores=anteriores, nuevas=nuevas,
+                        buffer_antes=agente.rollout_buffer.rewards.copy(),
+                        d_despues=copy.deepcopy(registro["discriminador"]))
+        return originales["reajustar_valor_tras_discriminador"](agente, anteriores, nuevas)
+
+    for nombre, espia in (("iteracion_trpo", trpo), ("muestrear_expertos", muestrear),
+                          ("actualizar_discriminador", actualizar),
+                          ("reajustar_valor_tras_discriminador", reajustar)):
+        monkeypatch.setattr(gail, nombre, espia)
+
+
+@TIPOS
+def test_iteracion_gail_encadena_los_pasos_en_orden(continuo, monkeypatch):
+    from src.training.gail import iteracion_gail
+    agente, envuelto, optimizador = _piezas_gail(continuo)
+    registro = {"discriminador": envuelto.discriminador}
+    _espiar(monkeypatch, registro)
+    iteracion_gail(agente, envuelto, optimizador, _pares_expertos(continuo),
+                   crear_generador(7), _cfg())
+
+    assert registro["orden"] == ["trpo", "muestrear", "discriminador", "reajuste"]
+    assert registro["fijo_en_el_bloque"]
+    lote = registro["lote"]
+    assert lote.numero_transiciones == PASOS_BLOQUE * 2
+    assert registro["experto_recibido"] is registro["expertos"]
+    assert registro["expertos"].numero_transiciones == lote.numero_transiciones
+
+    def puntuar(discriminador):
+        return calcular_recompensas_gail(discriminador, lote.estados, lote.acciones,
+                                         envuelto.action_space, envuelto.modo
+                                         ).reshape(PASOS_BLOQUE, 2)
+
+    # anteriores: las del discriminador del bloque, las que guardó sb3 salvo el
+    # bootstrap de las truncadas (pasos 8 y 16 del segundo entorno).
+    truncados = np.zeros((PASOS_BLOQUE, 2), dtype=bool)
+    truncados[[7, 15], 1] = True
+    anteriores, nuevas = registro["anteriores"], registro["nuevas"]
+    np.testing.assert_allclose(anteriores, puntuar(registro["d_antes"]), rtol=1e-5, atol=1e-6)
+    np.testing.assert_array_equal(registro["buffer_antes"][~truncados], anteriores[~truncados])
+    assert np.all(registro["buffer_antes"][truncados] != anteriores[truncados])
+    # nuevas: las del discriminador ya actualizado, que es distinto.
+    assert not _iguales(_estado(registro["d_antes"]), _estado(registro["d_despues"]))
+    np.testing.assert_allclose(nuevas, puntuar(registro["d_despues"]), rtol=1e-5, atol=1e-6)
+    assert not np.allclose(nuevas, anteriores)
+    np.testing.assert_allclose(agente.rollout_buffer.rewards,
+                               registro["buffer_antes"] + nuevas - anteriores,
+                               rtol=1e-6, atol=1e-6)
+
+
+def test_iteracion_gail_muestrea_los_expertos_con_su_generador(monkeypatch):
+    from src.training.gail import iteracion_gail
+    agente, envuelto, optimizador = _piezas_gail(False)
+    registro = {"discriminador": envuelto.discriminador}
+    _espiar(monkeypatch, registro)
+    pares, generador = _pares_expertos(False), crear_generador(7)
+    copia = copy.deepcopy(generador)
+    iteracion_gail(agente, envuelto, optimizador, pares, generador, _cfg())
+    esperados = muestrear_expertos(pares, PASOS_BLOQUE * 2, copia)
+    for campo in ("estados", "acciones", "ids_episodio", "pasos"):
+        np.testing.assert_array_equal(getattr(registro["expertos"], campo),
+                                      getattr(esperados, campo))
+    # No usa el generador para nada más.
+    assert generador.random() == copia.random()
+
+
+@TIPOS
+def test_iteracion_gail_devuelve_las_medidas_de_cada_paso(continuo):
+    from src.training.gail import iteracion_gail
+    agente, envuelto, optimizador = _piezas_gail(continuo)
+    pares, generador = _pares_expertos(continuo), crear_generador(7)
+    claves = {"pasos", "partidas", "retorno_real_medio", "longitud_media",
+              "recompensa_gail_media", "discriminador/perdida", "discriminador/entropia",
+              "discriminador/acierto_agente", "discriminador/acierto_experto",
+              "reajuste/perdida_valor"}
+    for numero in range(1, 4):
+        medidas = iteracion_gail(agente, envuelto, optimizador, pares, generador, _cfg())
+        assert medidas.keys() == claves
+        assert all(isinstance(valor, float) for valor in medidas.values())
+        # Cada iteración es un bloque nuevo, que se reajusta una vez.
+        assert medidas["pasos"] == PASOS_BLOQUE * 2 * numero
+        assert agente._pasos_ultimo_reajuste == agente.num_timesteps
+        assert np.isfinite(medidas["reajuste/perdida_valor"])
+        assert 0 <= medidas["discriminador/acierto_agente"] <= 1
+        assert 0 <= medidas["discriminador/acierto_experto"] <= 1
+        # Sin Monitor debajo, sb3 no registra partidas: el retorno real queda en nan
+        # (con Monitor, en la prueba de integración).
+        assert medidas["partidas"] == 0 and math.isnan(medidas["retorno_real_medio"])
+
+
+def test_la_recompensa_media_es_la_que_recibio_el_agente(monkeypatch):
+    from src.training.gail import iteracion_gail
+    agente, envuelto, optimizador = _piezas_gail(False)
+    registro = {"discriminador": envuelto.discriminador}
+    _espiar(monkeypatch, registro)
+    medidas = iteracion_gail(agente, envuelto, optimizador, _pares_expertos(False),
+                             crear_generador(7), _cfg())
+    assert medidas["recompensa_gail_media"] == pytest.approx(float(registro["anteriores"].mean()))
+    assert medidas["recompensa_gail_media"] != pytest.approx(float(registro["nuevas"].mean()))
+
+
+@TIPOS
+def test_iteracion_gail_es_reproducible(continuo):
+    from src.training.gail import iteracion_gail
+    resultados = []
+    for _ in range(2):
+        agente, envuelto, optimizador = _piezas_gail(continuo, semilla=3)
+        pares, generador = _pares_expertos(continuo), crear_generador(7)
+        medidas = [iteracion_gail(agente, envuelto, optimizador, pares, generador, _cfg())
+                   for _ in range(2)]
+        resultados.append((medidas, _estado(agente.policy), _estado(envuelto.discriminador)))
+    np.testing.assert_equal(resultados[0][0], resultados[1][0])
+    assert _iguales(resultados[0][1], resultados[1][1])
+    assert _iguales(resultados[0][2], resultados[1][2])
+
+
+def test_iteracion_gail_con_vecnormalize_encima(monkeypatch):
+    """El agente ve observaciones normalizadas; el discriminador, las originales."""
+    from src.training.gail import iteracion_gail
+    agente, envuelto, optimizador = _piezas_gail(False, normalizar=True)
+    registro = {"discriminador": envuelto.discriminador}
+    _espiar(monkeypatch, registro)
+    for _ in range(2):
+        iteracion_gail(agente, envuelto, optimizador, _pares_expertos(False),
+                       crear_generador(7), _cfg())
+    # _EntornoContador da [paso, acción, 0 o 1]: enteros sin normalizar.
+    estados = registro["lote"].estados
+    np.testing.assert_array_equal(estados, np.round(estados))
+    assert set(np.unique(estados[:, 2])) <= {0.0, 1.0}
+    assert not np.array_equal(agente.rollout_buffer.observations, np.round(
+        agente.rollout_buffer.observations))
+    assert agente._pasos_ultimo_reajuste == PASOS_BLOQUE * 2 * 2
+
+
+@pytest.mark.parametrize("caso,mensaje", [
+    ("agente", "TRPO"),
+    ("envoltorio", "EntornoRecompensaGAIL"),
+    ("otro_envoltorio", "no juega en este envoltorio"),
+    ("norm_reward", "norm_reward"),
+    ("optimizador", "optimizador no es el del discriminador"),
+    ("optimizador_parcial", "optimizador no es el del discriminador"),
+    ("cfg", "gail.discriminador"),
+    ("pares_tipo", "LoteTransiciones"),
+    ("pares_vacios", "N > 0"),
+    ("pares_accion", "fuera del espacio"),
+    ("pares_dimension", "dimensión de observación"),
+    ("generador", "numpy.random.Generator"),
+])
+def test_iteracion_gail_comprueba_todo_antes_de_jugar(caso, mensaje):
+    from src.training.gail import iteracion_gail
+    agente, envuelto, optimizador = _piezas_gail(False, norm_reward=caso == "norm_reward")
+    pares, generador, cfg = _pares_expertos(False), crear_generador(7), _cfg()
+    argumentos = {"agente": agente, "envoltorio": envuelto, "optimizador": optimizador,
+                  "pares_expertos": pares, "generador": generador, "cfg": cfg}
+    otro, _ = _envuelto(False)
+    cambios = {
+        "agente": {"agente": object()},
+        "envoltorio": {"envoltorio": envuelto.venv},
+        "otro_envoltorio": {"envoltorio": otro},
+        "norm_reward": {},
+        "optimizador": {"optimizador": torch.optim.Adam(otro.discriminador.parameters())},
+        "optimizador_parcial": {"optimizador": torch.optim.Adam(
+            list(envuelto.discriminador.parameters())[:1])},
+        "cfg": {"cfg": {}},
+        "pares_tipo": {"pares_expertos": (pares.estados, pares.acciones)},
+        "pares_vacios": {"pares_expertos": LoteTransiciones(
+            pares.estados[:0], pares.acciones[:0], pares.ids_episodio[:0], pares.pasos[:0])},
+        "pares_accion": {"pares_expertos": LoteTransiciones(
+            pares.estados, np.full_like(pares.acciones, 3), pares.ids_episodio, pares.pasos)},
+        "pares_dimension": {"pares_expertos": LoteTransiciones(
+            np.zeros((len(pares.estados), 4), np.float32), pares.acciones,
+            pares.ids_episodio, pares.pasos)},
+        "generador": {"generador": np.random.RandomState(0)},
+    }[caso]
+    discriminador = _estado(envuelto.discriminador)
+    with pytest.raises(ValueError, match=mensaje):
+        iteracion_gail(**{**argumentos, **cambios})
+    assert agente.num_timesteps == 0
+    assert _iguales(discriminador, _estado(envuelto.discriminador))
+
+
+def test_iteracion_gail_con_las_piezas_del_proyecto():
+    """Integración: crear_trpo, crear_entorno_vectorizado y preparar_discriminador con
+    la config de CartPole (reducida), como lo montará el entrenamiento de GAIL."""
+    from src.training.gail import iteracion_gail
+    from src.training.trpo import crear_trpo
+    cfg = _cfg(normalizar_entrada=True)
+    cfg["trpo"].update(pasos_por_iteracion=64, n_entornos=2, batch_size_valor=32,
+                       capas_ocultas=[8], pasos_valor=2)
+    fijar_seed(0)
+    generador = crear_generador(1)
+    pares = LoteTransiciones(generador.normal(scale=0.05, size=(50, 4)).astype(np.float32),
+                             generador.integers(0, 2, size=50), np.arange(50) // 10,
+                             np.arange(50) % 10)
+    venv = crear_entorno_vectorizado(cfg, 2, 3)
+    try:
+        discriminador, optimizador = preparar_discriminador(
+            cfg, venv.observation_space, venv.action_space, pares)
+        envuelto = EntornoRecompensaGAIL(venv, discriminador, cfg["gail"]["recompensa"])
+        agente = crear_trpo(cfg, envuelto)
+        for numero in range(1, 3):
+            medidas = iteracion_gail(agente, envuelto, optimizador, pares, generador, cfg)
+            assert medidas["pasos"] == 64 * numero
+            # Monitor va debajo del envoltorio: el retorno es el real de CartPole.
+            assert medidas["retorno_real_medio"] == medidas["longitud_media"]
+            assert all(np.isfinite(valor) for valor in medidas.values())
+    finally:
+        venv.close()
+
+
+def test_iteracion_gail_descarta_pares_que_queden_de_antes(monkeypatch):
+    """Si una iteración anterior se interrumpió tras jugar, sus pares no se mezclan."""
+    from src.training.gail import iteracion_gail
+    agente, envuelto, optimizador = _piezas_gail(False)
+    registro = {"discriminador": envuelto.discriminador}
+    _espiar(monkeypatch, registro)
+    envuelto.reset()
+    for paso in range(3):
+        envuelto.step(_acciones(False, paso))
+    iteracion_gail(agente, envuelto, optimizador, _pares_expertos(False), crear_generador(7),
+                   _cfg())
+    assert registro["lote"].numero_transiciones == PASOS_BLOQUE * 2
+
+
+# --- entrenamiento de GAIL --------------------------------------------------------
+# CartPole real con la config del proyecto reducida: 3 iteraciones de 64 pasos en
+# 2 entornos y partidas expertas inventadas (6 partidas: 4 de train y 2 de validación).
+
+def _cfg_gail(**gail) -> dict:
+    cfg = _cfg()
+    cfg["trpo"].update(pasos_por_iteracion=64, n_entornos=2, batch_size_valor=32,
+                       capas_ocultas=[8], pasos_valor=2)
+    cfg["gail"].update(iteraciones=3, evaluar_cada=2, episodios_evaluacion=2)
+    cfg["demostraciones"]["frecuencia_pares"] = 2
+    cfg["gail"].update(gail)
+    return cfg
+
+
+def _datos_gail(acciones_validas: bool = True):
+    from src.data.splits import crear_splits
+    from src.data.tipos import Trayectoria
+    generador = crear_generador(11)
+    trayectorias = []
+    for identificador in range(6):
+        pasos = 12 + identificador
+        estados = generador.normal(scale=0.05, size=(pasos + 1, 4)).astype(np.float32)
+        acciones = generador.integers(0, 2, size=pasos) + (0 if acciones_validas else 2)
+        finales = np.zeros(pasos, dtype=bool)
+        finales[-1] = True
+        trayectorias.append(Trayectoria(identificador, estados[:-1], acciones, estados[1:],
+                                        np.ones(pasos, np.float32), finales,
+                                        np.zeros(pasos, dtype=bool)))
+    return trayectorias, crear_splits(trayectorias, 4, 2, (1, 4), crear_generador(0), "a" * 64)
+
+
+def _entrenar(cfg=None, cantidad=4, repeticion=0, run=None):
+    from src.training.gail import entrenar_gail
+    trayectorias, splits = _datos_gail()
+    return entrenar_gail(cfg or _cfg_gail(), trayectorias, splits, cantidad, repeticion, run)
+
+
+def test_entrenar_gail_da_sus_iteraciones_y_devuelve_el_resumen():
+    from src.utils.seed import semillas_repeticion
+    cfg = _cfg_gail()
+    agente, discriminador, resumen = _entrenar(cfg, cantidad=4, repeticion=2)
+    _, splits = _datos_gail()
+    assert isinstance(agente, TRPO) and isinstance(discriminador, Discriminador)
+    assert agente.num_timesteps == resumen["pasos"] == 3 * 64
+    assert resumen["entorno"] == "CartPole-v1"
+    assert (resumen["cantidad"], resumen["repeticion"], resumen["iteraciones"]) == (4, 2, 3)
+    assert resumen["ids_partidas"] == list(splits.subconjuntos[4])
+    assert resumen["huella_dataset"] == "a" * 64
+    semilla = cfg["experimento"]["semilla_repeticiones"]
+    assert resumen["semillas"] == {"base": semilla, **semillas_repeticion(semilla, 2)}
+    assert [m["iteracion"] for m in resumen["historial"]] == [1, 2, 3]
+    assert [m["pasos"] for m in resumen["historial"]] == [64.0, 128.0, 192.0]
+    assert resumen["normalizacion"] is None and resumen["segundos"] > 0
+    for validacion in resumen["validaciones"]:
+        assert len(validacion["retornos"]) == 2
+        # Recompensa real de CartPole: 1 por paso.
+        assert validacion["retorno_medio"] == validacion["longitud_media"]
+
+
+@pytest.mark.parametrize("evaluar_cada,esperadas", [(1, [1, 2, 3]), (2, [2, 3]), (3, [3]),
+                                                    (5, [3])])
+def test_entrenar_gail_valida_cada_evaluar_cada_y_al_final(evaluar_cada, esperadas):
+    _, _, resumen = _entrenar(_cfg_gail(evaluar_cada=evaluar_cada))
+    assert [v["iteracion"] for v in resumen["validaciones"]] == esperadas
+    assert [v["pasos"] for v in resumen["validaciones"]] == [64 * i for i in esperadas]
+
+
+def test_la_validacion_usa_siempre_las_mismas_partidas(monkeypatch):
+    import src.training.gail as gail
+    llamadas = []
+    original = gail.evaluar_retorno
+
+    def espia(modelo, cfg, episodios, semilla, determinista, estadisticas=None):
+        llamadas.append((episodios, semilla, determinista, estadisticas))
+        return original(modelo, cfg, episodios, semilla, determinista, estadisticas)
+
+    monkeypatch.setattr(gail, "evaluar_retorno", espia)
+    _, _, resumen = _entrenar(_cfg_gail(evaluar_cada=1, evaluacion_determinista=False))
+    assert len(llamadas) == 3 and len(set(llamadas)) == 1
+    assert llamadas[0] == (2, resumen["semillas"]["evaluacion"], False, None)
+
+
+def test_entrenar_gail_es_reproducible():
+    resultados = [_entrenar(repeticion=1) for _ in range(2)]
+    (agente_a, d_a, resumen_a), (agente_b, d_b, resumen_b) = resultados
+    assert _iguales(_estado(agente_a.policy), _estado(agente_b.policy))
+    assert _iguales(_estado(d_a), _estado(d_b))
+    np.testing.assert_equal(resumen_a["historial"], resumen_b["historial"])
+    np.testing.assert_equal(resumen_a["validaciones"], resumen_b["validaciones"])
+
+
+def test_validar_no_cambia_el_entrenamiento():
+    """Las partidas de validación no tocan los generadores del entrenamiento."""
+    agente_a, d_a, resumen_a = _entrenar(_cfg_gail(evaluar_cada=1))
+    agente_b, d_b, resumen_b = _entrenar(_cfg_gail(evaluar_cada=3))
+    assert _iguales(_estado(agente_a.policy), _estado(agente_b.policy))
+    assert _iguales(_estado(d_a), _estado(d_b))
+    np.testing.assert_equal(resumen_a["historial"], resumen_b["historial"])
+
+
+def test_cada_repeticion_entrena_distinto():
+    agente_a, d_a, resumen_a = _entrenar(repeticion=0)
+    agente_b, d_b, resumen_b = _entrenar(repeticion=1)
+    assert resumen_a["semillas"] != resumen_b["semillas"]
+    assert not _iguales(_estado(agente_a.policy), _estado(agente_b.policy))
+    assert not _iguales(_estado(d_a), _estado(d_b))
+
+
+@pytest.mark.parametrize("cantidad", [1, 4])
+def test_gail_usa_los_mismos_pares_expertos_que_bc(cantidad, monkeypatch):
+    import src.training.gail as gail
+    from src.data.loaders import construir_loaders_bc
+    from src.utils.seed import semillas_repeticion
+    recibidos = []
+    original = gail.preparar_discriminador
+
+    def espia(cfg, observacion, accion, pares):
+        recibidos.append(pares)
+        return original(cfg, observacion, accion, pares)
+
+    monkeypatch.setattr(gail, "preparar_discriminador", espia)
+    cfg = _cfg_gail(iteraciones=1)
+    _, _, resumen = _entrenar(cfg, cantidad=cantidad, repeticion=3)
+    trayectorias, splits = _datos_gail()
+    semilla = semillas_repeticion(cfg["experimento"]["semilla_repeticiones"], 3)["pares"]
+    train, _ = construir_loaders_bc(trayectorias, splits, cantidad, spaces.Discrete(2), cfg,
+                                    crear_generador(semilla))
+    np.testing.assert_array_equal(recibidos[0].estados, train.dataset.estados.numpy())
+    assert resumen["pares_expertos"] == len(train.dataset)
+    assert set(recibidos[0].ids_episodio.tolist()) == set(splits.subconjuntos[cantidad])
+
+
+class _RunFalso:
+    def __init__(self) -> None:
+        self.registros: list[tuple[dict, int]] = []
+
+    def log(self, metricas: dict, step: int) -> None:
+        self.registros.append((metricas, step))
+
+
+def test_entrenar_gail_registra_cada_iteracion_y_cada_validacion():
+    run = _RunFalso()
+    _, _, resumen = _entrenar(_cfg_gail(), run=run)
+    iteraciones = [(m, paso) for m, paso in run.registros if "pasos" in m]
+    validaciones = [(m, paso) for m, paso in run.registros if "validacion/retorno_medio" in m]
+    assert len(run.registros) == len(iteraciones) + len(validaciones)
+    assert [paso for _, paso in iteraciones] == [64, 128, 192]
+    assert [paso for _, paso in validaciones] == [128, 192]
+    for metricas, _ in validaciones:
+        assert set(metricas) == {"validacion/retorno_medio", "validacion/retorno_desviacion",
+                                 "validacion/longitud_media"}
+    assert validaciones[-1][0]["validacion/retorno_medio"] == \
+        resumen["validaciones"][-1]["retorno_medio"]
+
+
+def test_entrenar_gail_normaliza_observaciones_si_el_perfil_lo_pide(monkeypatch):
+    import src.training.gail as gail
+    estadisticas = []
+    original = gail.evaluar_retorno
+
+    def espia(modelo, cfg, episodios, semilla, determinista, normalizacion=None):
+        estadisticas.append(normalizacion)
+        return original(modelo, cfg, episodios, semilla, determinista, normalizacion)
+
+    monkeypatch.setattr(gail, "evaluar_retorno", espia)
+    cfg = _cfg_gail()
+    # Un límite distinto del de sb3 (10) comprueba que se usa el de la config.
+    cfg["trpo"].update(normalizar_observaciones=True, limite_normalizacion=5.0)
+    agente, _, resumen = _entrenar(cfg)
+    assert isinstance(agente.get_env(), VecNormalize)
+    assert isinstance(agente.get_env().venv, EntornoRecompensaGAIL)
+    assert len(resumen["normalizacion"]["media"]) == 4
+    assert resumen["normalizacion"]["limite"] == cfg["trpo"]["limite_normalizacion"]
+    assert all(e is not None for e in estadisticas)
+    assert estadisticas[-1] == resumen["normalizacion"]
+
+
+def _cfg_sin(seccion: str, clave: str) -> dict:
+    cfg = _cfg_gail()
+    del cfg[seccion][clave]
+    return cfg
+
+
+@pytest.mark.parametrize("cambio,mensaje", [
+    (lambda c: c["gail"].update(iteraciones=0), "gail.iteraciones"),
+    (lambda c: c["gail"].update(iteraciones=True), "gail.iteraciones"),
+    (lambda c: c["gail"].update(evaluar_cada=0), "gail.evaluar_cada"),
+    (lambda c: c["gail"].update(episodios_evaluacion=2.0), "gail.episodios_evaluacion"),
+    (lambda c: c["gail"].update(evaluacion_determinista="si"), "gail.evaluacion_determinista"),
+    (lambda c: c["gail"].update(recompensa="d"), "gail.recompensa"),
+    (lambda c: c["gail"].pop("evaluar_cada"), "Falta gail.evaluar_cada"),
+    (lambda c: c.pop("gail"), "sección gail"),
+    (lambda c: c["trpo"].update(pasos_por_iteracion=63), "trpo.pasos_por_iteracion"),
+    (lambda c: c["gail"]["discriminador"].update(learning_rate=0), "learning_rate"),
+    (lambda c: c["experimento"].pop("semilla_repeticiones"), "semilla_repeticiones"),
+    (lambda c: c["experimento"].update(semilla_repeticiones=-1), "semilla"),
+    (lambda c: c["demostraciones"].pop("frecuencia_pares"), "frecuencia_pares"),
+])
+def test_entrenar_gail_comprueba_la_config_antes_de_crear_entornos(cambio, mensaje,
+                                                                   monkeypatch):
+    import src.training.gail as gail
+
+    def no_crear(*_):
+        raise AssertionError("no debería llegar a crear los entornos")
+
+    monkeypatch.setattr(gail, "crear_entorno_vectorizado", no_crear)
+    cfg = _cfg_gail()
+    cambio(cfg)
+    with pytest.raises(ValueError, match=mensaje):
+        _entrenar(cfg)
+
+
+@pytest.mark.parametrize("cantidad,repeticion,mensaje", [
+    (2, 0, "subconjunto"), (4, -1, "repeticion"), (4, 1.0, "repeticion"),
+])
+def test_entrenar_gail_comprueba_los_argumentos_antes_de_crear_entornos(cantidad, repeticion,
+                                                                        mensaje, monkeypatch):
+    import src.training.gail as gail
+
+    def no_crear(*_):
+        raise AssertionError("no debería llegar a crear los entornos")
+
+    monkeypatch.setattr(gail, "crear_entorno_vectorizado", no_crear)
+    with pytest.raises(ValueError, match=mensaje):
+        _entrenar(cantidad=cantidad, repeticion=repeticion)
+    trayectorias, splits = _datos_gail()
+    from src.training.gail import entrenar_gail
+    with pytest.raises(ValueError, match="faltan"):
+        entrenar_gail(_cfg_gail(), trayectorias[:-1], splits, 4, 0)
+
+
+@pytest.mark.parametrize("fallo", ["iteracion", "pares"])
+def test_entrenar_gail_cierra_los_entornos_si_falla(fallo, monkeypatch):
+    import src.training.gail as gail
+    cerrados = []
+    original = gail.crear_entorno_vectorizado
+
+    def crear(*argumentos):
+        venv = original(*argumentos)
+        cerrar = venv.close
+        venv.close = lambda: (cerrados.append(True), cerrar())
+        return venv
+
+    monkeypatch.setattr(gail, "crear_entorno_vectorizado", crear)
+    trayectorias, splits = _datos_gail(acciones_validas=fallo != "pares")
+    if fallo == "iteracion":
+        def romper(*_):
+            raise RuntimeError("fallo a mitad")
+        monkeypatch.setattr(gail, "iteracion_gail", romper)
+    with pytest.raises((RuntimeError, ValueError)):
+        gail.entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0)
+    assert cerrados == [True]

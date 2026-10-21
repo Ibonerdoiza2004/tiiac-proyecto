@@ -11,11 +11,19 @@ Sigue el código original de GAIL (openai/imitation, TransitionClassifier):
 
 - Después de actualizarlo, reajustar_valor_tras_discriminador pone al día la red
   de valor de TRPO con las recompensas del discriminador nuevo, como el original.
+
+iteracion_gail encadena una iteración completa: un bloque de TRPO con la
+recompensa del discriminador, su actualización y el reajuste de la red de valor.
+entrenar_gail monta las piezas de una repetición con un subconjunto de partidas
+y repite la iteración, registrando un retorno de validación cada cierto tiempo.
 """
 
 from __future__ import annotations
 
 import math
+import time
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import torch
@@ -24,12 +32,18 @@ from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.utils import obs_as_tensor
-from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper
+from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecNormalize
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
-from src.data.loaders import tensores_de_pares
-from src.data.tipos import LoteTransiciones
+from src.data.entornos import crear_entorno_vectorizado
+from src.data.loaders import pares_de_subconjunto, tensores_de_pares
+from src.data.splits import SplitsDemostraciones
+from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, construir_discriminador
+from src.training.trpo import (_config_trpo, crear_trpo, estadisticas_normalizacion,
+                               evaluar_retorno, iteracion_trpo)
+from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
+from src.utils.tracking import registrar
 
 # −log(1 − D) da recompensas >= 0: favorece alargar las partidas, para entornos
 # que terminan al fallar (CartPole). log D da recompensas <= 0: favorece
@@ -537,3 +551,231 @@ def reajustar_valor_tras_discriminador(agente: TRPO, recompensas_anteriores: np.
         politica.set_training_mode(modo_previo)
     return {"perdida_valor": float(np.mean(perdidas)) if perdidas else float("nan")}
 
+
+
+def _comprobar_piezas_iteracion(agente: TRPO, envoltorio: EntornoRecompensaGAIL,
+                                optimizador: torch.optim.Optimizer,
+                                pares_expertos: LoteTransiciones,
+                                generador: np.random.Generator, cfg: dict) -> None:
+    """Comprueba antes de jugar que las piezas de iteracion_gail encajan entre sí.
+
+    Raises:
+        ValueError: Si alguna pieza no es válida o no corresponde a las demás.
+    """
+    if not isinstance(agente, TRPO):
+        raise ValueError(f"Se esperaba un agente TRPO de sb3-contrib, no {type(agente).__name__}")
+    if not isinstance(envoltorio, EntornoRecompensaGAIL):
+        raise ValueError("envoltorio debe ser un EntornoRecompensaGAIL")
+    # El agente juega en envoltorio, directamente o con VecNormalize encima. Si
+    # algo encima cambiara la recompensa, el buffer no guardaría la del discriminador.
+    capa = agente.get_env()
+    while capa is not envoltorio:
+        if isinstance(capa, VecNormalize) and capa.norm_reward:
+            raise ValueError("VecNormalize con norm_reward cambiaría la recompensa del "
+                             "discriminador: solo se admite normalizar observaciones")
+        capa = capa.venv if isinstance(capa, VecEnvWrapper) else None
+        if capa is None:
+            raise ValueError("El agente no juega en este envoltorio")
+    parametros = {id(p) for p in envoltorio.discriminador.parameters()}
+    del_optimizador = {id(p) for grupo in optimizador.param_groups for p in grupo["params"]}
+    if del_optimizador != parametros:
+        raise ValueError("El optimizador no es el del discriminador del envoltorio")
+    _config_discriminador(cfg)
+    _comprobar_lote(pares_expertos, "pares_expertos")
+    estados, _ = tensores_de_pares(pares_expertos.estados, pares_expertos.acciones,
+                                   envoltorio.action_space)
+    if estados.shape[1] != envoltorio.discriminador.dim_observacion:
+        raise ValueError("Los pares expertos no tienen la dimensión de observación del entorno")
+    if not isinstance(generador, np.random.Generator):
+        raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")
+
+
+def iteracion_gail(agente: TRPO, envoltorio: EntornoRecompensaGAIL,
+                   optimizador: torch.optim.Optimizer, pares_expertos: LoteTransiciones,
+                   generador: np.random.Generator, cfg: dict) -> dict[str, float]:
+    """Da una iteración de GAIL: un bloque de TRPO, el discriminador y la red de valor.
+
+    1. Juega un bloque de TRPO (iteracion_trpo) en el que cada paso recibe la
+       recompensa del discriminador actual, que está fijo durante el bloque.
+    2. Actualiza el discriminador con los pares del bloque frente a otros
+       tantos pares expertos muestreados con reemplazo.
+    3. Vuelve a puntuar los pares del bloque con el discriminador actualizado y
+       reajusta la red de valor con esas recompensas
+       (reajustar_valor_tras_discriminador).
+
+    Todo se comprueba antes de jugar, así que un error en los argumentos no
+    deja la iteración a medias.
+
+    Args:
+        agente: TRPO creado sobre envoltorio, directamente o con VecNormalize
+            encima (solo de observaciones: el discriminador ve las originales).
+        envoltorio: El EntornoRecompensaGAIL en el que juega el agente; su
+            discriminador es el que se actualiza.
+        optimizador: El del discriminador (preparar_discriminador); se conserva
+            entre iteraciones.
+        pares_expertos: Pares expertos del subconjunto de train.
+        generador: Generador de crear_generador; elige los pares expertos.
+        cfg: Configuración resuelta con la sección gail.
+
+    Returns:
+        Medidas de la iteración: las de iteracion_trpo (pasos, partidas,
+        retorno_real_medio, longitud_media), recompensa_gail_media (la que
+        recibió el agente en el bloque, sin bootstrap), las de
+        actualizar_discriminador con el prefijo discriminador/ y
+        reajuste/perdida_valor.
+
+    Raises:
+        ValueError: Si alguna pieza no es válida o no corresponde a las demás.
+    """
+    _comprobar_piezas_iteracion(agente, envoltorio, optimizador, pares_expertos, generador, cfg)
+    discriminador, espacio_accion = envoltorio.discriminador, envoltorio.action_space
+    envoltorio.iniciar_bloque()
+    medidas = iteracion_trpo(agente)
+    lote, anteriores = envoltorio.extraer_bloque()
+    expertos = muestrear_expertos(pares_expertos, lote.numero_transiciones, generador)
+    medidas_discriminador = actualizar_discriminador(discriminador, optimizador, lote, expertos,
+                                                     espacio_accion, cfg)
+    # El lote va paso a paso y, dentro de cada paso, entorno a entorno: el mismo
+    # orden que las recompensas [pasos, entornos].
+    nuevas = calcular_recompensas_gail(discriminador, lote.estados, lote.acciones,
+                                       espacio_accion, envoltorio.modo).reshape(anteriores.shape)
+    reajuste = reajustar_valor_tras_discriminador(agente, anteriores, nuevas)
+    medidas["recompensa_gail_media"] = float(anteriores.mean())
+    medidas.update({f"discriminador/{clave}": valor
+                    for clave, valor in medidas_discriminador.items()})
+    medidas["reajuste/perdida_valor"] = reajuste["perdida_valor"]
+    return medidas
+
+
+def _config_gail(cfg: dict) -> dict:
+    """Devuelve la sección gail comprobada (sin el discriminador, que se comprueba aparte).
+
+    Raises:
+        ValueError: Si falta alguna clave o algún valor no es válido.
+    """
+    gcfg = cfg.get("gail") if isinstance(cfg, dict) else None
+    if not isinstance(gcfg, dict):
+        raise ValueError("La configuración necesita la sección gail")
+
+    def entero_positivo(valor: object) -> bool:
+        """Indica si valor es un entero no booleano mayor que cero."""
+        return isinstance(valor, int) and not isinstance(valor, bool) and valor > 0
+
+    reglas = {
+        "iteraciones": entero_positivo,
+        "evaluar_cada": entero_positivo,
+        "episodios_evaluacion": entero_positivo,
+        "evaluacion_determinista": lambda v: isinstance(v, bool),
+        "recompensa": lambda v: v in MODOS_RECOMPENSA,
+    }
+    for clave, valida in reglas.items():
+        if clave not in gcfg:
+            raise ValueError(f"Falta gail.{clave} en la configuración")
+        if not valida(gcfg[clave]):
+            raise ValueError(f"gail.{clave} no es válido: {gcfg[clave]!r}")
+    return gcfg
+
+
+def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones,
+                  cantidad: int, repeticion: int, run: Any = None,
+                  ) -> tuple[TRPO, Discriminador, dict[str, Any]]:
+    """Entrena GAIL con un subconjunto de partidas expertas, en una repetición.
+
+    Las semillas son las de la repetición (semillas_repeticion con
+    experimento.semilla_repeticiones), compartidas con BC:
+
+    - pares: elige los pares expertos de cada partida con pares_de_subconjunto,
+      como BC (los mismos pares de train con la misma repetición), y después
+      los que se muestrean en cada iteración;
+    - modelo: fijar_seed antes de crear el discriminador y TRPO;
+    - entornos: los entornos de entrenamiento;
+    - evaluacion: las partidas de validación.
+
+    Monta el discriminador (preparar_discriminador, con la normalización de
+    los pares expertos de train), el envoltorio, VecNormalize encima si el
+    perfil normaliza las observaciones y TRPO (crear_trpo), y da
+    gail.iteraciones iteraciones (iteracion_gail). Cada gail.evaluar_cada
+    iteraciones, y en la última, juega gail.episodios_evaluacion partidas de
+    validación con la recompensa real (siempre las mismas semillas). Ese
+    retorno solo se registra: el modelo que se devuelve es el de la última
+    iteración, como en el paper. Las partidas de validación no alteran el
+    entrenamiento.
+
+    Args:
+        cfg: Configuración resuelta con entorno, trpo, gail, demostraciones y
+            experimento.semilla_repeticiones.
+        trayectorias: Todas las partidas del dataset para el que se crearon los splits.
+        splits: Splits de esas partidas.
+        cantidad: Tamaño del subconjunto de train, una clave de splits.subconjuntos.
+        repeticion: Número de repetición, entero no negativo.
+        run: Run de W&B o None; recibe las medidas de cada iteración y las de
+            validación (prefijo validacion/), con el paso de entorno acumulado.
+
+    Returns:
+        El agente, el discriminador y un resumen: entorno, cantidad, repeticion,
+        IDs de las partidas, número de pares expertos, huella del dataset,
+        semillas, iteraciones, pasos, medidas de cada iteración, validaciones,
+        segundos medidos y estadísticas de normalización (None si no normaliza).
+
+    Raises:
+        ValueError: Si la configuración, los datos o los argumentos no son
+            válidos. Todo se comprueba antes de crear los entornos salvo que
+            los pares encajen con sus espacios, que se comprueba antes de jugar.
+    """
+    gcfg, tcfg = _config_gail(cfg), _config_trpo(cfg)
+    _config_discriminador(cfg)
+    ecfg = cfg.get("experimento") if isinstance(cfg, dict) else None
+    if not isinstance(ecfg, dict) or "semilla_repeticiones" not in ecfg:
+        raise ValueError("La configuración necesita experimento.semilla_repeticiones")
+    semillas = semillas_repeticion(ecfg["semilla_repeticiones"], repeticion)
+    generador = crear_generador(semillas["pares"])
+    _, pares = pares_de_subconjunto(trayectorias, splits, cantidad, cfg, generador)
+
+    fijar_seed(semillas["modelo"])
+    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semillas["entornos"])
+    inicio = time.perf_counter()
+    try:
+        discriminador, optimizador = preparar_discriminador(
+            cfg, venv.observation_space, venv.action_space, pares)
+        envoltorio = EntornoRecompensaGAIL(venv, discriminador, gcfg["recompensa"])
+        capa: VecEnv = envoltorio
+        if tcfg["normalizar_observaciones"]:
+            capa = VecNormalize(envoltorio, norm_obs=True, norm_reward=False,
+                                clip_obs=float(tcfg["limite_normalizacion"]))
+        agente = crear_trpo(cfg, capa)
+        historial, validaciones = [], []
+        for iteracion in range(1, gcfg["iteraciones"] + 1):
+            medidas = iteracion_gail(agente, envoltorio, optimizador, pares, generador, cfg)
+            registrar(run, medidas, paso=agente.num_timesteps)
+            historial.append({"iteracion": iteracion, **medidas})
+            if iteracion % gcfg["evaluar_cada"] and iteracion < gcfg["iteraciones"]:
+                continue
+            validacion = evaluar_retorno(agente, cfg, gcfg["episodios_evaluacion"],
+                                         semillas["evaluacion"],
+                                         gcfg["evaluacion_determinista"],
+                                         estadisticas_normalizacion(capa))
+            validacion.update(iteracion=iteracion, pasos=agente.num_timesteps)
+            validaciones.append(validacion)
+            registrar(run, {f"validacion/{clave}": validacion[clave] for clave in
+                            ("retorno_medio", "retorno_desviacion", "longitud_media")},
+                      paso=agente.num_timesteps)
+        segundos = time.perf_counter() - inicio
+        normalizacion = estadisticas_normalizacion(capa)
+    finally:
+        venv.close()
+    resumen = {
+        "entorno": cfg["entorno"]["id"],
+        "cantidad": int(cantidad),
+        "repeticion": int(repeticion),
+        "ids_partidas": [int(i) for i in splits.subconjuntos[cantidad]],
+        "pares_expertos": pares.numero_transiciones,
+        "huella_dataset": splits.huella_dataset,
+        "semillas": {"base": int(ecfg["semilla_repeticiones"]), **semillas},
+        "iteraciones": gcfg["iteraciones"],
+        "pasos": int(agente.num_timesteps),
+        "historial": historial,
+        "validaciones": validaciones,
+        "segundos": segundos,
+        "normalizacion": normalizacion,
+    }
+    return agente, discriminador, resumen

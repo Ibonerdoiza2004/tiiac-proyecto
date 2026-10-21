@@ -1116,3 +1116,41 @@ def test_entrenar_bc_subconjunto_propaga_los_errores(cantidad, espacio_observaci
     with pytest.raises(ValueError, match=mensaje):
         entrenar_bc_subconjunto(trayectorias, _splits(trayectorias), cantidad,
                                 espacio_observacion, espacio_accion, CFG, crear_generador(0))
+
+
+# --- pares_de_subconjunto -----------------------------------------------------------
+
+@pytest.mark.parametrize("cantidad", [1, 4, 10])
+def test_pares_de_subconjunto_son_los_de_los_loaders_de_bc(cantidad):
+    """BC y GAIL sacan los pares de la misma función: con el mismo generador, los mismos."""
+    from src.data.loaders import pares_de_subconjunto
+    trayectorias = _quince()
+    splits = _splits(trayectorias)
+    cfg = _cfg(frecuencia_pares=3)
+    validacion, train = pares_de_subconjunto(trayectorias, splits, cantidad, cfg,
+                                             crear_generador(4))
+    cargador_train, cargador_val = construir_loaders_bc(trayectorias, splits, cantidad, DISCRETO,
+                                                        cfg, crear_generador(4))
+    for lote, cargador in ((train, cargador_train), (validacion, cargador_val)):
+        assert isinstance(lote, LoteTransiciones)
+        assert np.array_equal(cargador.dataset.estados.numpy(), lote.estados)
+        assert np.array_equal(cargador.dataset.ids_episodio, lote.ids_episodio)
+    assert set(train.ids_episodio.tolist()) == set(splits.subconjuntos[cantidad])
+
+
+@pytest.mark.parametrize("cfg", [{}, None, {"demostraciones": {}},
+                                 {"bc": {"frecuencia_pares": 1}}])
+def test_pares_de_subconjunto_exige_la_frecuencia(cfg):
+    from src.data.loaders import pares_de_subconjunto
+    trayectorias = _quince()
+    with pytest.raises(ValueError, match="necesita demostraciones.frecuencia_pares"):
+        pares_de_subconjunto(trayectorias, _splits(trayectorias), 4, cfg, crear_generador(0))
+
+
+def test_pares_de_subconjunto_no_necesita_la_seccion_bc():
+    from src.data.loaders import pares_de_subconjunto
+    trayectorias = _quince()
+    validacion, train = pares_de_subconjunto(trayectorias, _splits(trayectorias), 4,
+                                             {"demostraciones": {"frecuencia_pares": 2}},
+                                             crear_generador(0))
+    assert validacion.numero_transiciones > 0 and train.numero_transiciones > 0
