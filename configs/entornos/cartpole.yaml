@@ -32,8 +32,10 @@ experto:
   # experto perfecto del paper (200 ± 0 en CartPole-v0, tabla 1).
   retorno_objetivo: 500
 gail:
-  iteraciones: 80  # Paper, tabla 2 (el código original usa max_iter 301).
-  evaluar_cada: 10  # Elección propia: 30 mediciones en 300 iteraciones.
+  # Elección propia por presupuesto de tiempo; el paper usa 300 (tabla 2) y el código
+  # original, max_iter 301.
+  iteraciones: 80
+  evaluar_cada: 10  # Elección propia: 8 mediciones en 80 iteraciones.
   episodios_evaluacion: 10  # Elección propia; la evaluación final usa 50.
   evaluacion_determinista: true  # Como evalúa el original las políticas aprendidas.
   # Código original de GAIL: −log(1 − D), porque las partidas terminan al fallar

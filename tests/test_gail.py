@@ -1872,6 +1872,8 @@ def _cfg_script() -> dict:
     cfg = _cfg_gail(iteraciones=2)
     cfg["demostraciones"].update(partidas_train=4, partidas_validacion=2, subconjuntos=[1, 4])
     cfg["experimento"]["repeticiones"] = 2
+    # En serie salvo que el test diga otra cosa: no depende del valor de la máquina en la base.
+    cfg["experimento"]["procesos"] = 1
     cfg["wandb"]["modo"] = "disabled"
     return cfg
 
