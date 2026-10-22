@@ -183,7 +183,7 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     (tmp_path / "entornos" / "cartpole.yaml").write_text(perfil.read_text(encoding="utf-8"),
                                                          encoding="utf-8")
     cfg = resolver_configuracion(tmp_path / "base.yaml", "cartpole")
-    assert cfg["experimento"]["repeticiones"] == 7
+    assert cfg["experimento"]["repeticiones"] == 5
     tamanos = {clave: cfg["demostraciones"][clave] for clave in
                ("partidas_train", "partidas_validacion", "subconjuntos", "frecuencia_pares")}
     assert tamanos == {"partidas_train": 10, "partidas_validacion": 5,

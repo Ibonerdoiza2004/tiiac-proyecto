@@ -15,9 +15,17 @@ Sin --cantidades ni --repeticiones entrena todas las de la configuración
 repartir el barrido en varias sesiones: cada entrenamiento depende solo de su
 cantidad y su repetición, no de cuántos se lancen juntos.
 
+experimento.procesos de la configuración dice cuántos entrenamientos se lanzan
+a la vez, cada uno en su proceso (1 = en serie). Siempre se entrena con un solo
+hilo de PyTorch, también en serie: con varios hilos cambia el orden de las sumas
+y el redondeo, y el modelo ya no sería el mismo. Así, en la misma máquina, los
+modelos son idénticos en serie y en paralelo. Si uno falla, los demás siguen.
+
 Cada uno se guarda en <salida>/cantidad_<c>/repeticion_<r> (modelo.zip,
 discriminador.pt y gail.json, con la procedencia de los datos). Imprime el
-último retorno de validación y el tiempo medido de cada uno. W&B sigue la
+último retorno de validación y el tiempo medido de cada uno y, mientras entrena,
+una línea por validación con la iteración, el retorno, los aciertos del
+discriminador y el tiempo que queda (estimado). W&B sigue la
 configuración (wandb.modo), con un run por entrenamiento; --sin-wandb lo
 desactiva. Cómo se agrupan y nombran los runs es provisional hasta el módulo
 de seguimiento.
@@ -26,11 +34,14 @@ de seguimiento.
 from __future__ import annotations
 
 import argparse
-import copy
+import multiprocessing
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+import torch
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
@@ -38,21 +49,77 @@ sys.path.insert(0, str(RAIZ))
 from src.data.demostraciones import cargar_demostraciones  # noqa: E402
 from src.data.entornos import crear_entorno  # noqa: E402
 from src.data.splits import cargar_splits, huella_archivo  # noqa: E402
-from src.training.gail import entrenar_gail, guardar_gail, procedencia_datos  # noqa: E402
+from src.training.gail import (preparar_proceso_barrido, procedencia_datos,  # noqa: E402
+                               tarea_barrido_gail)
 from src.training.trpo import comprobar_directorio_libre, estado_git  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
-from src.utils.tracking import abrir_run  # noqa: E402
 
 _DEMOSTRACIONES = "demostraciones.npz"
 _SPLITS = "splits.json"
 
 
+def _informar(cantidad: int, repeticion: int, resumen: dict[str, Any]) -> None:
+    """Imprime el resultado de un entrenamiento terminado."""
+    ultima = resumen["validaciones"][-1]
+    print(f"cantidad {cantidad}, repetición {repeticion}: retorno de validación "
+          f"{ultima['retorno_medio']:.1f} en la iteración {ultima['iteracion']}; "
+          f"{resumen['pasos']} pasos en {resumen['segundos']:.0f} s", flush=True)
+
+
+def _entrenar_tareas(tareas: list[tuple[int, int]], procesos: int, cfg: dict,
+                     trayectorias: list, splits: Any, salida: Path,
+                     datos: dict[str, str]) -> list[tuple[int, int]]:
+    """Entrena y guarda cada (cantidad, repetición), en serie o en procesos.
+
+    Siempre con un solo hilo de PyTorch: así el resultado no depende de cuántos
+    procesos se usen (con varios hilos cambia el redondeo) y, en paralelo, los
+    procesos no se reparten los núcleos. Con más de un proceso, cada uno arranca
+    desde cero (spawn) y un proceso libre coge el siguiente entrenamiento. Un
+    fallo se informa y no detiene los demás. Ctrl+C termina los procesos al
+    momento y se propaga como KeyboardInterrupt.
+
+    Returns:
+        Las tareas que fallaron.
+    """
+    argumentos = [(cfg, trayectorias, splits, cantidad, repeticion,
+                   salida / f"cantidad_{cantidad}" / f"repeticion_{repeticion}", datos)
+                  for cantidad, repeticion in tareas]
+    fallos = []
+
+    def informar(resultado: tuple[int, int, dict[str, Any] | None, str | None]) -> None:
+        """Imprime el resultado de un entrenamiento y anota los fallos."""
+        cantidad, repeticion, resumen, error = resultado
+        if error is not None:
+            print(f"error en cantidad {cantidad}, repetición {repeticion}: {error}",
+                  file=sys.stderr, flush=True)
+            fallos.append((cantidad, repeticion))
+        else:
+            _informar(cantidad, repeticion, resumen)
+
+    if procesos == 1:
+        hilos_previos = torch.get_num_threads()
+        torch.set_num_threads(1)
+        try:
+            for argumento in argumentos:
+                informar(tarea_barrido_gail(argumento))
+        finally:
+            torch.set_num_threads(hilos_previos)
+        return fallos
+    # Al salir del with, también por Ctrl+C, Pool termina los procesos que queden.
+    with multiprocessing.get_context("spawn").Pool(
+            procesos, initializer=preparar_proceso_barrido) as pool:
+        for resultado in pool.imap_unordered(tarea_barrido_gail, argumentos):
+            informar(resultado)
+    return fallos
+
+
 def main() -> int:
     """Carga los datos, entrena y guarda cada GAIL elegido; devuelve el código de salida.
 
-    Códigos: 0 si todo va bien; 2 si la configuración, los datos, las
-    cantidades, las repeticiones o la carpeta de salida no son válidos, sin
-    entrenar nada.
+    Códigos: 0 si todo va bien; 1 si algún entrenamiento falló (los demás se
+    guardan); 2 si la configuración, los datos, las cantidades, las
+    repeticiones o la carpeta de salida no son válidos, sin entrenar nada; 130
+    si se interrumpe con Ctrl+C.
     """
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -116,27 +183,22 @@ def main() -> int:
         print(f"error: repeticiones no válidas o repetidas: {repeticiones}; van de 0 a "
               f"{total_repeticiones - 1}", file=sys.stderr)
         return 2
+    procesos = cfg["experimento"].get("procesos")
+    if isinstance(procesos, bool) or not isinstance(procesos, int) or procesos < 1:
+        print(f"error de configuración: experimento.procesos debe ser un entero positivo, "
+              f"no {procesos!r}", file=sys.stderr)
+        return 2
 
+    tareas = [(cantidad, repeticion) for cantidad in cantidades for repeticion in repeticiones]
     inicio = time.perf_counter()
-    for cantidad in cantidades:
-        for repeticion in repeticiones:
-            cfg_run = copy.deepcopy(cfg)
-            cfg_run["experimento"]["nombre"] = (f"{cfg['experimento']['nombre']}-gail-"
-                                                f"{args.entorno}-c{cantidad}-r{repeticion}")
-            run = abrir_run(cfg_run)
-            try:
-                agente, discriminador, resumen = entrenar_gail(cfg, trayectorias, splits,
-                                                               cantidad, repeticion, run)
-                destino = salida / f"cantidad_{cantidad}" / f"repeticion_{repeticion}"
-                guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
-            finally:
-                if run is not None:
-                    run.finish()
-            ultima = resumen["validaciones"][-1]
-            print(f"cantidad {cantidad}, repetición {repeticion}: retorno de validación "
-                  f"{ultima['retorno_medio']:.1f} en la iteración {ultima['iteracion']}; "
-                  f"{resumen['pasos']} pasos en {resumen['segundos']:.0f} s")
-    print(f"{len(cantidades) * len(repeticiones)} entrenamientos guardados en {salida}; "
+    try:
+        fallos = _entrenar_tareas(tareas, min(procesos, len(tareas)), cfg, trayectorias, splits,
+                                  salida, datos)
+    except KeyboardInterrupt:
+        print(f"interrumpido: los entrenamientos que terminaron están en {salida}; el que "
+              "estuviera guardándose puede haber quedado incompleto", file=sys.stderr)
+        return 130
+    print(f"{len(tareas) - len(fallos)} de {len(tareas)} entrenamientos guardados en {salida}; "
           f"tiempo total medido: {time.perf_counter() - inicio:.0f} s")
     codigo = estado_git()
     if codigo["commit"] is None:
@@ -145,7 +207,7 @@ def main() -> int:
     elif codigo["cambios_sin_commit"]:
         print("aviso: había cambios sin commit; estos modelos no se pueden reproducir "
               "exactamente desde el repositorio", file=sys.stderr)
-    return 0
+    return 1 if fallos else 0
 
 
 if __name__ == "__main__":

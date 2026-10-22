@@ -1916,6 +1916,8 @@ def test_el_script_entrena_y_guarda_cada_cantidad_y_repeticion(datos_grabados, t
     assert sorted(p.name for p in salida.iterdir()) == ["cantidad_1", "cantidad_4"]
     salida_texto = capsys.readouterr().out
     assert "cantidad 1, repetición 1: retorno de validación" in salida_texto
+    # Progreso durante el entrenamiento: una línea por validación (2 iteraciones, cada 2).
+    assert salida_texto.count("cantidad 4, repetición 1 · iteración 2/2 · 128 pasos") == 1
     assert "2 entrenamientos guardados" in salida_texto
 
 
@@ -1928,10 +1930,11 @@ def test_el_script_entrena_por_defecto_todo_el_barrido(datos_grabados, tmp_path,
     llamadas = []
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados),
                                                "--salida", str(tmp_path / "gail")])
-    monkeypatch.setattr(script, "entrenar_gail", lambda cfg, t, s, c, r, run:
-                        llamadas.append((c, r, run)) or _resumen_falso())
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda cfg, t, s, c, r, run:
+                        llamadas.append((c, r, run.run)) or _resumen_falso())
     guardados = []
-    monkeypatch.setattr(script, "guardar_gail", lambda destino, *a: guardados.append(destino))
+    monkeypatch.setattr("src.training.gail.guardar_gail",
+                        lambda destino, *a: guardados.append(destino))
     assert script.main() == 0
     # demostraciones.subconjuntos × experimento.repeticiones, sin W&B (modo disabled).
     assert llamadas == [(1, 0, None), (1, 1, None), (4, 0, None), (4, 1, None)]
@@ -1954,14 +1957,15 @@ def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monke
         abiertos.append((cfg_run["experimento"]["nombre"], _Run()))
         return abiertos[-1][1]
 
-    monkeypatch.setattr(script, "abrir_run", abrir)
-    monkeypatch.setattr(script, "entrenar_gail", lambda cfg, t, s, c, r, run:
+    monkeypatch.setattr("src.training.gail.abrir_run", abrir)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda cfg, t, s, c, r, run:
                         recibidos.append((cfg, run)) or _resumen_falso())
-    monkeypatch.setattr(script, "guardar_gail", lambda *a: None)
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
     assert script.main() == 0
     assert [nombre for nombre, _ in abiertos] == [f"{cfg['experimento']['nombre']}-gail-"
                                                  f"cartpole-c4-r{r}" for r in (0, 1)]
-    assert [run for _, run in recibidos] == [run for _, run in abiertos]
+    # entrenar_gail recibe el progreso, que reenvía al run de W&B.
+    assert [progreso.run for _, progreso in recibidos] == [run for _, run in abiertos]
     assert all(run.terminado for _, run in abiertos)
     # El nombre del run no cambia la configuración con la que se entrena y se guarda.
     assert all(c["experimento"]["nombre"] == cfg["experimento"]["nombre"] for c, _ in recibidos)
@@ -2001,7 +2005,7 @@ def test_el_script_no_entrena_si_algo_no_es_valido(caso, mensaje, datos_grabados
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos), "--salida", str(salida),
                                                *extra])
     entrenados = []
-    monkeypatch.setattr(script, "entrenar_gail", lambda *a: entrenados.append(1))
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda *a: entrenados.append(1))
     assert script.main() == 2
     assert not entrenados
     assert mensaje in capsys.readouterr().err
@@ -2025,9 +2029,251 @@ def test_el_script_avisa_del_estado_de_git(codigo, aviso, datos_grabados, tmp_pa
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--cantidades",
                                                "1", "--repeticiones", "0", "--salida",
                                                str(tmp_path / "g")])
-    monkeypatch.setattr(script, "entrenar_gail", _resumen_falso)
-    monkeypatch.setattr(script, "guardar_gail", lambda *a: None)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", _resumen_falso)
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
     monkeypatch.setattr(script, "estado_git", lambda: codigo)
     assert script.main() == 0
     error = capsys.readouterr().err
     assert (aviso in error) if aviso else "aviso" not in error
+
+
+def test_el_progreso_reenvia_al_run_e_imprime_una_linea_por_validacion(capsys):
+    from src.utils.tracking import RegistroProgreso
+    run = _RunFalso()
+    progreso = RegistroProgreso(run, "cantidad 4, repetición 0", 5000, 300)
+    entrenamiento = {"pasos": 50000.0, "discriminador/acierto_agente": 0.61,
+                     "discriminador/acierto_experto": 0.58}
+    validacion = {"validacion/retorno_medio": 23.4, "validacion/retorno_desviacion": 1.0,
+                  "validacion/longitud_media": 23.4}
+    progreso.log(entrenamiento, step=50000)
+    assert capsys.readouterr().out == ""
+    progreso.log(validacion, step=50000)
+    linea = capsys.readouterr().out
+    assert run.registros == [(entrenamiento, 50000), (validacion, 50000)]
+    assert linea.startswith("cantidad 4, repetición 0 · iteración 10/300 · 50000 pasos · "
+                            "validación 23.4 · D acierta 0.61 (agente) 0.58 (experto) · ")
+    assert "quedan ~" in linea and linea.count("\n") == 1
+
+
+def test_el_progreso_sin_run_solo_imprime(capsys):
+    from src.utils.tracking import RegistroProgreso
+    progreso = RegistroProgreso(None, "c1 r0", 64, 3)
+    progreso.log({"pasos": 64.0}, step=64)
+    progreso.log({"validacion/retorno_medio": 9.0}, step=192)
+    assert "c1 r0 · iteración 3/3 · 192 pasos · validación 9.0" in capsys.readouterr().out
+
+
+def test_el_script_rechaza_procesos_no_validos(datos_grabados, tmp_path, monkeypatch, capsys):
+    for procesos in (0, -1, 1.5, True, None):
+        cfg = _cfg_script()
+        cfg["experimento"]["procesos"] = procesos
+        script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                                   str(tmp_path / "g")], cfg)
+        entrenados = []
+        monkeypatch.setattr("src.training.gail.entrenar_gail", lambda *a: entrenados.append(1))
+        assert script.main() == 2 and not entrenados
+        assert "experimento.procesos" in capsys.readouterr().err
+
+
+class _FalloPrevisto(RuntimeError):
+    pass
+
+
+def _entrenar_o_fallar(cfg, trayectorias, splits, cantidad, repeticion, run):
+    if (cantidad, repeticion) == (4, 0):
+        raise _FalloPrevisto("fallo de prueba")
+    return _resumen_falso()
+
+
+def test_si_un_entrenamiento_falla_los_demas_siguen(datos_grabados, tmp_path, monkeypatch,
+                                                    capsys):
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")])
+    guardados = []
+    monkeypatch.setattr("src.training.gail.entrenar_gail", _entrenar_o_fallar)
+    monkeypatch.setattr("src.training.gail.guardar_gail",
+                        lambda destino, *a: guardados.append(destino.parts[-2:]))
+    assert script.main() == 1
+    assert guardados == [("cantidad_1", "repeticion_0"), ("cantidad_1", "repeticion_1"),
+                         ("cantidad_4", "repeticion_1")]
+    salida = capsys.readouterr()
+    assert "error en cantidad 4, repetición 0" in salida.err and "fallo de prueba" in salida.err
+    assert "3 de 4 entrenamientos guardados" in salida.out
+
+
+class _ContextoFalso:
+    """Sustituye al contexto spawn: un Pool de hilos para poder sustituir el entrenamiento."""
+
+    def __init__(self, registro: dict) -> None:
+        self.registro = registro
+
+    def Pool(self, procesos, initializer):  # noqa: N802 - mismo nombre que multiprocessing
+        from multiprocessing.pool import ThreadPool
+        registro = self.registro
+        registro.update(procesos=procesos, initializer=initializer)
+
+        class _Hilos(ThreadPool):
+            def imap_unordered(self, funcion, iterable):
+                if registro.get("interrumpir"):
+                    # Ctrl+C llega al proceso principal mientras espera resultados.
+                    raise KeyboardInterrupt
+                return super().imap_unordered(funcion, iterable)
+
+            def terminate(self) -> None:
+                registro["terminado"] = True
+                super().terminate()
+
+        return _Hilos(procesos)  # sin initializer: tocaría las señales del proceso de tests
+
+
+def _con_pool_falso(monkeypatch, script) -> dict:
+    registro: dict = {}
+    original = script.multiprocessing.get_context
+
+    def get_context(metodo=None):
+        if metodo is None:  # ThreadPool lo usa por dentro
+            return original()
+        registro["metodo"] = metodo
+        return _ContextoFalso(registro)
+
+    monkeypatch.setattr(script.multiprocessing, "get_context", get_context)
+    return registro
+
+
+def test_con_varios_procesos_reparte_las_tareas(datos_grabados, tmp_path, monkeypatch, capsys):
+    from src.training.gail import preparar_proceso_barrido
+    cfg = _cfg_script()
+    cfg["experimento"]["procesos"] = 3
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")], cfg)
+    registro = _con_pool_falso(monkeypatch, script)
+    guardados = []
+    monkeypatch.setattr("src.training.gail.entrenar_gail", _entrenar_o_fallar)
+    monkeypatch.setattr("src.training.gail.guardar_gail",
+                        lambda destino, *a: guardados.append(destino.parts[-2:]))
+    assert script.main() == 1
+    # 4 tareas en 3 procesos que arrancan desde cero, preparados con un hilo y sin Ctrl+C.
+    assert (registro["metodo"], registro["procesos"]) == ("spawn", 3)
+    assert registro["initializer"] is preparar_proceso_barrido
+    assert registro["terminado"]  # el with del Pool termina los procesos al salir
+    assert sorted(guardados) == [("cantidad_1", "repeticion_0"), ("cantidad_1", "repeticion_1"),
+                                 ("cantidad_4", "repeticion_1")]
+    salida = capsys.readouterr()
+    assert "error en cantidad 4, repetición 0" in salida.err
+    assert "3 de 4 entrenamientos guardados" in salida.out
+
+
+def test_no_lanza_mas_procesos_que_entrenamientos(datos_grabados, tmp_path, monkeypatch):
+    cfg = _cfg_script()
+    cfg["experimento"]["procesos"] = 8
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--cantidades",
+                                               "4", "--salida", str(tmp_path / "g")], cfg)
+    registro = _con_pool_falso(monkeypatch, script)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", _resumen_falso)
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+    assert script.main() == 0
+    assert registro["procesos"] == 2  # 1 cantidad × 2 repeticiones
+
+
+def test_ctrl_c_en_serie_para_el_barrido(datos_grabados, tmp_path, monkeypatch, capsys):
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")])
+    empezados = []
+
+    def interrumpir(*argumentos):
+        empezados.append(1)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("src.training.gail.entrenar_gail", interrumpir)
+    antes = torch.get_num_threads()
+    torch.set_num_threads(2)
+    try:
+        assert script.main() == 130
+        assert empezados == [1]  # no empieza ningún otro
+        assert torch.get_num_threads() == 2  # también se restaura al interrumpir
+    finally:
+        torch.set_num_threads(antes)
+    assert "interrumpido" in capsys.readouterr().err
+
+
+def test_ctrl_c_en_paralelo_termina_los_procesos(datos_grabados, tmp_path, monkeypatch, capsys):
+    """Regresión: con ProcessPoolExecutor, Ctrl+C esperaba a que terminase todo el barrido."""
+    cfg = _cfg_script()
+    cfg["experimento"]["procesos"] = 3
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")], cfg)
+    registro = _con_pool_falso(monkeypatch, script)
+    registro["interrumpir"] = True
+    assert script.main() == 130
+    assert registro["terminado"]
+    assert "interrumpido" in capsys.readouterr().err
+
+
+def test_preparar_proceso_barrido_deja_un_hilo_y_sin_ctrl_c():
+    """En un proceso spawn de verdad, como los del script."""
+    import multiprocessing
+    import signal
+    from src.training.gail import preparar_proceso_barrido
+    with multiprocessing.get_context("spawn").Pool(
+            1, initializer=preparar_proceso_barrido) as pool:
+        assert pool.apply(torch.get_num_threads) == 1
+        assert pool.apply(signal.getsignal, (signal.SIGINT,)) == signal.SIG_IGN
+
+
+def test_tarea_barrido_devuelve_el_error_sin_propagarlo(monkeypatch):
+    from src.training.gail import tarea_barrido_gail
+    monkeypatch.setattr("src.training.gail.entrenar_y_guardar_gail",
+                        lambda *a: (_ for _ in ()).throw(ValueError("datos raros")))
+    assert tarea_barrido_gail(("cfg", "t", "s", 4, 2, "d", "datos")) == \
+        (4, 2, None, "ValueError('datos raros')")
+    monkeypatch.setattr("src.training.gail.entrenar_y_guardar_gail", lambda *a: {"pasos": 1})
+    assert tarea_barrido_gail(("cfg", "t", "s", 4, 2, "d", "datos")) == (4, 2, {"pasos": 1}, None)
+
+
+def test_en_paralelo_da_los_mismos_modelos_que_en_serie(datos_grabados, tmp_path, monkeypatch,
+                                                         capfd):
+    """Integración con procesos de verdad (spawn): cada entrenamiento solo depende de sus
+    argumentos, así que repartirlos no cambia nada."""
+    from src.training.gail import cargar_gail
+    for procesos, carpeta in ((1, "serie"), (2, "paralelo")):
+        cfg = _cfg_script()
+        cfg["experimento"]["procesos"] = procesos
+        # Redes del tamaño real: con las pequeñas no se notaba el número de hilos.
+        cfg["trpo"]["capas_ocultas"] = [100, 100]
+        cfg["gail"]["discriminador"]["capas_ocultas"] = [100, 100]
+        script, _ = _preparar_script(monkeypatch, [
+            "--datos", str(datos_grabados), "--cantidades", "1", "4", "--repeticiones", "1",
+            "--salida", str(tmp_path / carpeta)], cfg)
+        assert script.main() == 0
+    # capfd: los procesos escriben directamente en la salida estándar, no en sys.stdout.
+    salida = capfd.readouterr().out
+    assert salida.count("2 de 2 entrenamientos guardados") == 2
+    # El progreso también se imprime desde los procesos.
+    assert salida.count("cantidad 4, repetición 1 · iteración 2/2") == 2
+    for cantidad in (1, 4):
+        ruta = Path("cantidad_" + str(cantidad)) / "repeticion_1"
+        agente_s, d_s, meta_s = cargar_gail(tmp_path / "serie" / ruta)
+        agente_p, d_p, meta_p = cargar_gail(tmp_path / "paralelo" / ruta)
+        assert _iguales(_estado(agente_s.policy), _estado(agente_p.policy))
+        assert _iguales(_estado(d_s), _estado(d_p))
+        assert meta_s["resumen"]["historial"] == meta_p["resumen"]["historial"]
+
+
+def test_en_serie_tambien_entrena_con_un_hilo(datos_grabados, tmp_path, monkeypatch):
+    """Regresión: en serie se usaban todos los hilos de PyTorch y, con redes del tamaño
+    real, el modelo salía distinto del entrenado en paralelo (un hilo por proceso)."""
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--cantidades",
+                                               "4", "--repeticiones", "0", "--salida",
+                                               str(tmp_path / "g")])
+    hilos = []
+    monkeypatch.setattr("src.training.gail.entrenar_gail",
+                        lambda *a: hilos.append(torch.get_num_threads()) or _resumen_falso())
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+    antes = torch.get_num_threads()
+    torch.set_num_threads(2)  # un valor conocido distinto de 1
+    try:
+        assert script.main() == 0
+        assert hilos == [1]
+        assert torch.get_num_threads() == 2  # se restaura al terminar
+    finally:
+        torch.set_num_threads(antes)

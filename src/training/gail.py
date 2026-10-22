@@ -18,12 +18,18 @@ entrenar_gail monta las piezas de una repetición con un subconjunto de partidas
 y repite la iteración, registrando un retorno de validación cada cierto tiempo.
 guardar_gail y cargar_gail guardan el resultado como el experto, con el
 discriminador y la procedencia de los datos (procedencia_datos).
+entrenar_y_guardar_gail es un entrenamiento del barrido completo (run de W&B,
+progreso, entrenamiento y guardado). scripts/entrenar_gail.py reparte el barrido
+con tarea_barrido_gail y, en paralelo, prepara cada proceso con
+preparar_proceso_barrido.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import math
+import signal
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -49,7 +55,7 @@ from src.training.trpo import (comprobar_directorio_libre, config_trpo, crear_tr
                                estado_git, estadisticas_normalizacion, evaluar_retorno,
                                iteracion_trpo, ruta_registrada, versiones_y_hardware)
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
-from src.utils.tracking import registrar
+from src.utils.tracking import RegistroProgreso, abrir_run, registrar
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_DISCRIMINADOR = "discriminador.pt"
@@ -928,3 +934,80 @@ def cargar_gail(directorio: Path) -> tuple[TRPO, Discriminador, dict[str, Any]]:
         raise ValueError(f"discriminador.pt no corresponde a gail.json: {error}") from error
     discriminador.eval()
     return TRPO.load(directorio / _ARCHIVO_MODELO, device="cpu"), discriminador, metadatos
+
+
+def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
+                            splits: SplitsDemostraciones, cantidad: int, repeticion: int,
+                            destino: Path, datos: dict[str, str]) -> dict[str, Any]:
+    """Entrena un GAIL del barrido y lo guarda: la tarea de cada proceso del script.
+
+    Abre su propio run de W&B (según wandb.modo, con la cantidad y la
+    repetición en el nombre, provisional), imprime el progreso con
+    RegistroProgreso, entrena con entrenar_gail y guarda con guardar_gail.
+    Solo depende de sus argumentos, así que da lo mismo en serie que en
+    paralelo, en otro proceso.
+
+    Args:
+        cfg: Configuración resuelta.
+        trayectorias: Todas las partidas del dataset.
+        splits: Sus splits.
+        cantidad: Tamaño del subconjunto de train.
+        repeticion: Número de repetición.
+        destino: Carpeta nueva donde guardarlo.
+        datos: Procedencia de los datos (procedencia_datos).
+
+    Returns:
+        El resumen de entrenar_gail.
+
+    Raises:
+        ValueError: Si algo no es válido (ver entrenar_gail y guardar_gail).
+        FileExistsError: Si destino existe con contenido.
+    """
+    entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
+    cfg_run = copy.deepcopy(cfg)
+    cfg_run["experimento"]["nombre"] = (f"{cfg['experimento']['nombre']}-gail-{entorno}-"
+                                        f"c{cantidad}-r{repeticion}")
+    run = abrir_run(cfg_run)
+    progreso = RegistroProgreso(run, f"cantidad {cantidad}, repetición {repeticion}",
+                                cfg["trpo"]["pasos_por_iteracion"], cfg["gail"]["iteraciones"])
+    try:
+        agente, discriminador, resumen = entrenar_gail(cfg, trayectorias, splits, cantidad,
+                                                       repeticion, progreso)
+        guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
+    finally:
+        if run is not None:
+            run.finish()
+    return resumen
+
+
+def preparar_proceso_barrido() -> None:
+    """Prepara un proceso del barrido en paralelo: un hilo de PyTorch y sin Ctrl+C.
+
+    Con un solo hilo, el resultado es el mismo que en serie (con varios cambia el
+    orden de las sumas y el redondeo) y los procesos no se reparten los núcleos.
+    Ctrl+C lo recoge solo el proceso principal, que termina los demás; si no, cada
+    proceso imprimiría su propia traza de error.
+    """
+    torch.set_num_threads(1)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def tarea_barrido_gail(argumentos: tuple[Any, ...]) -> tuple[int, int, dict[str, Any] | None,
+                                                               str | None]:
+    """Ejecuta entrenar_y_guardar_gail para un elemento del barrido sin propagar sus errores.
+
+    Args:
+        argumentos: (cfg, trayectorias, splits, cantidad, repeticion, destino, datos), los
+            argumentos de entrenar_y_guardar_gail en una tupla, como los reparte un Pool.
+
+    Returns:
+        (cantidad, repeticion, resumen, None) si va bien, o (cantidad, repeticion, None,
+        descripción del error) si falla: un fallo no detiene el resto del barrido.
+    """
+    cfg, trayectorias, splits, cantidad, repeticion, destino, datos = argumentos
+    try:
+        resumen = entrenar_y_guardar_gail(cfg, trayectorias, splits, cantidad, repeticion,
+                                          destino, datos)
+    except Exception as error:  # noqa: BLE001 - se informa y sigue el barrido
+        return cantidad, repeticion, None, repr(error)
+    return cantidad, repeticion, resumen, None

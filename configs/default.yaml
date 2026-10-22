@@ -7,6 +7,11 @@ experimento:
   # Repeticiones de BC y GAIL por cada subconjunto, con semillas de modelo
   # distintas (codigo original: runs 7 en los entornos clasicos, 1 en MuJoCo).
   repeticiones: 7
+  # Entrenamientos que scripts/entrenar_gail.py lanza a la vez, cada uno en su
+  # proceso con un hilo. No cambia los resultados: cada entrenamiento depende solo
+  # de su cantidad y su repeticion. Depende de la maquina: como mucho, los nucleos
+  # fisicos, y unos 830 MB de RAM por proceso (medido en CartPole). 1 = en serie.
+  procesos: 5
   # Semilla base de las repeticiones. La repeticion r saca de ella sus semillas
   # (modelo, pares, entornos y evaluacion) con semillas_repeticion; BC y GAIL
   # comparten las de cada repeticion.
