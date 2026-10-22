@@ -8,8 +8,9 @@
   bloques y se queda con el mejor modelo.
 - guardar_experto y cargar_experto guardan el modelo y sus metadatos.
 - politica_trpo convierte el modelo en una función de observación a acción, la
-  que usan evaluar_retorno y la grabación de demostraciones (jugar_partida);
-  cargar_politica_experto la prepara desde un experto guardado.
+  que usa la grabación de demostraciones (jugar_partida); cargar_politica_experto
+  la prepara desde un experto guardado. evaluar_retorno delega en el protocolo
+  común de evaluación (evaluar_politica, en evaluacion.py).
 
 Las semillas salen de src/utils/seed.py: nunca se pasa seed= a TRPO, porque sb3
 volvería a sembrar los generadores globales y los entornos por su cuenta.
@@ -20,29 +21,25 @@ from __future__ import annotations
 import copy
 import json
 import math
-import platform
 import shutil
-import subprocess
 import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import gymnasium as gym
 import numpy as np
-import sb3_contrib
-import stable_baselines3
 import torch
 from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 
-from src.data.demostraciones import (Politica, config_demostraciones, jugar_partida,
-                                     retorno_partida)
-from src.data.entornos import crear_entorno, crear_entorno_vectorizado
+from src.data.demostraciones import Politica, config_demostraciones
+from src.data.entornos import crear_entorno_vectorizado
 from src.data.splits import huella_archivo
 from src.models.factory import ACTIVACIONES
+from src.training.evaluacion import evaluar_politica, normalizar_observacion
+from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
 from src.utils.tracking import registrar
 
@@ -116,17 +113,6 @@ def _semilla_valida(valor: object) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _a_json(valor: object) -> object:
-    """Convierte escalares de NumPy a tipos de Python para guardarlos en JSON.
-
-    Raises:
-        TypeError: Si el valor no se puede convertir, como hace json por defecto.
-    """
-    if isinstance(valor, (np.integer, np.floating, np.bool_)):
-        return valor.item()
-    raise TypeError(f"{type(valor).__name__} no se puede guardar en JSON")
 
 
 def _config_experto(cfg: dict) -> dict:
@@ -258,21 +244,6 @@ def estadisticas_normalizacion(venv: VecEnv) -> dict[str, Any] | None:
     return None
 
 
-def normalizar_observacion(observacion: np.ndarray,
-                           estadisticas: dict[str, Any] | None) -> np.ndarray:
-    """Aplica la normalización de VecNormalize con unas estadísticas guardadas.
-
-    Con None devuelve la observación sin cambios. La fórmula es la de sb3:
-    recorte de (obs − media) / sqrt(varianza + epsilon) a ±limite.
-    """
-    if estadisticas is None:
-        return observacion
-    media = np.asarray(estadisticas["media"])
-    escala = np.sqrt(np.asarray(estadisticas["varianza"]) + estadisticas["epsilon"])
-    limite = estadisticas["limite"]
-    return np.clip((observacion - media) / escala, -limite, limite).astype(np.float32)
-
-
 def politica_trpo(modelo: TRPO, determinista: bool,
                   estadisticas: dict[str, Any] | None = None) -> Politica:
     """Convierte el modelo en una función de observación en bruto a acción.
@@ -308,13 +279,9 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
                     estadisticas: dict[str, Any] | None = None) -> dict[str, Any]:
     """Juega episodios completos con el modelo y mide el retorno real.
 
-    Evaluación mínima para elegir el experto; la de la rama
-    evaluacion-checkpoints la sustituirá. Cada episodio es una partida de
-    jugar_partida con su propia semilla, derivada de semilla con
-    semillas_independientes, tanto para el entorno como para las acciones
-    muestreadas. Así la misma semilla da siempre el mismo resultado, cada
-    episodio no depende de cuántos haya y evaluar no altera el generador
-    global, es decir, el entrenamiento.
+    Usa el protocolo común de evaluacion-checkpoints. Cada episodio recibe una
+    semilla derivada de semilla, compartible con BC y GAIL, y la recompensa es
+    la real del entorno incluso si el modelo se entrenó con GAIL.
 
     Args:
         modelo: Agente TRPO.
@@ -325,66 +292,13 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
         estadisticas: De estadisticas_normalizacion si el modelo normaliza.
 
     Returns:
-        retorno_medio, retorno_desviacion, longitud_media y retornos (uno por
-        episodio, en el orden de las semillas).
+        retorno_medio, retorno_desviacion, longitud_media, retornos y
+        longitudes (una por episodio, en el orden de las semillas).
 
     Raises:
         ValueError: Si episodios o semilla no son válidos.
     """
-    if not _es_entero_positivo(episodios):
-        raise ValueError(f"episodios debe ser un entero positivo, no {episodios!r}")
-    semillas = semillas_independientes(validar_semilla(semilla), episodios)
-    politica = politica_trpo(modelo, determinista, estadisticas)
-    entorno = crear_entorno(cfg, None)
-    try:
-        partidas = [jugar_partida(entorno, politica, semilla_episodio, indice)
-                    for indice, semilla_episodio in enumerate(semillas)]
-    finally:
-        entorno.close()
-    retornos = [retorno_partida(p) for p in partidas]
-    longitudes = [p.numero_pasos for p in partidas]
-    return {"retorno_medio": float(np.mean(retornos)),
-            "retorno_desviacion": float(np.std(retornos)),
-            "longitud_media": float(np.mean(longitudes)),
-            "retornos": retornos}
-
-
-def estado_git() -> dict[str, Any]:
-    """Devuelve el commit del repositorio y si había cambios sin commit.
-
-    Sirve para saber con qué código se generó un resultado. Si hay cambios sin
-    commit (incluidos archivos nuevos no ignorados), el resultado no se puede
-    reproducir exactamente desde el repositorio. Si git no está disponible o
-    esto no es un repositorio (por ejemplo, una copia sin .git), ambos valores
-    son None en vez de fallar.
-
-    Returns:
-        {"commit": hash completo o None, "cambios_sin_commit": bool o None}.
-    """
-    raiz = Path(__file__).resolve().parents[2]
-    try:
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=raiz, capture_output=True,
-                                text=True, check=True, timeout=10).stdout.strip()
-        cambios = subprocess.run(["git", "status", "--porcelain"], cwd=raiz,
-                                 capture_output=True, text=True, check=True,
-                                 timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return {"commit": None, "cambios_sin_commit": None}
-    return {"commit": commit, "cambios_sin_commit": bool(cambios)}
-
-
-def versiones_y_hardware() -> dict[str, Any]:
-    """Versiones de las librerías y descripción del hardware, para los metadatos."""
-    return {
-        "python": platform.python_version(),
-        "torch": torch.__version__,
-        "stable_baselines3": stable_baselines3.__version__,
-        "sb3_contrib": sb3_contrib.__version__,
-        "gymnasium": gym.__version__,
-        "plataforma": platform.platform(),
-        "procesador": platform.processor() or platform.machine(),
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-    }
+    return evaluar_politica(modelo, cfg, episodios, semilla, determinista, estadisticas)
 
 
 def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
@@ -543,7 +457,7 @@ def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
                  "entorno_ejecucion": versiones_y_hardware()}
     # Se serializa antes de crear nada: un NaN no deja una carpeta a medias.
     texto = json.dumps(metadatos, ensure_ascii=False, indent=2, allow_nan=False,
-                       default=_a_json)
+                       default=a_json)
 
     def escribir(carpeta: Path) -> None:
         """Escribe experto.json y modelo.zip en carpeta."""
@@ -572,14 +486,6 @@ def cargar_experto(directorio: Path) -> tuple[TRPO, dict[str, Any]]:
     with (directorio / _ARCHIVO_METADATOS).open(encoding="utf-8") as archivo:
         metadatos = json.load(archivo)
     return TRPO.load(directorio / _ARCHIVO_MODELO, device="cpu"), metadatos
-
-
-def ruta_registrada(ruta: Path) -> str:
-    """Ruta relativa a la carpeta de trabajo, o solo el nombre: nunca una ruta absoluta."""
-    try:
-        return ruta.resolve().relative_to(Path.cwd().resolve()).as_posix()
-    except ValueError:
-        return ruta.name
 
 
 def cargar_politica_experto(directorio: Path, cfg: dict) -> tuple[Politica, dict[str, Any]]:

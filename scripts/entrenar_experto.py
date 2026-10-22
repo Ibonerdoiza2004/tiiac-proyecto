@@ -25,8 +25,9 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from src.training.trpo import (comprobar_directorio_libre, entrenar_experto,  # noqa: E402
-                               estado_git, guardar_experto)
+                               guardar_experto)
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
+from src.utils.procedencia import estado_git  # noqa: E402
 from src.utils.tracking import abrir_run, terminar_run  # noqa: E402
 
 

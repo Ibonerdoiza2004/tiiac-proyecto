@@ -41,3 +41,7 @@ gail:
   # Código original de GAIL: −log(1 − D), porque las partidas terminan al fallar
   # (cuts_off_on_success: false en im_classic_pipeline.yaml).
   recompensa: menos_log_uno_menos_d
+evaluacion:
+  episodios: 50  # Protocolo común fijado por la rama evaluacion-checkpoints.
+  semilla: 9000
+  determinista: true  # Como evalúa el original las políticas aprendidas.

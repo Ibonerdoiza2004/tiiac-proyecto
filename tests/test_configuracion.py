@@ -155,7 +155,8 @@ TAMANOS = [("experimento", "repeticiones"), ("demostraciones", "partidas_train")
            ("demostraciones", "partidas_validacion"), ("demostraciones", "subconjuntos"),
            ("demostraciones", "frecuencia_pares"), ("gail", "iteraciones"),
            ("gail", "evaluar_cada"), ("gail", "episodios_evaluacion"),
-           ("gail", "evaluacion_determinista")]
+           ("gail", "evaluacion_determinista"), ("evaluacion", "episodios"),
+           ("evaluacion", "semilla"), ("evaluacion", "determinista")]
 
 
 @pytest.mark.parametrize("entorno", list(TipoEntorno))
@@ -177,6 +178,7 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     base["demostraciones"]["frecuencia_pares"] = 3
     base["gail"].update(iteraciones=20, evaluar_cada=1, episodios_evaluacion=50,
                         evaluacion_determinista=False)
+    base["evaluacion"].update(episodios=12, semilla=123, determinista=False)
     (tmp_path / "entornos").mkdir()
     (tmp_path / "base.yaml").write_text(yaml.safe_dump(base), encoding="utf-8")
     perfil = RAIZ / "configs" / "entornos" / "cartpole.yaml"
@@ -193,6 +195,7 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
                    "evaluacion_determinista")}
     assert evaluacion == {"iteraciones": 80, "evaluar_cada": 10, "episodios_evaluacion": 10,
                           "evaluacion_determinista": True}
+    assert cfg["evaluacion"] == {"episodios": 50, "semilla": 9000, "determinista": True}
 
 
 @pytest.mark.parametrize("entorno", list(TipoEntorno))

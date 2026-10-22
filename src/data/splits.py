@@ -101,8 +101,14 @@ def comprobar_cantidades(
                          f"{cantidad_train} partidas de train")
 
 
-def _comprobar_huella(huella: object) -> None:
-    """Exige una huella SHA-256 en hexadecimal en minúsculas."""
+def comprobar_huella(huella: object) -> None:
+    """Exige una huella SHA-256 en hexadecimal en minúsculas, como la de huella_archivo.
+
+    La usan los splits y los checkpoints para citar el dataset con el que se crearon.
+
+    Raises:
+        ValueError: Si no es un texto de 64 caracteres hexadecimales en minúsculas.
+    """
     if (not isinstance(huella, str) or len(huella) != 64
             or any(c not in "0123456789abcdef" for c in huella)):
         raise ValueError("La huella del dataset debe ser un SHA-256 hexadecimal de 64 caracteres")
@@ -141,7 +147,7 @@ def crear_splits(
             distinto del pedido, generador o huella no válidos.
     """
     comprobar_cantidades(cantidad_train, cantidad_validacion, cantidades_subconjuntos)
-    _comprobar_huella(huella_dataset)
+    comprobar_huella(huella_dataset)
     if not isinstance(generador, np.random.Generator):
         raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")
     if (isinstance(trayectorias, (str, bytes)) or not isinstance(trayectorias, Sequence)
@@ -190,7 +196,7 @@ def validar_splits(splits: SplitsDemostraciones, ids_disponibles: Iterable[int])
     """
     if not isinstance(splits, SplitsDemostraciones):
         raise ValueError("Se esperaba un objeto SplitsDemostraciones")
-    _comprobar_huella(splits.huella_dataset)
+    comprobar_huella(splits.huella_dataset)
     disponibles = list(ids_disponibles)
     if (not all(es_id_episodio(i) for i in disponibles)
             or len(set(disponibles)) != len(disponibles)):
@@ -307,7 +313,7 @@ def cargar_splits(
     origen = Path(ruta)
     if origen.suffix != ".json":
         raise ValueError("La ruta de splits debe terminar en .json")
-    _comprobar_huella(huella_dataset)
+    comprobar_huella(huella_dataset)
     try:
         contenido = json.loads(origen.read_text(encoding="utf-8"),
                                parse_constant=_rechazar_constante)

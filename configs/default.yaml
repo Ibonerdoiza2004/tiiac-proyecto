@@ -140,6 +140,11 @@ gail:
   # menos_log_uno_menos_d o log_d. Depende del entorno: va en configs/entornos/.
   recompensa: null
 
+evaluacion:
+  episodios: 50  # Código original de GAIL; las semillas se comparten entre agentes.
+  semilla: 9000  # Independiente de entrenamiento y demostraciones.
+  determinista: true  # Como evalúa el original las políticas aprendidas.
+
 entrenamiento:
   learning_rate: 0.001
   epochs: 20

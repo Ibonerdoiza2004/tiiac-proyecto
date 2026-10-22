@@ -54,8 +54,9 @@ from src.data.entornos import crear_entorno  # noqa: E402
 from src.data.splits import cargar_splits, huella_archivo  # noqa: E402
 from src.training.gail import (comprobar_config_barrido, ejecutar_tarea_barrido,  # noqa: E402
                                procedencia_datos, tarea_barrido_gail)
-from src.training.trpo import comprobar_directorio_libre, estado_git  # noqa: E402
+from src.training.trpo import comprobar_directorio_libre  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
+from src.utils.procedencia import estado_git  # noqa: E402
 
 _DEMOSTRACIONES = "demostraciones.npz"
 _SPLITS = "splits.json"

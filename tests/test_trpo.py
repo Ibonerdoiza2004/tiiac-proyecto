@@ -29,6 +29,7 @@ from src.training.trpo import (cargar_experto, cargar_politica_experto, crear_tr
                                entrenar_experto, estadisticas_normalizacion, evaluar_retorno,
                                guardar_experto, iteracion_trpo, normalizar_observacion,
                                politica_trpo)
+from src.utils import procedencia
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import (fijar_seed, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes)
@@ -255,7 +256,10 @@ def test_evaluar_retorno_es_reproducible(entorno, determinista):
     torch.rand(7)  # el generador global cambia y no debe influir
     b = evaluar_retorno(modelo, cfg, 3, 9, determinista)
     assert a == b
-    assert set(a) == {"retorno_medio", "retorno_desviacion", "longitud_media", "retornos"}
+    assert set(a) == {"retorno_medio", "retorno_desviacion", "longitud_media",
+                      "retornos", "longitudes"}
+    assert len(a["longitudes"]) == len(a["retornos"]) == 3
+    assert a["longitud_media"] == np.mean(a["longitudes"])
     assert len(a["retornos"]) == 3
 
 
@@ -452,7 +456,7 @@ def test_guardar_y_cargar_dan_las_mismas_acciones(entorno, tmp_path):
     assert metadatos["resumen"]["mejor_retorno"] == resumen["mejor_retorno"]
     assert {"python", "torch", "sb3_contrib", "gymnasium", "procesador"} <= set(
         metadatos["entorno_ejecucion"])
-    assert metadatos["codigo"] == trpo.estado_git()
+    assert metadatos["codigo"] == procedencia.estado_git()
 
 
 def test_guardar_no_sobrescribe_y_cargar_exige_los_archivos(tmp_path):
@@ -568,7 +572,7 @@ def _script():
 
 def test_estado_git_da_el_commit_actual_y_los_cambios():
     import subprocess
-    estado = trpo.estado_git()
+    estado = procedencia.estado_git()
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=RAIZ, capture_output=True,
                             text=True, check=True).stdout.strip()
     cambios = subprocess.run(["git", "status", "--porcelain"], cwd=RAIZ, capture_output=True,
@@ -585,8 +589,8 @@ def test_estado_git_sin_git_no_falla(error, monkeypatch):
         if error == "proceso":
             raise subprocess.CalledProcessError(128, args[0])
         raise error
-    monkeypatch.setattr(trpo.subprocess, "run", falla)
-    assert trpo.estado_git() == {"commit": None, "cambios_sin_commit": None}
+    monkeypatch.setattr(procedencia.subprocess, "run", falla)
+    assert procedencia.estado_git() == {"commit": None, "cambios_sin_commit": None}
 
 
 @pytest.mark.parametrize("codigo,aviso", [

@@ -53,9 +53,9 @@ from src.data.splits import SplitsDemostraciones, huella_archivo
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, comprobar_arquitectura, construir_discriminador
 from src.training.trpo import (comprobar_directorio_libre, config_trpo, crear_trpo,
-                               escribir_carpeta_nueva, estado_git,
-                               estadisticas_normalizacion, evaluar_retorno,
-                               iteracion_trpo, ruta_registrada, versiones_y_hardware)
+                               escribir_carpeta_nueva, estadisticas_normalizacion,
+                               evaluar_retorno, iteracion_trpo)
+from src.utils.procedencia import estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, validar_semilla
 from src.utils.tracking import RegistroProgreso, abrir_run, registrar, terminar_run
 
@@ -903,8 +903,9 @@ def guardar_gail(directorio: Path, agente: TRPO, discriminador: Discriminador, c
       (cantidad, repetición, IDs de las partidas, semillas, medidas,
       validaciones, tiempo y normalización), la procedencia de los datos
       (procedencia_datos), los argumentos para reconstruir el discriminador
-      (leídos del propio discriminador, activación incluida), el commit de git y si había cambios sin commit, las versiones y el
-      hardware. Es JSON estricto: las medidas no definidas (nan, por ejemplo
+      (leídos del propio discriminador, activación incluida), el commit de
+      git y si había cambios sin commit, las versiones y el hardware. Es JSON
+      estricto: las medidas no definidas (nan, por ejemplo
       el retorno de una iteración en la que no terminó ninguna partida) se
       guardan como null.
 
