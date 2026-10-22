@@ -11,6 +11,8 @@ experimento:
   # proceso con un hilo. No cambia los resultados: cada entrenamiento depende solo
   # de su cantidad y su repeticion. Depende de la maquina: como mucho, los nucleos
   # fisicos, y unos 830 MB de RAM por proceso (medido en CartPole). 1 = en serie.
+  # 5 para el PC en el que se midio (6 nucleos fisicos, 7,9 GB en WSL); en otra
+  # maquina hay que ajustarlo (Colab gratuito tiene 2 nucleos virtuales).
   procesos: 5
   # Semilla base de las repeticiones. La repeticion r saca de ella sus semillas
   # (modelo, pares, entornos y evaluacion) con semillas_repeticion; BC y GAIL

@@ -1777,6 +1777,8 @@ def test_guardar_gail_admite_carpeta_vacia_y_no_sobrescribe(tmp_path):
     ("datos_incompletos", ValueError, "procedencia_datos"),
     ("otros_datos", ValueError, "huella del NPZ"),
     ("otra_arquitectura", ValueError, "no corresponde a gail.discriminador"),
+    # Regresión: la activación no tiene pesos y load_state_dict no la detectaba.
+    ("otra_activacion", ValueError, "activación 'tanh'.*pide \\[8\\] y 'relu'"),
     ("sin_config_discriminador", ValueError, "no corresponde a gail.discriminador"),
     ("valor_no_json", TypeError, "no se puede guardar"),
 ])
@@ -1788,6 +1790,9 @@ def test_guardar_gail_lo_comprueba_todo_antes_de_crear_la_carpeta(tmp_path, caso
                   "resumen": resumen, "datos": datos}
     otra_cfg = copy.deepcopy(cfg)
     otra_cfg["gail"]["discriminador"]["capas_ocultas"] = [16]
+    assert discriminador.activacion == "tanh"
+    relu_cfg = copy.deepcopy(cfg)
+    relu_cfg["gail"]["discriminador"]["activacion"] = "relu"
     sin_d = copy.deepcopy(cfg)
     del sin_d["gail"]["discriminador"]
     argumentos.update({
@@ -1796,6 +1801,7 @@ def test_guardar_gail_lo_comprueba_todo_antes_de_crear_la_carpeta(tmp_path, caso
         "datos_incompletos": {"datos": {"huella_dataset": datos["huella_dataset"]}},
         "otros_datos": {"datos": {**datos, "huella_dataset": "b" * 64}},
         "otra_arquitectura": {"cfg": otra_cfg},
+        "otra_activacion": {"cfg": relu_cfg},
         "sin_config_discriminador": {"cfg": sin_d},
         "valor_no_json": {"resumen": {**resumen, "raro": object()}},
     }[caso])
@@ -1803,6 +1809,62 @@ def test_guardar_gail_lo_comprueba_todo_antes_de_crear_la_carpeta(tmp_path, caso
     with pytest.raises(error, match=mensaje):
         guardar_gail(destino, **argumentos)
     assert not destino.exists()
+
+
+@pytest.mark.parametrize("archivo", ["discriminador.pt", "modelo.zip"])
+def test_guardar_gail_no_deja_una_carpeta_a_medias(tmp_path, archivo, monkeypatch):
+    """Regresión: si fallaba al escribir el modelo o el discriminador, quedaba una carpeta
+    con gail.json que además impedía volver a guardar ahí."""
+    from src.training.gail import cargar_gail, guardar_gail
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path / "datos")
+    destino = tmp_path / "gail"
+
+    def falla(*a, **k):
+        raise OSError("disco lleno")
+
+    with monkeypatch.context() as parche:
+        if archivo == "modelo.zip":
+            # En la clase: un save en el propio agente se guardaría luego con él.
+            parche.setattr(type(agente), "save", falla)
+        else:
+            parche.setattr("src.training.gail.torch.save", falla)
+        with pytest.raises(OSError, match="disco lleno"):
+            guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["datos"]  # ni carpeta ni temporal
+    guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
+    cargar_gail(destino)
+
+
+@pytest.mark.parametrize("activacion", ["tanh", "relu"])
+def test_guardar_y_cargar_gail_conserva_la_activacion(tmp_path, activacion):
+    """Lo guardado sale del propio discriminador: al cargarlo da las mismas salidas,
+    sea cual sea la activación (todas las de ACTIVACIONES)."""
+    from src.models.factory import ACTIVACIONES
+    from src.training.gail import cargar_gail, guardar_gail
+    assert set(ACTIVACIONES) == {"tanh", "relu"}
+    cfg = _cfg_gail(iteraciones=2)
+    cfg["gail"]["discriminador"]["activacion"] = activacion
+    agente, discriminador, cfg, resumen, datos = _entrenado(tmp_path, cfg)
+    guardar_gail(tmp_path / "gail", agente, discriminador, cfg, resumen, datos)
+    _, cargado, metadatos = cargar_gail(tmp_path / "gail")
+    assert metadatos["discriminador"]["activacion"] == activacion
+    assert cargado.activacion == activacion and cargado.capas_ocultas == (8,)
+    # Entradas lejos de 0, donde tanh y relu dan valores distintos.
+    estados = torch.as_tensor(crear_generador(4).normal(scale=3.0, size=(20, 4)),
+                              dtype=torch.float32)
+    acciones = torch.zeros(20, dtype=torch.int64)
+    with torch.no_grad():
+        assert torch.equal(cargado(estados, acciones), discriminador.eval()(estados, acciones))
+
+
+def test_la_red_guarda_su_arquitectura_sin_cambiar_el_state_dict():
+    from src.models.factory import PoliticaBC
+    discriminador = Discriminador(3, 2, False, [8, 4], "relu")
+    politica = PoliticaBC(3, 2, False, [8, 4], "relu")
+    for red in (discriminador, politica):
+        assert (red.capas_ocultas, red.activacion) == ((8, 4), "relu")
+        # Son atributos, no buffers: los pesos guardados (y los de BC) no cambian.
+        assert not any("capas" in clave or "activacion" in clave for clave in red.state_dict())
 
 
 @pytest.mark.parametrize("falta", ["modelo.zip", "discriminador.pt", "gail.json"])
@@ -1944,6 +2006,34 @@ def test_el_script_entrena_por_defecto_todo_el_barrido(datos_grabados, tmp_path,
                          for c in (1, 4) for r in (0, 1)]
 
 
+def test_el_barrido_por_defecto_es_el_de_la_configuracion(datos_grabados, tmp_path,
+                                                          monkeypatch):
+    """Regresión: sin --cantidades se entrenaban todos los subconjuntos de los splits
+    ([1, 4]) aunque la configuración pidiera menos."""
+    cfg = _cfg_script()
+    cfg["demostraciones"]["subconjuntos"] = [1]
+    llamadas = []
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "gail")], cfg)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda cfg, t, s, c, r, run:
+                        llamadas.append((c, r)) or _resumen_falso())
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+    assert script.main() == 0
+    assert llamadas == [(1, 0), (1, 1)]
+
+
+def test_el_barrido_de_la_configuracion_debe_estar_en_los_splits(datos_grabados, tmp_path,
+                                                                 monkeypatch, capsys):
+    cfg = _cfg_script()
+    cfg["demostraciones"]["subconjuntos"] = [1, 3]  # los splits solo tienen 1 y 4
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "gail")], cfg)
+    entrenados = []
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda *a: entrenados.append(1))
+    assert script.main() == 2 and not entrenados
+    assert "los splits tienen subconjuntos de [1, 4]" in capsys.readouterr().err
+
+
 def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monkeypatch):
     cfg = _cfg_script()
     cfg["wandb"]["modo"] = "offline"
@@ -1952,8 +2042,8 @@ def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monke
     abiertos, recibidos = [], []
 
     class _Run(_RunFalso):
-        def finish(self) -> None:
-            self.terminado = True
+        def finish(self, exit_code=None) -> None:
+            self.terminado = exit_code
 
     def abrir(cfg_run):
         abiertos.append((cfg_run["experimento"]["nombre"], _Run()))
@@ -1968,9 +2058,62 @@ def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monke
                                                  f"cartpole-c4-r{r}" for r in (0, 1)]
     # entrenar_gail recibe el progreso, que reenvía al run de W&B.
     assert [progreso.run for _, progreso in recibidos] == [run for _, run in abiertos]
-    assert all(run.terminado for _, run in abiertos)
+    assert all(run.terminado == 0 for _, run in abiertos)  # cerrados como correctos
     # El nombre del run no cambia la configuración con la que se entrena y se guarda.
     assert all(c["experimento"]["nombre"] == cfg["experimento"]["nombre"] for c, _ in recibidos)
+
+
+class _RunCerrable(_RunFalso):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cierres: list = []
+
+    def finish(self, exit_code=None) -> None:
+        self.cierres.append(exit_code)
+
+
+def test_terminar_run_da_el_codigo_de_salida_de_cada_caso():
+    from src.utils.tracking import terminar_run
+    terminar_run(None)  # sin run no hace nada
+    terminar_run(None, ValueError("x"))
+    run = _RunCerrable()
+    for error in (None, ValueError("x"), FileExistsError("x"), KeyboardInterrupt()):
+        terminar_run(run, error)
+    # W&B: 0 es Finished y cualquier otro, Failed; 130 como el Ctrl+C de los scripts.
+    assert run.cierres == [0, 1, 1, 130]
+
+
+@pytest.mark.parametrize("fallo,error,codigo", [
+    (None, None, 0),
+    ("entrenar", RuntimeError, 1),
+    ("guardar", FileExistsError, 1),
+    ("entrenar", KeyboardInterrupt, 130),
+])
+def test_un_entrenamiento_fallido_se_cierra_como_fallido_en_wandb(fallo, error, codigo,
+                                                                  monkeypatch):
+    """Regresión: finish() sin código marcaba como correctos los entrenamientos fallidos."""
+    from src.training.gail import entrenar_y_guardar_gail
+    run = _RunCerrable()
+    monkeypatch.setattr("src.training.gail.abrir_run", lambda cfg: run)
+
+    def entrenar(*_):
+        if fallo == "entrenar":
+            raise error("fallo de prueba")
+        return _resumen_falso()
+
+    def guardar(*_):
+        if fallo == "guardar":
+            raise error("fallo de prueba")
+
+    monkeypatch.setattr("src.training.gail.entrenar_gail", entrenar)
+    monkeypatch.setattr("src.training.gail.guardar_gail", guardar)
+    argumentos = (_cfg_script(), [], None, 4, 0, Path("destino"), {})
+    if error is None:
+        entrenar_y_guardar_gail(*argumentos)
+    else:
+        with pytest.raises(error):  # el error sigue propagándose
+            entrenar_y_guardar_gail(*argumentos)
+    assert run.cierres == [codigo]  # se cierra una sola vez
 
 
 @pytest.mark.parametrize("caso,mensaje", [
@@ -2077,6 +2220,86 @@ def test_el_script_rechaza_procesos_no_validos(datos_grabados, tmp_path, monkeyp
         assert "experimento.procesos" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("seccion,clave,valor,mensaje", [
+    # Regresión: con 0 o −1 se lanzaba un barrido de cero procesos, con texto saltaba
+    # TypeError y con true se entrenaba una repetición.
+    ("experimento", "repeticiones", 0, "experimento.repeticiones"),
+    ("experimento", "repeticiones", -1, "experimento.repeticiones"),
+    ("experimento", "repeticiones", "dos", "experimento.repeticiones"),
+    ("experimento", "repeticiones", True, "experimento.repeticiones"),
+    ("experimento", "repeticiones", 2.0, "experimento.repeticiones"),
+    ("experimento", "semilla_repeticiones", -1, "experimento.semilla_repeticiones"),
+    ("experimento", "semilla_repeticiones", None, "experimento.semilla_repeticiones"),
+    # Regresión: estos fallaban dentro de cada entrenamiento y el script salía con 1.
+    ("gail", "evaluar_cada", 0, "gail.evaluar_cada"),
+    ("gail", "iteraciones", None, "gail.iteraciones"),
+    ("gail", "recompensa", "otra", "gail.recompensa"),
+    ("demostraciones", "frecuencia_pares", 0, "demostraciones.frecuencia_pares"),
+    ("demostraciones", "frecuencia_pares", None, "demostraciones.frecuencia_pares"),
+    ("demostraciones", "subconjuntos", [4, 1], "subconjuntos"),
+    ("trpo", "n_entornos", 3, "divisible por trpo.n_entornos"),
+])
+def test_el_script_rechaza_la_configuracion_antes_de_entrenar(seccion, clave, valor, mensaje,
+                                                              datos_grabados, tmp_path,
+                                                              monkeypatch, capsys):
+    cfg = _cfg_script()
+    cfg[seccion][clave] = valor
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")], cfg)
+    entrenados = []
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda *a: entrenados.append(1))
+    assert script.main() == 2 and not entrenados
+    error = capsys.readouterr().err
+    assert "error de configuración" in error and mensaje in error
+    assert not (tmp_path / "g").exists()
+
+
+@pytest.mark.parametrize("cambio,mensaje", [
+    # Regresión: la arquitectura del discriminador no se comprobaba antes del barrido y
+    # cada entrenamiento fallaba por separado (salida 1 en lugar de 2).
+    ({"activacion": "sigmoide"}, "activacion desconocida"),
+    ({"activacion": None}, "activacion desconocida"),
+    ({"capas_ocultas": [-1]}, "capas_ocultas"),
+    ({"capas_ocultas": [8, 0]}, "capas_ocultas"),
+    ({"capas_ocultas": [8.5]}, "capas_ocultas"),
+    ({"capas_ocultas": "100"}, "capas_ocultas"),
+    ({"capas_ocultas": None}, "capas_ocultas"),
+])
+def test_el_script_rechaza_una_arquitectura_del_discriminador_no_valida(
+        cambio, mensaje, datos_grabados, tmp_path, monkeypatch, capsys):
+    cfg = _cfg_script()
+    cfg["gail"]["discriminador"].update(cambio)
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")], cfg)
+    entrenados = []
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda *a: entrenados.append(1))
+    assert script.main() == 2 and not entrenados
+    error = capsys.readouterr().err
+    assert "gail.discriminador no es válido" in error and mensaje in error
+
+
+@pytest.mark.parametrize("clave", ["capas_ocultas", "activacion"])
+def test_la_config_del_discriminador_exige_su_arquitectura(clave):
+    from src.training.gail import comprobar_config_barrido
+    cfg = _cfg_script()
+    del cfg["gail"]["discriminador"][clave]
+    with pytest.raises(ValueError, match=f"gail.discriminador con .*{clave}"):
+        comprobar_config_barrido(cfg)
+
+
+def test_comprobar_config_barrido_acepta_la_del_proyecto_y_enteros_de_numpy():
+    from src.training.gail import comprobar_config_barrido
+    comprobar_config_barrido(resolver_configuracion(RAIZ / "configs" / "default.yaml",
+                                                    "cartpole"))
+    cfg = _cfg_script()
+    cfg["experimento"].update(repeticiones=np.int64(2), procesos=np.int32(1),
+                              semilla_repeticiones=np.int64(7))
+    cfg["demostraciones"]["frecuencia_pares"] = np.int64(2)
+    comprobar_config_barrido(cfg)
+    with pytest.raises(ValueError, match="sección experimento"):
+        comprobar_config_barrido({**_cfg_script(), "experimento": None})
+
+
 class _FalloPrevisto(RuntimeError):
     pass
 
@@ -2104,60 +2327,88 @@ def test_si_un_entrenamiento_falla_los_demas_siguen(datos_grabados, tmp_path, mo
 
 
 class _ContextoFalso:
-    """Sustituye al contexto spawn: un Pool de hilos para poder sustituir el entrenamiento."""
+    """Sustituye al contexto spawn: cada «proceso» es un hilo, para poder sustituir el
+    entrenamiento. El Pipe es real y el hilo recibe su propia copia del extremo de
+    escritura, como un proceso nuevo, así que el script puede cerrar la suya."""
 
     def __init__(self, registro: dict) -> None:
         self.registro = registro
+        registro.update(lanzados=0, vivos=0, maximo=0, terminados=0, objetivos=set())
 
-    def Pool(self, procesos, initializer):  # noqa: N802 - mismo nombre que multiprocessing
-        from multiprocessing.pool import ThreadPool
+    def Pipe(self, duplex):  # noqa: N802 - mismo nombre que multiprocessing
+        import multiprocessing
+        return multiprocessing.Pipe(duplex)
+
+    def Process(self, target, args):  # noqa: N802 - mismo nombre que multiprocessing
+        import os
+        import threading
+        from multiprocessing.connection import Connection
         registro = self.registro
-        registro.update(procesos=procesos, initializer=initializer)
 
-        class _Hilos(ThreadPool):
-            def imap_unordered(self, funcion, iterable):
-                if registro.get("interrumpir"):
-                    # Ctrl+C llega al proceso principal mientras espera resultados.
-                    raise KeyboardInterrupt
-                return super().imap_unordered(funcion, iterable)
+        class _Hilo:
+            exitcode = 0
+            unido = False
+
+            def start(self) -> None:
+                registro["lanzados"] += 1
+                registro["vivos"] += 1
+                registro["maximo"] = max(registro["maximo"], registro["vivos"])
+                registro["objetivos"].add(target)
+                escritura, *resto = args
+                copia = Connection(os.dup(escritura.fileno()), readable=False)
+                self.hilo = threading.Thread(target=target, args=(copia, *resto))
+                self.hilo.start()
 
             def terminate(self) -> None:
-                registro["terminado"] = True
-                super().terminate()
+                registro["terminados"] += 1
 
-        return _Hilos(procesos)  # sin initializer: tocaría las señales del proceso de tests
+            def join(self) -> None:
+                self.hilo.join()
+                if not self.unido:  # el script puede esperar dos veces al mismo
+                    self.unido = True
+                    registro["vivos"] -= 1
+
+        return _Hilo()
 
 
-def _con_pool_falso(monkeypatch, script) -> dict:
-    registro: dict = {}
+def _con_procesos_falsos(monkeypatch, script) -> dict:
+    registro: dict = {"preparados": 0}
     original = script.multiprocessing.get_context
 
     def get_context(metodo=None):
-        if metodo is None:  # ThreadPool lo usa por dentro
+        if metodo is None:
             return original()
         registro["metodo"] = metodo
         return _ContextoFalso(registro)
 
+    def preparar() -> None:
+        # La de verdad toca las señales, que en un hilo no se puede.
+        registro["preparados"] += 1
+
     monkeypatch.setattr(script.multiprocessing, "get_context", get_context)
+    monkeypatch.setattr("src.training.gail.preparar_proceso_barrido", preparar)
     return registro
 
 
 def test_con_varios_procesos_reparte_las_tareas(datos_grabados, tmp_path, monkeypatch, capsys):
-    from src.training.gail import preparar_proceso_barrido
+    from src.training.gail import ejecutar_tarea_barrido
     cfg = _cfg_script()
     cfg["experimento"]["procesos"] = 3
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
                                                str(tmp_path / "g")], cfg)
-    registro = _con_pool_falso(monkeypatch, script)
+    registro = _con_procesos_falsos(monkeypatch, script)
     guardados = []
     monkeypatch.setattr("src.training.gail.entrenar_gail", _entrenar_o_fallar)
     monkeypatch.setattr("src.training.gail.guardar_gail",
                         lambda destino, *a: guardados.append(destino.parts[-2:]))
     assert script.main() == 1
-    # 4 tareas en 3 procesos que arrancan desde cero, preparados con un hilo y sin Ctrl+C.
-    assert (registro["metodo"], registro["procesos"]) == ("spawn", 3)
-    assert registro["initializer"] is preparar_proceso_barrido
-    assert registro["terminado"]  # el with del Pool termina los procesos al salir
+    # 4 tareas, cada una en un proceso nuevo (spawn), como mucho 3 a la vez, todos
+    # preparados con un hilo y sin Ctrl+C y esperados al terminar.
+    assert registro["metodo"] == "spawn"
+    assert (registro["lanzados"], registro["maximo"]) == (4, 3)
+    assert registro["objetivos"] == {ejecutar_tarea_barrido}
+    assert registro["preparados"] == 4
+    assert (registro["vivos"], registro["terminados"]) == (0, 0)
     assert sorted(guardados) == [("cantidad_1", "repeticion_0"), ("cantidad_1", "repeticion_1"),
                                  ("cantidad_4", "repeticion_1")]
     salida = capsys.readouterr()
@@ -2170,11 +2421,100 @@ def test_no_lanza_mas_procesos_que_entrenamientos(datos_grabados, tmp_path, monk
     cfg["experimento"]["procesos"] = 8
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--cantidades",
                                                "4", "--salida", str(tmp_path / "g")], cfg)
-    registro = _con_pool_falso(monkeypatch, script)
+    registro = _con_procesos_falsos(monkeypatch, script)
     monkeypatch.setattr("src.training.gail.entrenar_gail", _resumen_falso)
     monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
     assert script.main() == 0
-    assert registro["procesos"] == 2  # 1 cantidad × 2 repeticiones
+    assert (registro["lanzados"], registro["maximo"]) == (2, 2)  # 1 cantidad × 2 repeticiones
+
+
+def test_un_envio_truncado_cuenta_como_fallo_y_el_resto_sigue(datos_grabados, tmp_path,
+                                                              monkeypatch, capsys):
+    """Regresión: si un proceso moría a mitad del envío, recv() daba OSError (no
+    EOFError), que abortaba el barrido y terminaba los demás entrenamientos."""
+    import os
+    import struct
+    from src.training.gail import ejecutar_tarea_barrido
+    cfg = _cfg_script()
+    cfg["experimento"]["procesos"] = 2
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")], cfg)
+    _con_procesos_falsos(monkeypatch, script)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", _resumen_falso)
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+
+    def ejecutar_o_truncar(conexion, tarea, argumentos):
+        if tuple(argumentos[3:5]) != (4, 0):
+            return ejecutar_tarea_barrido(conexion, tarea, argumentos)
+        # Cabecera de un mensaje de 1000 bytes y solo 10: como si muriera enviando.
+        os.write(conexion.fileno(), struct.pack("!i", 1000) + b"x" * 10)
+        conexion.close()
+
+    monkeypatch.setattr(script, "ejecutar_tarea_barrido", ejecutar_o_truncar)
+    assert script.main() == 1
+    salida = capsys.readouterr()
+    assert "error en cantidad 4, repetición 0: el proceso terminó sin resultado" in salida.err
+    assert "OSError" in salida.err
+    assert "3 de 4 entrenamientos guardados" in salida.out
+
+
+def test_ctrl_c_mientras_se_recibe_tambien_termina_ese_proceso(datos_grabados, tmp_path,
+                                                                monkeypatch, capsys):
+    """Regresión: el proceso que se estaba recibiendo salía de la lista antes de recibir,
+    y un Ctrl+C en ese momento lo dejaba fuera de la limpieza, vivo."""
+    from multiprocessing.connection import Connection
+    cfg = _cfg_script()
+    cfg["experimento"]["procesos"] = 3
+    script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
+                                               str(tmp_path / "g")], cfg)
+    registro = _con_procesos_falsos(monkeypatch, script)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", _resumen_falso)
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+
+    def interrumpir(self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Connection, "recv", interrumpir)
+    assert script.main() == 130
+    # Los 3 en marcha, también el que se estaba recibiendo, se terminan y se esperan.
+    assert (registro["lanzados"], registro["terminados"], registro["vivos"]) == (3, 3, 0)
+
+
+def _morir_en_4_0(argumentos):
+    """Tarea de prueba para procesos de verdad: la (4, 0) muere como la mata el sistema."""
+    import os
+    import signal
+    cantidad, repeticion = argumentos[3], argumentos[4]
+    if (cantidad, repeticion) == (4, 0):
+        os.kill(os.getpid(), signal.SIGKILL)
+    return cantidad, repeticion, _resumen_falso()[2], None
+
+
+def test_si_un_proceso_muere_el_barrido_no_se_queda_esperando(tmp_path, capsys):
+    """Regresión: con Pool, un proceso muerto (por ejemplo por falta de memoria) dejaba el
+    barrido esperando para siempre. Procesos spawn de verdad; la alarma corta el test si
+    vuelve a colgarse."""
+    import signal
+
+    def colgado(*_):
+        raise TimeoutError("el barrido se ha quedado esperando")
+
+    script = _script_gail()
+    previa = signal.signal(signal.SIGALRM, colgado)
+    signal.alarm(120)
+    try:
+        fallos = script._entrenar_tareas([(1, 0), (4, 0), (4, 1)], 2, {}, [], None, tmp_path,
+                                         {}, tarea=_morir_en_4_0)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previa)
+    assert fallos == [(4, 0)]
+    salida = capsys.readouterr()
+    assert "error en cantidad 4, repetición 0: el proceso terminó sin resultado" in salida.err
+    assert f"código de salida {-signal.SIGKILL}" in salida.err
+    # Los otros dos terminan y se informan.
+    assert "cantidad 1, repetición 0: retorno de validación" in salida.out
+    assert "cantidad 4, repetición 1: retorno de validación" in salida.out
 
 
 def test_ctrl_c_en_serie_para_el_barrido(datos_grabados, tmp_path, monkeypatch, capsys):
@@ -2204,10 +2544,18 @@ def test_ctrl_c_en_paralelo_termina_los_procesos(datos_grabados, tmp_path, monke
     cfg["experimento"]["procesos"] = 3
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
                                                str(tmp_path / "g")], cfg)
-    registro = _con_pool_falso(monkeypatch, script)
-    registro["interrumpir"] = True
+    registro = _con_procesos_falsos(monkeypatch, script)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", _resumen_falso)
+    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+
+    def interrumpir(conexiones):
+        # Ctrl+C llega al proceso principal mientras espera resultados.
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(script, "wait", interrumpir)
     assert script.main() == 130
-    assert registro["terminado"]
+    # Los 3 que estaban en marcha se terminan y se esperan; el cuarto no empieza.
+    assert (registro["lanzados"], registro["terminados"], registro["vivos"]) == (3, 3, 0)
     assert "interrumpido" in capsys.readouterr().err
 
 

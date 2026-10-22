@@ -20,8 +20,8 @@ guardar_gail y cargar_gail guardan el resultado como el experto, con el
 discriminador y la procedencia de los datos (procedencia_datos).
 entrenar_y_guardar_gail es un entrenamiento del barrido completo (run de W&B,
 progreso, entrenamiento y guardado). scripts/entrenar_gail.py reparte el barrido
-con tarea_barrido_gail y, en paralelo, prepara cada proceso con
-preparar_proceso_barrido.
+con tarea_barrido_gail y, en paralelo, lanza cada entrenamiento en su proceso con
+ejecutar_tarea_barrido, que lo prepara con preparar_proceso_barrido.
 """
 
 from __future__ import annotations
@@ -31,7 +31,8 @@ import json
 import math
 import signal
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
@@ -45,17 +46,18 @@ from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecNormalize
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
-from src.data.demostraciones import huella_partidas
+from src.data.demostraciones import config_demostraciones, huella_partidas
 from src.data.entornos import crear_entorno_vectorizado
 from src.data.loaders import pares_de_subconjunto, tensores_de_pares
 from src.data.splits import SplitsDemostraciones, huella_archivo
 from src.data.tipos import LoteTransiciones, Trayectoria
-from src.models.factory import Discriminador, construir_discriminador
+from src.models.factory import Discriminador, comprobar_arquitectura, construir_discriminador
 from src.training.trpo import (comprobar_directorio_libre, config_trpo, crear_trpo,
-                               estado_git, estadisticas_normalizacion, evaluar_retorno,
+                               escribir_carpeta_nueva, estado_git,
+                               estadisticas_normalizacion, evaluar_retorno,
                                iteracion_trpo, ruta_registrada, versiones_y_hardware)
-from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
-from src.utils.tracking import RegistroProgreso, abrir_run, registrar
+from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, validar_semilla
+from src.utils.tracking import RegistroProgreso, abrir_run, registrar, terminar_run
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_DISCRIMINADOR = "discriminador.pt"
@@ -76,11 +78,17 @@ def _config_discriminador(cfg: dict) -> dict:
     """
     gcfg = cfg.get("gail") if isinstance(cfg, dict) else None
     dcfg = gcfg.get("discriminador") if isinstance(gcfg, dict) else None
-    claves = {"optimizador", "learning_rate", "pasos_adam", "peso_entropia",
-              "normalizar_entrada", "epsilon_normalizacion"}
+    claves = {"capas_ocultas", "activacion", "optimizador", "learning_rate", "pasos_adam",
+              "peso_entropia", "normalizar_entrada", "epsilon_normalizacion"}
     if not isinstance(dcfg, dict) or not claves <= dcfg.keys():
         raise ValueError("La configuración necesita gail.discriminador con "
                          + ", ".join(sorted(claves)))
+    # La misma comprobación que al crear la red: así comprobar_config_barrido la
+    # rechaza antes de lanzar el barrido y no en cada entrenamiento.
+    try:
+        comprobar_arquitectura(dcfg["capas_ocultas"], dcfg["activacion"])
+    except ValueError as error:
+        raise ValueError(f"gail.discriminador no es válido: {error}") from error
 
     def real(clave: str) -> float:
         """Devuelve dcfg[clave] si es un real finito no booleano."""
@@ -692,6 +700,45 @@ def _config_gail(cfg: dict) -> dict:
     return gcfg
 
 
+def _es_entero_positivo(valor: object) -> bool:
+    """Indica si valor es un entero (de Python o NumPy, no booleano) mayor que cero."""
+    return (isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
+            and valor > 0)
+
+
+def comprobar_config_barrido(cfg: dict) -> None:
+    """Comprueba la configuración del barrido de GAIL antes de entrenar nada.
+
+    Reúne lo que cada entrenamiento comprobaría por su cuenta (secciones gail,
+    gail.discriminador, trpo y demostraciones, con frecuencia_pares, y
+    experimento.semilla_repeticiones) y lo propio del barrido
+    (experimento.repeticiones y experimento.procesos, enteros positivos). Así
+    scripts/entrenar_gail.py rechaza una configuración no válida una sola vez y
+    sin lanzar procesos, en lugar de fallar en cada entrenamiento.
+
+    Raises:
+        ValueError: Si falta alguna clave o algún valor no es válido.
+    """
+    _config_gail(cfg)
+    _config_discriminador(cfg)
+    config_trpo(cfg)
+    dcfg = config_demostraciones(cfg)
+    if not _es_entero_positivo(dcfg.get("frecuencia_pares")):
+        raise ValueError("demostraciones.frecuencia_pares debe ser un entero positivo, no "
+                         f"{dcfg.get('frecuencia_pares')!r}")
+    ecfg = cfg.get("experimento")
+    if not isinstance(ecfg, dict):
+        raise ValueError("La configuración necesita la sección experimento")
+    for clave in ("repeticiones", "procesos"):
+        if not _es_entero_positivo(ecfg.get(clave)):
+            raise ValueError(f"experimento.{clave} debe ser un entero positivo, "
+                             f"no {ecfg.get(clave)!r}")
+    try:
+        validar_semilla(ecfg.get("semilla_repeticiones"))
+    except ValueError as error:
+        raise ValueError(f"experimento.semilla_repeticiones no es válida: {error}") from error
+
+
 def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones,
                   cantidad: int, repeticion: int, run: Any = None,
                   ) -> tuple[TRPO, Discriminador, dict[str, Any]]:
@@ -855,20 +902,22 @@ def guardar_gail(directorio: Path, agente: TRPO, discriminador: Discriminador, c
     - gail.json: la configuración resuelta, el resumen de entrenar_gail
       (cantidad, repetición, IDs de las partidas, semillas, medidas,
       validaciones, tiempo y normalización), la procedencia de los datos
-      (procedencia_datos), los argumentos para reconstruir el discriminador,
-      el commit de git y si había cambios sin commit, las versiones y el
+      (procedencia_datos), los argumentos para reconstruir el discriminador
+      (leídos del propio discriminador, activación incluida), el commit de git y si había cambios sin commit, las versiones y el
       hardware. Es JSON estricto: las medidas no definidas (nan, por ejemplo
       el retorno de una iteración en la que no terminó ninguna partida) se
       guardan como null.
 
     No sobrescribe (comprobar_directorio_libre) y lo comprueba todo antes de
-    crear la carpeta.
+    crear la carpeta. Escribe con escribir_carpeta_nueva: si falla al escribir,
+    no queda una carpeta a medias.
 
     Raises:
         FileExistsError: Si el directorio existe con contenido.
         ValueError: Si las piezas no son válidas, los datos no son aquellos con
             los que se entrenó (huella del NPZ distinta de la del resumen) o el
-            discriminador no corresponde a la configuración.
+            discriminador no corresponde a la configuración (capas ocultas o
+            activación distintas de gail.discriminador).
     """
     if not isinstance(agente, TRPO):
         raise ValueError("agente debe ser un TRPO de sb3-contrib")
@@ -881,26 +930,37 @@ def guardar_gail(directorio: Path, agente: TRPO, discriminador: Discriminador, c
     if not isinstance(resumen, dict) or datos["huella_dataset"] != resumen.get("huella_dataset"):
         raise ValueError("Las demostraciones no son las del entrenamiento: la huella del NPZ "
                          "no coincide con la de los splits usados")
-    dcfg = cfg.get("gail", {}).get("discriminador", {}) if isinstance(cfg, dict) else {}
+    # La arquitectura se lee del propio discriminador: la activación no tiene pesos,
+    # así que comparar el state_dict con la configuración no la comprobaba.
     argumentos = {"dim_observacion": discriminador.dim_observacion,
                   "dim_accion": discriminador.dim_accion, "continua": discriminador.continua,
-                  "capas_ocultas": dcfg.get("capas_ocultas"), "activacion": dcfg.get("activacion")}
-    try:
-        Discriminador(**argumentos).load_state_dict(discriminador.state_dict())
-    except (RuntimeError, ValueError, TypeError) as error:
-        raise ValueError("El discriminador no corresponde a gail.discriminador de la "
-                         f"configuración: {error}") from error
+                  "capas_ocultas": list(discriminador.capas_ocultas),
+                  "activacion": discriminador.activacion}
+    dcfg = cfg.get("gail", {}).get("discriminador", {}) if isinstance(cfg, dict) else {}
+    pedida = {"capas_ocultas": dcfg.get("capas_ocultas"), "activacion": dcfg.get("activacion")}
+    if (not isinstance(pedida["capas_ocultas"], (list, tuple))
+            or list(pedida["capas_ocultas"]) != argumentos["capas_ocultas"]
+            or pedida["activacion"] != argumentos["activacion"]):
+        raise ValueError(
+            "El discriminador no corresponde a gail.discriminador de la configuración: tiene "
+            f"capas {argumentos['capas_ocultas']} y activación {argumentos['activacion']!r}, "
+            f"y la configuración pide {pedida['capas_ocultas']} y {pedida['activacion']!r}")
     directorio = comprobar_directorio_libre(directorio)
     metadatos = {"configuracion": cfg, "resumen": resumen, "datos": datos,
                  "discriminador": argumentos, "codigo": estado_git(),
                  "entorno_ejecucion": versiones_y_hardware()}
     # Se serializa antes de crear nada: un valor no válido no deja una carpeta a medias.
     texto = json.dumps(_para_json(metadatos), ensure_ascii=False, indent=2, allow_nan=False)
-    directorio.mkdir(parents=True, exist_ok=True)
-    with (directorio / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
-        archivo.write(texto)
-    torch.save(discriminador.state_dict(), directorio / _ARCHIVO_DISCRIMINADOR)
-    agente.save(directorio / _ARCHIVO_MODELO)
+
+    def escribir(carpeta: Path) -> None:
+        """Escribe gail.json, discriminador.pt y modelo.zip en carpeta."""
+        with (carpeta / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
+            archivo.write(texto)
+        torch.save(discriminador.state_dict(), carpeta / _ARCHIVO_DISCRIMINADOR)
+        agente.save(carpeta / _ARCHIVO_MODELO)
+
+    # Si falla al escribir (disco lleno, Ctrl+C), no queda una carpeta a medias.
+    escribir_carpeta_nueva(directorio, escribir)
 
 
 def cargar_gail(directorio: Path) -> tuple[TRPO, Discriminador, dict[str, Any]]:
@@ -943,7 +1003,9 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
 
     Abre su propio run de W&B (según wandb.modo, con la cantidad y la
     repetición en el nombre, provisional), imprime el progreso con
-    RegistroProgreso, entrena con entrenar_gail y guarda con guardar_gail.
+    RegistroProgreso, entrena con entrenar_gail y guarda con guardar_gail. El
+    run se cierra con terminar_run: como fallido si falla el entrenamiento o
+    el guardado.
     Solo depende de sus argumentos, así que da lo mismo en serie que en
     paralelo, en otro proceso.
 
@@ -974,9 +1036,11 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
         agente, discriminador, resumen = entrenar_gail(cfg, trayectorias, splits, cantidad,
                                                        repeticion, progreso)
         guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
-    finally:
-        if run is not None:
-            run.finish()
+    except BaseException as error:
+        # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
+        terminar_run(run, error)
+        raise
+    terminar_run(run)
     return resumen
 
 
@@ -990,6 +1054,28 @@ def preparar_proceso_barrido() -> None:
     """
     torch.set_num_threads(1)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def ejecutar_tarea_barrido(conexion: Connection, tarea: Callable[[tuple[Any, ...]], Any],
+                           argumentos: tuple[Any, ...]) -> None:
+    """Cuerpo de cada proceso del barrido en paralelo: prepara el proceso, ejecuta y envía.
+
+    Prepara el proceso con preparar_proceso_barrido, ejecuta tarea(argumentos)
+    (tarea_barrido_gail en el script) y envía su resultado por conexion. Si el
+    proceso muere antes de enviarlo, por ejemplo porque el sistema lo mata por
+    falta de memoria, la conexión se cierra sin datos y quien espera recibe
+    EOFError en lugar de quedarse esperando para siempre.
+
+    Args:
+        conexion: Extremo de envío de un Pipe; se cierra al terminar.
+        tarea: Función de nivel de módulo (el proceso nuevo la importa).
+        argumentos: Lo que recibe tarea.
+    """
+    preparar_proceso_barrido()
+    try:
+        conexion.send(tarea(argumentos))
+    finally:
+        conexion.close()
 
 
 def tarea_barrido_gail(argumentos: tuple[Any, ...]) -> tuple[int, int, dict[str, Any] | None,

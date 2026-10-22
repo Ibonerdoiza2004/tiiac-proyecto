@@ -37,7 +37,10 @@ import argparse
 import multiprocessing
 import sys
 import time
+from collections import deque
+from collections.abc import Callable
 from datetime import datetime
+from multiprocessing.connection import wait
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +52,8 @@ sys.path.insert(0, str(RAIZ))
 from src.data.demostraciones import cargar_demostraciones  # noqa: E402
 from src.data.entornos import crear_entorno  # noqa: E402
 from src.data.splits import cargar_splits, huella_archivo  # noqa: E402
-from src.training.gail import (preparar_proceso_barrido, procedencia_datos,  # noqa: E402
-                               tarea_barrido_gail)
+from src.training.gail import (comprobar_config_barrido, ejecutar_tarea_barrido,  # noqa: E402
+                               procedencia_datos, tarea_barrido_gail)
 from src.training.trpo import comprobar_directorio_libre, estado_git  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 
@@ -67,16 +70,25 @@ def _informar(cantidad: int, repeticion: int, resumen: dict[str, Any]) -> None:
 
 
 def _entrenar_tareas(tareas: list[tuple[int, int]], procesos: int, cfg: dict,
-                     trayectorias: list, splits: Any, salida: Path,
-                     datos: dict[str, str]) -> list[tuple[int, int]]:
+                     trayectorias: list, splits: Any, salida: Path, datos: dict[str, str],
+                     tarea: Callable[[tuple[Any, ...]], Any] = tarea_barrido_gail,
+                     ) -> list[tuple[int, int]]:
     """Entrena y guarda cada (cantidad, repetición), en serie o en procesos.
 
     Siempre con un solo hilo de PyTorch: así el resultado no depende de cuántos
     procesos se usen (con varios hilos cambia el redondeo) y, en paralelo, los
-    procesos no se reparten los núcleos. Con más de un proceso, cada uno arranca
-    desde cero (spawn) y un proceso libre coge el siguiente entrenamiento. Un
-    fallo se informa y no detiene los demás. Ctrl+C termina los procesos al
-    momento y se propaga como KeyboardInterrupt.
+    procesos no se reparten los núcleos. Con más de un proceso, cada
+    entrenamiento va en un proceso nuevo (spawn, ejecutar_tarea_barrido), con
+    como mucho procesos a la vez: cuando uno acaba, empieza el siguiente. Cada
+    proceso devuelve su resultado por un Pipe; si muere sin enviarlo o a mitad
+    del envío (por ejemplo, el sistema lo mata por falta de memoria), su
+    entrenamiento cuenta como fallido y el resto sigue: no se queda esperando
+    para siempre, como le pasaba a Pool. Un fallo se informa y no detiene los
+    demás. Ctrl+C termina al momento todos los procesos que no hayan acabado,
+    también el que se esté recibiendo, y se propaga como KeyboardInterrupt.
+
+    Args:
+        tarea: Lo que ejecuta cada entrenamiento; solo cambia en los tests.
 
     Returns:
         Las tareas que fallaron.
@@ -101,15 +113,50 @@ def _entrenar_tareas(tareas: list[tuple[int, int]], procesos: int, cfg: dict,
         torch.set_num_threads(1)
         try:
             for argumento in argumentos:
-                informar(tarea_barrido_gail(argumento))
+                informar(tarea(argumento))
         finally:
             torch.set_num_threads(hilos_previos)
         return fallos
-    # Al salir del with, también por Ctrl+C, Pool termina los procesos que queden.
-    with multiprocessing.get_context("spawn").Pool(
-            procesos, initializer=preparar_proceso_barrido) as pool:
-        for resultado in pool.imap_unordered(tarea_barrido_gail, argumentos):
-            informar(resultado)
+    contexto = multiprocessing.get_context("spawn")
+    pendientes = deque(argumentos)
+    activos: dict[Any, tuple[Any, int, int]] = {}  # extremo de lectura -> (proceso, c, r)
+    try:
+        while pendientes or activos:
+            while pendientes and len(activos) < procesos:
+                argumento = pendientes.popleft()
+                lectura, escritura = contexto.Pipe(duplex=False)
+                proceso = contexto.Process(target=ejecutar_tarea_barrido,
+                                           args=(escritura, tarea, argumento))
+                proceso.start()
+                # En activos nada más arrancar: un Ctrl+C a partir de aquí lo termina.
+                activos[lectura] = (proceso, argumento[3], argumento[4])
+                # Solo el proceso escribe: si muere, la lectura da EOFError.
+                escritura.close()
+            for lectura in wait(list(activos)):
+                # Sigue en activos hasta que termina del todo: si llega un Ctrl+C
+                # mientras se recibe o se espera, el finally también lo termina.
+                proceso, cantidad, repeticion = activos[lectura]
+                try:
+                    resultado = lectura.recv()
+                except (EOFError, OSError) as error:
+                    # EOFError: murió sin enviar nada; OSError: murió a mitad del
+                    # envío (mensaje truncado). En los dos, su entrenamiento falla y
+                    # los demás siguen.
+                    proceso.join()
+                    resultado = (cantidad, repeticion, None,
+                                 f"el proceso terminó sin resultado (código de salida "
+                                 f"{proceso.exitcode}; negativo si lo mató una señal, por "
+                                 f"ejemplo por falta de memoria): {error!r}")
+                lectura.close()
+                proceso.join()
+                del activos[lectura]
+                informar(resultado)
+    finally:
+        # También por Ctrl+C: no quedan procesos entrenando por detrás.
+        for proceso, _, _ in activos.values():
+            proceso.terminate()
+        for proceso, _, _ in activos.values():
+            proceso.join()
     return fallos
 
 
@@ -130,7 +177,8 @@ def main() -> int:
     ap.add_argument("--datos", type=Path, required=True,
                     help=f"carpeta de get_data.py ({_DEMOSTRACIONES} y {_SPLITS})")
     ap.add_argument("--cantidades", type=int, nargs="+", default=None,
-                    help="tamaños de subconjunto (por defecto, demostraciones.subconjuntos)")
+                    help="tamaños de subconjunto, que deben estar en los splits (por defecto, "
+                         "demostraciones.subconjuntos de la configuración)")
     ap.add_argument("--repeticiones", type=int, nargs="+", default=None,
                     help="repeticiones, de 0 a experimento.repeticiones − 1 (por defecto, todas)")
     ap.add_argument("--salida", type=Path, default=None,
@@ -142,6 +190,9 @@ def main() -> int:
     ajustes = {"wandb": {"modo": "disabled"}} if args.sin_wandb else None
     try:
         cfg = resolver_configuracion(args.config, args.entorno, ajustes)
+        # Toda la del barrido, antes de entrenar: si no, cada entrenamiento fallaría
+        # por separado y el script saldría con 1 en vez de 2.
+        comprobar_config_barrido(cfg)
     except (OSError, ValueError) as error:
         print(f"error de configuración: {error}", file=sys.stderr)
         return 2
@@ -169,25 +220,23 @@ def main() -> int:
         print(f"error con los datos: {error}", file=sys.stderr)
         return 2
 
-    cantidades = args.cantidades or sorted(splits.subconjuntos)
+    # Por defecto, el barrido de la configuración, no todos los subconjuntos que
+    # tengan los splits: pueden ser más.
+    cantidades = args.cantidades or list(cfg["demostraciones"]["subconjuntos"])
     total_repeticiones = cfg["experimento"]["repeticiones"]
     repeticiones = (args.repeticiones if args.repeticiones is not None
                     else list(range(total_repeticiones)))
     no_validas = [c for c in cantidades if c not in splits.subconjuntos]
     if no_validas or len(set(cantidades)) != len(cantidades):
-        print(f"error: cantidades no válidas o repetidas: {cantidades}; disponibles: "
-              f"{sorted(splits.subconjuntos)}", file=sys.stderr)
+        print(f"error: cantidades no válidas o repetidas: {cantidades}; los splits tienen "
+              f"subconjuntos de {sorted(splits.subconjuntos)}", file=sys.stderr)
         return 2
     if (any(not 0 <= r < total_repeticiones for r in repeticiones)
             or len(set(repeticiones)) != len(repeticiones)):
         print(f"error: repeticiones no válidas o repetidas: {repeticiones}; van de 0 a "
               f"{total_repeticiones - 1}", file=sys.stderr)
         return 2
-    procesos = cfg["experimento"].get("procesos")
-    if isinstance(procesos, bool) or not isinstance(procesos, int) or procesos < 1:
-        print(f"error de configuración: experimento.procesos debe ser un entero positivo, "
-              f"no {procesos!r}", file=sys.stderr)
-        return 2
+    procesos = int(cfg["experimento"]["procesos"])
 
     tareas = [(cantidad, repeticion) for cantidad in cantidades for repeticion in repeticiones]
     inicio = time.perf_counter()
@@ -195,8 +244,11 @@ def main() -> int:
         fallos = _entrenar_tareas(tareas, min(procesos, len(tareas)), cfg, trayectorias, splits,
                                   salida, datos)
     except KeyboardInterrupt:
-        print(f"interrumpido: los entrenamientos que terminaron están en {salida}; el que "
-              "estuviera guardándose puede haber quedado incompleto", file=sys.stderr)
+        # Las carpetas se escriben enteras o nada (escribir_carpeta_nueva); un proceso
+        # terminado a mitad de guardar puede dejar una temporal oculta, nunca una a medias.
+        print(f"interrumpido: los entrenamientos que terminaron están en {salida}, completos; "
+              "si alguno se estaba guardando, puede quedar una carpeta temporal oculta "
+              "(.*.tmp) que se puede borrar", file=sys.stderr)
         return 130
     print(f"{len(tareas) - len(fallos)} de {len(tareas)} entrenamientos guardados en {salida}; "
           f"tiempo total medido: {time.perf_counter() - inicio:.0f} s")

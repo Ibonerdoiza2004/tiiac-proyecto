@@ -47,8 +47,16 @@ def _es_real_finito(valor: object) -> bool:
             and not isinstance(valor, (bool, np.bool_)) and bool(np.isfinite(valor)))
 
 
-def _comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
-    """Comprueba la lista de capas ocultas y el nombre de la activación."""
+def comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
+    """Comprueba la lista de capas ocultas y el nombre de la activación.
+
+    Es la comprobación que aplican PoliticaBC y Discriminador al crearse; sirve
+    también para validar una configuración antes de crear ninguna red.
+
+    Raises:
+        ValueError: Si capas_ocultas no es una lista de enteros positivos (puede
+            estar vacía) o activacion no es una clave de ACTIVACIONES.
+    """
     if (isinstance(capas_ocultas, (str, bytes)) or not isinstance(capas_ocultas, Sequence)
             or not all(_es_entero_positivo(c) for c in capas_ocultas)):
         raise ValueError(
@@ -101,6 +109,10 @@ class _PerceptronNormalizado(nn.Module):
     Antes de la red, cada componente de la entrada se normaliza con los buffers
     media y escala, que viajan con el state_dict; valen 0 y 1 (identidad) hasta
     que se ajustan con datos de train.
+
+    capas_ocultas y activacion guardan la arquitectura con la que se creó la
+    red. La activación no tiene pesos y el state_dict no la recoge: hay que
+    leerla de aquí para reconstruir la misma red.
     """
 
     def __init__(self, dim_entrada: int, dim_salida: int, capas_ocultas: Sequence[int],
@@ -111,7 +123,9 @@ class _PerceptronNormalizado(nn.Module):
             ValueError: Si capas_ocultas o activacion no son válidas.
         """
         super().__init__()
-        _comprobar_arquitectura(capas_ocultas, activacion)
+        comprobar_arquitectura(capas_ocultas, activacion)
+        self.capas_ocultas = tuple(int(tamano) for tamano in capas_ocultas)
+        self.activacion = str(activacion)
         self.dim_entrada = int(dim_entrada)
         capas: list[nn.Module] = []
         entrada = self.dim_entrada
@@ -205,7 +219,7 @@ class PoliticaBC(_PerceptronNormalizado):
             ValueError: Si algún argumento no es válido.
         """
         _comprobar_dimensiones(dim_observacion, dim_accion, continua)
-        _comprobar_arquitectura(capas_ocultas, activacion)
+        comprobar_arquitectura(capas_ocultas, activacion)
         if continua and not _es_real_finito(log_std_inicial):
             raise ValueError("Con acciones continuas log_std_inicial debe ser un real finito, "
                              f"no {log_std_inicial!r}")

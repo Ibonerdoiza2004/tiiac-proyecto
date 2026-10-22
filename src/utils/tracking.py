@@ -36,6 +36,26 @@ def registrar(run: Any | None, metricas: dict, paso: int | None = None) -> None:
         run.log(metricas, step=paso)
 
 
+def terminar_run(run: Any | None, error: BaseException | None = None) -> None:
+    """Cierra el run, si lo hay, con el código de salida que corresponde.
+
+    W&B marca como correcto un run cerrado con finish() sin código, aunque haya
+    fallado. Con error None se cierra con 0 (Finished); con una excepción, con 1
+    (Failed), o 130 si es un Ctrl+C (KeyboardInterrupt), el mismo código que
+    devuelven los scripts.
+
+    Args:
+        run: Run de abrir_run, o None (no hace nada).
+        error: La excepción que interrumpió el entrenamiento, o None si terminó bien.
+    """
+    if run is None:
+        return
+    if error is None:
+        run.finish(exit_code=0)
+    else:
+        run.finish(exit_code=130 if isinstance(error, KeyboardInterrupt) else 1)
+
+
 class RegistroProgreso:
     """Hace de run de W&B para un entrenamiento por iteraciones e imprime su progreso.
 

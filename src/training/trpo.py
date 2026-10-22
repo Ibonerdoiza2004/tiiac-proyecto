@@ -21,8 +21,11 @@ import copy
 import json
 import math
 import platform
+import shutil
 import subprocess
+import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -489,6 +492,36 @@ def comprobar_directorio_libre(directorio: Path) -> Path:
     return directorio
 
 
+def escribir_carpeta_nueva(directorio: Path, escribir: Callable[[Path], None]) -> None:
+    """Escribe una carpeta de resultados entera o nada: nunca la deja a medias.
+
+    escribir(temporal) crea los archivos en una carpeta temporal junto a
+    directorio, que después se renombra a directorio (en el mismo sistema de
+    archivos, el cambio de nombre es inmediato). Si escribir falla, también por
+    Ctrl+C, la temporal se borra y directorio queda como estaba, así que se puede
+    volver a guardar ahí. Comprueba antes, como comprobar_directorio_libre, que
+    directorio no existe o está vacía.
+
+    Raises:
+        FileExistsError: Si directorio existe con contenido, antes o al terminar.
+        Lo que lance escribir.
+    """
+    directorio = comprobar_directorio_libre(directorio)
+    directorio.parent.mkdir(parents=True, exist_ok=True)
+    temporal = Path(tempfile.mkdtemp(prefix=f".{directorio.name}.", suffix=".tmp",
+                                     dir=directorio.parent))
+    try:
+        escribir(temporal)
+        # Una carpeta vacía ya creada se sustituye; con contenido, no.
+        comprobar_directorio_libre(directorio)
+        if directorio.exists():
+            directorio.rmdir()
+        temporal.rename(directorio)
+    except BaseException:
+        shutil.rmtree(temporal, ignore_errors=True)
+        raise
+
+
 def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
                     resumen: dict[str, Any]) -> None:
     """Guarda el experto en un directorio nuevo: modelo.zip y experto.json.
@@ -511,10 +544,15 @@ def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
     # Se serializa antes de crear nada: un NaN no deja una carpeta a medias.
     texto = json.dumps(metadatos, ensure_ascii=False, indent=2, allow_nan=False,
                        default=_a_json)
-    directorio.mkdir(parents=True, exist_ok=True)
-    with (directorio / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
-        archivo.write(texto)
-    modelo.save(directorio / _ARCHIVO_MODELO)
+
+    def escribir(carpeta: Path) -> None:
+        """Escribe experto.json y modelo.zip en carpeta."""
+        with (carpeta / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
+            archivo.write(texto)
+        modelo.save(carpeta / _ARCHIVO_MODELO)
+
+    # Si falla al escribir (disco lleno, Ctrl+C), no queda una carpeta a medias.
+    escribir_carpeta_nueva(directorio, escribir)
 
 
 def cargar_experto(directorio: Path) -> tuple[TRPO, dict[str, Any]]:

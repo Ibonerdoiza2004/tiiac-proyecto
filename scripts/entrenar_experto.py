@@ -27,7 +27,7 @@ sys.path.insert(0, str(RAIZ))
 from src.training.trpo import (comprobar_directorio_libre, entrenar_experto,  # noqa: E402
                                estado_git, guardar_experto)
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
-from src.utils.tracking import abrir_run  # noqa: E402
+from src.utils.tracking import abrir_run, terminar_run  # noqa: E402
 
 
 def main() -> int:
@@ -63,9 +63,11 @@ def main() -> int:
     try:
         modelo, resumen = entrenar_experto(cfg, run)
         guardar_experto(salida, modelo, cfg, resumen)
-    finally:
-        if run is not None:
-            run.finish()
+    except BaseException as error:
+        # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
+        terminar_run(run, error)
+        raise
+    terminar_run(run)
 
     estado = "alcanzado" if resumen["objetivo_alcanzado"] else "no alcanzado"
     print(f"experto de {resumen['entorno']} guardado en {salida}")

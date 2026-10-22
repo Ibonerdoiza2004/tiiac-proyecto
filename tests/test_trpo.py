@@ -486,6 +486,74 @@ def test_dummyvecenv_sin_monitor_no_rompe_la_iteracion():
         venv.close()
 
 
+# --- escribir_carpeta_nueva -----------------------------------------------------------
+
+def _escribir_dos(carpeta: Path) -> None:
+    (carpeta / "a.txt").write_text("a")
+    (carpeta / "b.txt").write_text("b")
+
+
+@pytest.mark.parametrize("previa", ["no_existe", "vacia"])
+def test_escribir_carpeta_nueva_deja_la_carpeta_entera(tmp_path, previa):
+    destino = tmp_path / "padre" / "resultado"
+    if previa == "vacia":
+        destino.mkdir(parents=True)
+    trpo.escribir_carpeta_nueva(destino, _escribir_dos)
+    assert sorted(p.name for p in destino.iterdir()) == ["a.txt", "b.txt"]
+    assert [p.name for p in destino.parent.iterdir()] == ["resultado"]  # sin temporales
+
+
+@pytest.mark.parametrize("error", [OSError("disco lleno"), KeyboardInterrupt()])
+def test_escribir_carpeta_nueva_no_deja_nada_si_falla(tmp_path, error):
+    """Regresión: un fallo a mitad (disco lleno, Ctrl+C) dejaba una carpeta incompleta que
+    además impedía volver a guardar ahí."""
+    destino = tmp_path / "resultado"
+
+    def falla_a_mitad(carpeta: Path) -> None:
+        (carpeta / "a.txt").write_text("a")
+        raise error
+
+    with pytest.raises(type(error)):
+        trpo.escribir_carpeta_nueva(destino, falla_a_mitad)
+    assert list(tmp_path.iterdir()) == []  # ni la carpeta ni la temporal
+    trpo.escribir_carpeta_nueva(destino, _escribir_dos)  # se puede volver a guardar
+    assert sorted(p.name for p in destino.iterdir()) == ["a.txt", "b.txt"]
+
+
+def test_escribir_carpeta_nueva_no_sobrescribe(tmp_path):
+    destino = tmp_path / "resultado"
+    destino.mkdir()
+    (destino / "notas.txt").write_text("x")
+    with pytest.raises(FileExistsError):
+        trpo.escribir_carpeta_nueva(destino, _escribir_dos)
+
+    # Si otro proceso la llena mientras se escribe, tampoco: la temporal se borra.
+    otra = tmp_path / "otra"
+
+    def ocupar(carpeta: Path) -> None:
+        _escribir_dos(carpeta)
+        otra.mkdir()
+        (otra / "ajeno.txt").write_text("x")
+
+    with pytest.raises(FileExistsError):
+        trpo.escribir_carpeta_nueva(otra, ocupar)
+    assert [p.name for p in otra.iterdir()] == ["ajeno.txt"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["otra", "resultado"]
+
+
+def test_guardar_experto_no_deja_una_carpeta_a_medias(tmp_path, monkeypatch):
+    cfg = _cfg()
+    modelo, resumen = entrenar_experto(cfg)
+
+    def falla(*a, **k):
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr(modelo, "save", falla)
+    with pytest.raises(OSError, match="disco lleno"):
+        trpo.guardar_experto(tmp_path / "experto", modelo, cfg, resumen)
+    assert list(tmp_path.iterdir()) == []
+
+
 # --- scripts/entrenar_experto.py ----------------------------------------------------
 
 def _script():
@@ -560,6 +628,43 @@ def test_el_script_entrena_y_guarda_con_la_configuracion_resuelta(monkeypatch, t
     assert llamadas["cfg"]["entorno"]["id"] == "CartPole-v1"
     assert llamadas["salida"] == tmp_path / "experto"
     assert "objetivo 500 alcanzado" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fallo,codigo", [(None, 0), ("entrenar", 1), ("guardar", 1)])
+def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypatch, tmp_path):
+    """Regresión: finish() sin código marcaba como correcto en W&B un experto fallido."""
+    script = _script()
+    cierres = []
+
+    class _Run:
+        def log(self, *a, **k) -> None:
+            pass
+
+        def finish(self, exit_code=None) -> None:
+            cierres.append(exit_code)
+
+    resumen = {"entorno": "CartPole-v1", "mejor_retorno": 500.0, "mejor_iteracion": 3,
+               "objetivo": 500, "objetivo_alcanzado": True, "pasos": 15000, "segundos": 12.0}
+
+    def entrenar(cfg, run):
+        if fallo == "entrenar":
+            raise RuntimeError("fallo de prueba")
+        return "modelo", resumen
+
+    def guardar(*a):
+        if fallo == "guardar":
+            raise OSError("disco lleno")
+
+    monkeypatch.setattr(script, "abrir_run", lambda cfg: _Run())
+    monkeypatch.setattr(script, "entrenar_experto", entrenar)
+    monkeypatch.setattr(script, "guardar_experto", guardar)
+    monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--salida", str(tmp_path / "e")])
+    if fallo is None:
+        assert script.main() == 0
+    else:
+        with pytest.raises((RuntimeError, OSError)):
+            script.main()
+    assert cierres == [codigo]
 
 
 def test_el_script_informa_de_una_configuracion_no_valida(monkeypatch, tmp_path, capsys):
