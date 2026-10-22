@@ -36,3 +36,4 @@ gail:
 evaluacion:
   episodios: 50  # Protocolo común fijado por la rama evaluacion-checkpoints.
   semilla: 9000
+  determinista: true  # Como evalúa el original las políticas aprendidas.

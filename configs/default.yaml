@@ -125,6 +125,7 @@ gail:
 evaluacion:
   episodios: 50  # Código original de GAIL; las semillas se comparten entre agentes.
   semilla: 9000  # Independiente de entrenamiento y demostraciones.
+  determinista: true  # Como evalúa el original las políticas aprendidas.
 
 entrenamiento:
   learning_rate: 0.001

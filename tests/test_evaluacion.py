@@ -11,14 +11,12 @@ import torch
 from gymnasium import spaces
 
 from src.models.factory import PoliticaBC
-from src.data.entornos import crear_entorno_vectorizado
-from src.training.evaluacion import (cargar_checkpoint_trpo, cargar_politica_bc,
-                                     evaluar_politica, guardar_checkpoint_trpo,
+from src.training.evaluacion import (cargar_politica_bc, config_evaluacion,
+                                     evaluar_final, evaluar_politica,
                                      guardar_politica_bc, predecir_accion)
-from src.training.trpo import crear_trpo
+from src.training.trpo import cargar_experto, entrenar_experto, guardar_experto
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import fijar_seed
-from stable_baselines3.common.vec_env import VecNormalize
 
 
 def _cfg() -> dict:
@@ -71,6 +69,31 @@ def test_aleatorio_y_evaluacion_se_reproducen_con_las_mismas_semillas():
     assert a == b
     assert len(a["retornos"]) == len(a["longitudes"]) == 3
     assert a["retorno_medio"] == float(np.mean(a["retornos"]))
+
+
+def test_evaluar_final_usa_configuracion_y_comparte_protocolo():
+    cfg = {**_cfg(), "evaluacion": {"episodios": 3, "semilla": 42,
+                                    "determinista": True}}
+    assert config_evaluacion(cfg) == {"episodios": 3, "semilla": 42, "determinista": True}
+    assert evaluar_final("aleatorio", cfg) == evaluar_politica("aleatorio", cfg, 3, 42, True)
+
+
+@pytest.mark.parametrize("evaluacion", [
+    None,
+    {},
+    {"episodios": 0, "semilla": 0, "determinista": True},
+    {"episodios": True, "semilla": 0, "determinista": True},
+    {"episodios": 1},
+    {"episodios": 1, "semilla": 0},
+    {"episodios": 1, "semilla": -1, "determinista": True},
+    {"episodios": 1, "semilla": 0, "determinista": 1},
+])
+def test_config_evaluacion_rechaza_seccion_o_valores_invalidos(evaluacion):
+    cfg = _cfg()
+    if evaluacion is not None:
+        cfg["evaluacion"] = evaluacion
+    with pytest.raises(ValueError):
+        config_evaluacion(cfg)
 
 
 @pytest.mark.parametrize("episodios,semilla", [(0, 0), (-1, 0), (1.5, 0), (1, -2), (1, True)])
@@ -127,37 +150,32 @@ def test_evaluacion_no_modifica_politica_bc_ni_crea_gradientes():
                for clave, valor in estado.items())
 
 
-@pytest.mark.parametrize("normalizar", [False, True])
-def test_checkpoint_trpo_conserva_prediccion_y_vecnormalize(tmp_path: Path, normalizar: bool):
+def test_bc_estocastica_usa_un_flujo_aislado_por_episodio():
+    cfg = {**_cfg(), "evaluacion": {"episodios": 3, "semilla": 42,
+                                    "determinista": False}}
+    politica = PoliticaBC(4, 2, False, [], "tanh")
+    rng_antes = torch.random.get_rng_state()
+    primero = evaluar_final(politica, cfg)
+    segundo = evaluar_final(politica, cfg)
+    assert primero == segundo
+    assert torch.equal(rng_antes, torch.random.get_rng_state())
+
+
+def test_experto_guardado_conserva_evaluacion_normalizada(tmp_path: Path):
     raiz = Path(__file__).resolve().parent.parent
     cfg = resolver_configuracion(raiz / "configs" / "default.yaml", "cartpole")
+    cfg["entorno"]["id"] = "Pendulum-v1"
     cfg["trpo"].update(pasos_por_iteracion=64, n_entornos=1, batch_size_valor=32,
-                       capas_ocultas=[8, 8])
-    cfg["trpo"]["normalizar_observaciones"] = normalizar
+                       capas_ocultas=[8, 8], normalizar_observaciones=True)
+    cfg["experto"].update(pasos_totales=128, retorno_objetivo=1_000_000,
+                           evaluar_cada=2, episodios_evaluacion=2)
     fijar_seed(13)
-    venv = crear_entorno_vectorizado(cfg, 1, 14)
-    if normalizar:
-        venv = VecNormalize(venv, norm_obs=True, norm_reward=False)
-        venv.reset()
-    modelo = crear_trpo(cfg, venv)
-    ruta = tmp_path / ("trpo_normalizado" if normalizar else "trpo")
-    datos = {"semilla": 15, "subconjunto": 4, "huella_dataset": "c" * 64}
-    try:
-        observacion = np.zeros(4, dtype=np.float32)
-        antes, _ = modelo.predict(observacion, deterministic=True)
-        guardar_checkpoint_trpo(ruta, modelo, cfg, datos)
-        env_carga = crear_entorno_vectorizado(cfg, 1, 99)
-        cargado, env_cargado, metadatos = cargar_checkpoint_trpo(ruta, env_carga)
-        try:
-            despues, _ = cargado.predict(observacion, deterministic=True)
-            assert np.array_equal(antes, despues)
-            assert isinstance(env_cargado, VecNormalize) is normalizar
-            assert metadatos["huella_dataset"] == "c" * 64
-            assert metadatos["configuracion"] == cfg
-        finally:
-            env_cargado.close()
-        with pytest.raises(FileExistsError):
-            guardar_checkpoint_trpo(ruta, modelo, cfg, datos)
-    finally:
-        venv.close()
+    modelo, resumen = entrenar_experto(cfg)
+    assert resumen["normalizacion"] is not None
+    ruta = tmp_path / "experto"
+    guardar_experto(ruta, modelo, cfg, resumen)
+    cargado, metadatos = cargar_experto(ruta)
+    assert evaluar_politica(
+        cargado, cfg, 3, 7, True, metadatos["resumen"]["normalizacion"]
+    ) == evaluar_politica(modelo, cfg, 3, 7, True, resumen["normalizacion"])
 

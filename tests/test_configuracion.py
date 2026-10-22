@@ -152,7 +152,8 @@ def test_config_resuelta_se_integra_con_politica_y_loaders_bc():
 
 TAMANOS = [("experimento", "repeticiones"), ("demostraciones", "partidas_train"),
            ("demostraciones", "partidas_validacion"), ("demostraciones", "subconjuntos"),
-           ("gail", "iteraciones")]
+           ("gail", "iteraciones"), ("evaluacion", "episodios"),
+           ("evaluacion", "semilla"), ("evaluacion", "determinista")]
 
 
 @pytest.mark.parametrize("entorno", list(TipoEntorno))
@@ -172,6 +173,7 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     base["demostraciones"].update(partidas_train=30, partidas_validacion=9,
                                   subconjuntos=[5, 30])
     base["gail"]["iteraciones"] = 20
+    base["evaluacion"].update(episodios=12, semilla=123, determinista=False)
     (tmp_path / "entornos").mkdir()
     (tmp_path / "base.yaml").write_text(yaml.safe_dump(base), encoding="utf-8")
     perfil = RAIZ / "configs" / "entornos" / "cartpole.yaml"
@@ -184,6 +186,7 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     assert tamanos == {"partidas_train": 10, "partidas_validacion": 5,
                        "subconjuntos": [1, 4, 7, 10]}
     assert cfg["gail"]["iteraciones"] == 300
+    assert cfg["evaluacion"] == {"episodios": 50, "semilla": 9000, "determinista": True}
 
 
 @pytest.mark.parametrize("entorno", list(TipoEntorno))

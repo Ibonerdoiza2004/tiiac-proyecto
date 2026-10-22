@@ -1,23 +1,28 @@
-"""Predicción, evaluación y checkpoints de las políticas del experimento."""
+"""Predicción, evaluación y checkpoints de las políticas del experimento.
+
+Para evaluar agentes guardados: experto con ``cargar_experto(dir)`` y sus
+estadísticas en ``metadatos["resumen"]["normalizacion"]``; BC con
+``cargar_politica_bc(ruta)`` y sin estadísticas; agente aleatorio con
+``"aleatorio"``. GAIL usará ``cargar_gail`` y el mismo campo de estadísticas
+que el experto.
+"""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import pickle
-import platform
-import subprocess
 from pathlib import Path
 from typing import Any
 
-import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
 from sb3_contrib import TRPO
-from stable_baselines3.common.vec_env import VecNormalize
 
 from src.data.entornos import crear_entorno
 from src.models.factory import PoliticaBC
+from src.utils.procedencia import estado_git, versiones_y_hardware
 from src.utils.seed import (generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes, validar_semilla)
 
@@ -25,24 +30,60 @@ _FORMATO_BC = "tiiac-politica-bc"
 _VERSION_BC = 1
 
 
+def config_evaluacion(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Devuelve la sección evaluacion comprobada.
+
+    Raises:
+        ValueError: Si falta o no es válido episodios (entero > 0), semilla
+            (validar_semilla) o determinista (booleano).
+    """
+    ecfg = cfg.get("evaluacion") if isinstance(cfg, dict) else None
+    if not isinstance(ecfg, dict):
+        raise ValueError("La configuración necesita la sección evaluacion")
+    episodios = ecfg.get("episodios")
+    if (isinstance(episodios, bool) or not isinstance(episodios, (int, np.integer))
+            or episodios <= 0):
+        raise ValueError("evaluacion.episodios debe ser un entero positivo")
+    if "semilla" not in ecfg:
+        raise ValueError("Falta evaluacion.semilla en la configuración")
+    semilla = validar_semilla(ecfg["semilla"])
+    determinista = ecfg.get("determinista")
+    if not isinstance(determinista, bool):
+        raise ValueError("evaluacion.determinista debe ser booleano")
+    return {"episodios": int(episodios), "semilla": semilla, "determinista": determinista}
+
+
+def evaluar_final(
+    agente: PoliticaBC | TRPO | str,
+    cfg: dict[str, Any],
+    estadisticas: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evalúa usando episodios, semilla y modo de la sección evaluacion."""
+    ecfg = config_evaluacion(cfg)
+    return evaluar_politica(agente, cfg, ecfg["episodios"], ecfg["semilla"],
+                            ecfg["determinista"], estadisticas)
+
+
 def predecir_accion(
     agente: PoliticaBC | TRPO | str,
     observacion: np.ndarray,
     espacio_accion: spaces.Space,
     determinista: bool,
-    semilla: int = 0,
+    semilla: int | None = None,
     estadisticas: dict[str, Any] | None = None,
 ) -> int | np.ndarray:
     """Predice una acción válida para BC, TRPO o el agente aleatorio.
 
-    ``semilla`` controla el muestreo estocástico de BC; las acciones aleatorias
-    se muestrean del espacio ya sembrado por ``seed.py``. Para TRPO, las
-    estadísticas opcionales son las guardadas por ``VecNormalize``.
+    ``semilla`` controla el muestreo estocástico de BC cuando se indica; con
+    None usa el generador de PyTorch vigente, que el llamador puede aislar por
+    episodio. Las acciones aleatorias usan el espacio sembrado por ``seed.py``.
+    Para TRPO, las estadísticas opcionales son las guardadas por ``VecNormalize``.
 
     Raises:
         ValueError: Si el agente, la observación o el espacio no son compatibles.
     """
-    semilla = validar_semilla(semilla)
+    if semilla is not None:
+        semilla = validar_semilla(semilla)
     if not isinstance(determinista, bool):
         raise ValueError("determinista debe ser booleano")
     observacion = np.asarray(observacion)
@@ -65,7 +106,9 @@ def predecir_accion(
             raise ValueError("observacion no coincide con la dimensión de PoliticaBC")
         agente.eval()
         entrada = torch.as_tensor(observacion, dtype=torch.float32).reshape(1, -1)
-        with torch.no_grad(), generador_torch_aislado(semilla):
+        aislado = (generador_torch_aislado(semilla) if semilla is not None
+                   else contextlib.nullcontext())
+        with torch.no_grad(), aislado:
             if agente.continua:
                 distribucion = agente.distribucion(entrada)
                 salida = agente(entrada)[0] if determinista else distribucion.sample()[0]
@@ -78,7 +121,7 @@ def predecir_accion(
     elif isinstance(agente, TRPO):
         if not isinstance(espacio_accion, (spaces.Discrete, spaces.Box)):
             raise ValueError("TRPO requiere espacio Discrete o Box")
-        obs = _normalizar_observacion(observacion, estadisticas)
+        obs = normalizar_observacion(observacion, estadisticas)
         accion, _ = agente.predict(obs, deterministic=determinista)
         if isinstance(espacio_accion, spaces.Discrete):
             accion = int(np.asarray(accion).reshape(-1)[0])
@@ -138,8 +181,7 @@ def evaluar_politica(
                 terminado = truncado = False
                 while not (terminado or truncado):
                     accion = predecir_accion(agente, observacion, env.action_space,
-                                             determinista, semilla_episodio + longitud,
-                                             estadisticas)
+                                             determinista, None, estadisticas)
                     observacion, recompensa, terminado, truncado, _ = env.step(accion)
                     retorno += float(recompensa)
                     longitud += 1
@@ -168,9 +210,8 @@ def _metadatos_checkpoint(cfg: dict[str, Any], metadatos: dict[str, Any]) -> dic
         "semilla": int(metadatos["semilla"]),
         "subconjunto": metadatos["subconjunto"],
         "huella_dataset": metadatos["huella_dataset"],
-        "codigo": _estado_git(),
-        "versiones": {"python": platform.python_version(), "numpy": np.__version__,
-                      "torch": torch.__version__},
+        "codigo": estado_git(),
+        "versiones": versiones_y_hardware(),
         "adicional": metadatos.get("adicional", {}),
     }
     try:
@@ -179,8 +220,8 @@ def _metadatos_checkpoint(cfg: dict[str, Any], metadatos: dict[str, Any]) -> dic
         raise ValueError(f"metadatos no son JSON finito: {error}") from error
 
 
-def _normalizar_observacion(observacion: np.ndarray,
-                            estadisticas: dict[str, Any] | None) -> np.ndarray:
+def normalizar_observacion(observacion: np.ndarray,
+                           estadisticas: dict[str, Any] | None) -> np.ndarray:
     """Aplica estadísticas de VecNormalize guardadas, si están disponibles."""
     if estadisticas is None:
         return observacion
@@ -188,19 +229,6 @@ def _normalizar_observacion(observacion: np.ndarray,
     escala = np.sqrt(np.asarray(estadisticas["varianza"]) + estadisticas["epsilon"])
     return np.clip((observacion - media) / escala, -estadisticas["limite"],
                    estadisticas["limite"]).astype(np.float32)
-
-
-def _estado_git() -> dict[str, Any]:
-    """Obtiene commit y estado local sin hacer fallar copias sin Git."""
-    try:
-        raiz = Path(__file__).resolve().parents[2]
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=raiz, check=True,
-                                capture_output=True, text=True, timeout=5).stdout.strip()
-        return {"commit": commit}
-    except (OSError, subprocess.SubprocessError):
-        return {"commit": None}
-
-
 def guardar_politica_bc(
     ruta: Path,
     politica: PoliticaBC,
@@ -263,51 +291,3 @@ def cargar_politica_bc(ruta: Path) -> tuple[PoliticaBC, dict[str, Any]]:
         raise ValueError("Checkpoint BC sin metadatos")
     politica.eval()
     return politica, metadatos
-
-
-def guardar_checkpoint_trpo(
-    ruta: Path,
-    modelo: TRPO,
-    cfg: dict[str, Any],
-    metadatos: dict[str, Any],
-) -> None:
-    """Guarda TRPO/GAIL y sus estadísticas VecNormalize sin sobrescribir."""
-    ruta = Path(ruta)
-    if ruta.exists():
-        raise FileExistsError(f"{ruta} ya existe; no se sobrescribe")
-    if not isinstance(modelo, TRPO):
-        raise ValueError("modelo debe ser TRPO")
-    venv = modelo.get_env()
-    normaliza = isinstance(venv, VecNormalize)
-    payload = _metadatos_checkpoint(cfg, {**metadatos, "adicional": {
-        **metadatos.get("adicional", {}), "tipo": "trpo", "vec_normalize": normaliza}})
-    ruta.mkdir(parents=True)
-    try:
-        modelo.save(ruta / "modelo.zip")
-        if normaliza:
-            venv.save(str(ruta / "vecnormalize.pkl"))
-        (ruta / "metadatos.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
-    except Exception:
-        for archivo in ruta.iterdir():
-            archivo.unlink()
-        ruta.rmdir()
-        raise
-
-
-def cargar_checkpoint_trpo(ruta: Path, entorno_vectorizado: Any) -> tuple[TRPO, Any, dict[str, Any]]:
-    """Carga TRPO/GAIL y, si existe, restaura VecNormalize sobre el entorno dado."""
-    ruta = Path(ruta)
-    modelo_ruta = ruta / "modelo.zip"
-    metadatos_ruta = ruta / "metadatos.json"
-    if not modelo_ruta.is_file() or not metadatos_ruta.is_file():
-        raise FileNotFoundError(f"Checkpoint TRPO incompleto en {ruta}")
-    metadatos = json.loads(metadatos_ruta.read_text(encoding="utf-8"))
-    if metadatos.get("adicional", {}).get("vec_normalize"):
-        venv = VecNormalize.load(str(ruta / "vecnormalize.pkl"), entorno_vectorizado)
-        venv.training = False
-        venv.norm_reward = False
-    else:
-        venv = entorno_vectorizado
-    modelo = TRPO.load(modelo_ruta, env=venv, device="cpu")
-    return modelo, venv, metadatos
