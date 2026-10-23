@@ -77,6 +77,16 @@ python scripts/entrenar_experto.py --entorno cartpole
 # entrenamiento y 4,2 s con 4 a la vez; el barrido completo está pendiente de medir.
 python scripts/entrenar_gail.py --entorno cartpole --datos data/demostraciones/cartpole/<fecha>
 
+# BC (no se versiona): el mismo barrido y las mismas opciones que GAIL, con las
+# semillas de cada repetición, así que cada BC usa los mismos pares que su GAIL.
+# Se guarda en checkpoints/bc/<entorno>/<fecha>/cantidad_<c>/repeticion_<r>.pt.
+python scripts/entrenar_bc.py --entorno cartpole --datos data/demostraciones/cartpole/<fecha>
+
+# Evaluación final: experto, aleatorio y cada BC y GAIL con las mismas partidas
+# (sección evaluacion de la config: 50, semilla 9000, deterministas). Comprueba
+# que BC y GAIL usaron los mismos datos y guarda un JSON nuevo con los retornos.
+python scripts/evaluar.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> --bc checkpoints/bc/cartpole/<fecha> --gail checkpoints/gail/cartpole/<fecha>
+
 # Smoke test: el pipeline entero en miniatura. Menos de 5 minutos en CPU.
 python run.py --smoke --entorno cartpole
 

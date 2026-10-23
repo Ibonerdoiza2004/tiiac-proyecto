@@ -20,10 +20,7 @@ from __future__ import annotations
 
 import copy
 import json
-import shutil
-import tempfile
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +34,7 @@ from src.data.entornos import crear_entorno_vectorizado
 from src.data.splits import huella_archivo
 from src.models.factory import ACTIVACIONES
 from src.training.evaluacion import evaluar_politica, normalizar_observacion
+from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
 from src.utils.tracking import registrar
@@ -371,54 +369,6 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         "normalizacion": mejor["estadisticas"],
     }
     return modelo, resumen
-
-
-def comprobar_directorio_libre(directorio: Path) -> Path:
-    """Comprueba que se puede guardar en directorio sin sobrescribir nada.
-
-    Vale si no existe o si es una carpeta vacía. Conviene llamarla antes de
-    entrenar, para no perder un entrenamiento largo al guardar.
-
-    Returns:
-        El directorio como Path.
-
-    Raises:
-        FileExistsError: Si existe como archivo o es una carpeta con archivos.
-    """
-    directorio = Path(directorio)
-    if directorio.exists() and (not directorio.is_dir() or any(directorio.iterdir())):
-        raise FileExistsError(f"{directorio} ya existe con contenido; no se sobrescribe")
-    return directorio
-
-
-def escribir_carpeta_nueva(directorio: Path, escribir: Callable[[Path], None]) -> None:
-    """Escribe una carpeta de resultados entera o nada: nunca la deja a medias.
-
-    escribir(temporal) crea los archivos en una carpeta temporal junto a
-    directorio, que después se renombra a directorio (en el mismo sistema de
-    archivos, el cambio de nombre es inmediato). Si escribir falla, también por
-    Ctrl+C, la temporal se borra y directorio queda como estaba, así que se puede
-    volver a guardar ahí. Comprueba antes, como comprobar_directorio_libre, que
-    directorio no existe o está vacía.
-
-    Raises:
-        FileExistsError: Si directorio existe con contenido, antes o al terminar.
-        Lo que lance escribir.
-    """
-    directorio = comprobar_directorio_libre(directorio)
-    directorio.parent.mkdir(parents=True, exist_ok=True)
-    temporal = Path(tempfile.mkdtemp(prefix=f".{directorio.name}.", suffix=".tmp",
-                                     dir=directorio.parent))
-    try:
-        escribir(temporal)
-        # Una carpeta vacía ya creada se sustituye; con contenido, no.
-        comprobar_directorio_libre(directorio)
-        if directorio.exists():
-            directorio.rmdir()
-        temporal.rename(directorio)
-    except BaseException:
-        shutil.rmtree(temporal, ignore_errors=True)
-        raise
 
 
 def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,

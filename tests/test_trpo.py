@@ -29,7 +29,7 @@ from src.training.trpo import (cargar_experto, cargar_politica_experto, crear_tr
                                entrenar_experto, estadisticas_normalizacion, evaluar_retorno,
                                guardar_experto, iteracion_trpo, normalizar_observacion,
                                politica_trpo)
-from src.utils import procedencia
+from src.utils import archivos, procedencia
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import (fijar_seed, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes)
@@ -502,7 +502,7 @@ def test_escribir_carpeta_nueva_deja_la_carpeta_entera(tmp_path, previa):
     destino = tmp_path / "padre" / "resultado"
     if previa == "vacia":
         destino.mkdir(parents=True)
-    trpo.escribir_carpeta_nueva(destino, _escribir_dos)
+    archivos.escribir_carpeta_nueva(destino, _escribir_dos)
     assert sorted(p.name for p in destino.iterdir()) == ["a.txt", "b.txt"]
     assert [p.name for p in destino.parent.iterdir()] == ["resultado"]  # sin temporales
 
@@ -518,9 +518,9 @@ def test_escribir_carpeta_nueva_no_deja_nada_si_falla(tmp_path, error):
         raise error
 
     with pytest.raises(type(error)):
-        trpo.escribir_carpeta_nueva(destino, falla_a_mitad)
+        archivos.escribir_carpeta_nueva(destino, falla_a_mitad)
     assert list(tmp_path.iterdir()) == []  # ni la carpeta ni la temporal
-    trpo.escribir_carpeta_nueva(destino, _escribir_dos)  # se puede volver a guardar
+    archivos.escribir_carpeta_nueva(destino, _escribir_dos)  # se puede volver a guardar
     assert sorted(p.name for p in destino.iterdir()) == ["a.txt", "b.txt"]
 
 
@@ -529,7 +529,7 @@ def test_escribir_carpeta_nueva_no_sobrescribe(tmp_path):
     destino.mkdir()
     (destino / "notas.txt").write_text("x")
     with pytest.raises(FileExistsError):
-        trpo.escribir_carpeta_nueva(destino, _escribir_dos)
+        archivos.escribir_carpeta_nueva(destino, _escribir_dos)
 
     # Si otro proceso la llena mientras se escribe, tampoco: la temporal se borra.
     otra = tmp_path / "otra"
@@ -540,9 +540,52 @@ def test_escribir_carpeta_nueva_no_sobrescribe(tmp_path):
         (otra / "ajeno.txt").write_text("x")
 
     with pytest.raises(FileExistsError):
-        trpo.escribir_carpeta_nueva(otra, ocupar)
+        archivos.escribir_carpeta_nueva(otra, ocupar)
     assert [p.name for p in otra.iterdir()] == ["ajeno.txt"]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["otra", "resultado"]
+
+
+def test_escribir_archivo_nuevo_deja_el_archivo_entero_y_crea_las_carpetas(tmp_path):
+    destino = tmp_path / "padre" / "modelo.pt"
+    archivos.escribir_archivo_nuevo(destino, lambda temporal: temporal.write_text("todo"))
+    assert destino.read_text() == "todo"
+    assert [p.name for p in destino.parent.iterdir()] == ["modelo.pt"]  # sin temporales
+
+
+@pytest.mark.parametrize("error", [OSError("disco lleno"), KeyboardInterrupt()])
+def test_escribir_archivo_nuevo_no_deja_nada_si_falla(tmp_path, error):
+    destino = tmp_path / "modelo.pt"
+
+    def falla_a_mitad(temporal: Path) -> None:
+        temporal.write_text("a medias")
+        raise error
+
+    with pytest.raises(type(error)):
+        archivos.escribir_archivo_nuevo(destino, falla_a_mitad)
+    assert list(tmp_path.iterdir()) == []  # ni el archivo ni el temporal
+    archivos.escribir_archivo_nuevo(destino, lambda temporal: temporal.write_text("bien"))
+    assert destino.read_text() == "bien"
+
+
+def test_escribir_archivo_nuevo_no_sobrescribe(tmp_path):
+    destino = tmp_path / "modelo.pt"
+    destino.write_text("anterior")
+    escritos = []
+    with pytest.raises(FileExistsError):
+        archivos.escribir_archivo_nuevo(destino, lambda temporal: escritos.append(1))
+    assert not escritos and destino.read_text() == "anterior"
+
+    # Si otro proceso lo crea mientras se escribe, tampoco: el temporal se borra.
+    otro = tmp_path / "otro.pt"
+
+    def ocupar(temporal: Path) -> None:
+        temporal.write_text("mío")
+        otro.write_text("ajeno")
+
+    with pytest.raises(FileExistsError):
+        archivos.escribir_archivo_nuevo(otro, ocupar)
+    assert otro.read_text() == "ajeno"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["modelo.pt", "otro.pt"]
 
 
 def test_guardar_experto_no_deja_una_carpeta_a_medias(tmp_path, monkeypatch):
@@ -591,6 +634,18 @@ def test_estado_git_sin_git_no_falla(error, monkeypatch):
         raise error
     monkeypatch.setattr(procedencia.subprocess, "run", falla)
     assert procedencia.estado_git() == {"commit": None, "cambios_sin_commit": None}
+
+
+@pytest.mark.parametrize("codigo,aviso", [
+    ({"commit": "a" * 40, "cambios_sin_commit": False}, None),
+    ({"commit": "a" * 40, "cambios_sin_commit": True}, "había cambios sin commit"),
+    ({"commit": None, "cambios_sin_commit": None}, "no se pudo leer el commit"),
+])
+def test_avisar_estado_git(codigo, aviso, capsys):
+    procedencia.avisar_estado_git(codigo)
+    salida = capsys.readouterr()
+    assert salida.out == ""
+    assert (aviso in salida.err and salida.err.count("\n") == 1) if aviso else salida.err == ""
 
 
 @pytest.mark.parametrize("codigo,aviso", [
@@ -742,7 +797,7 @@ def test_sin_estandarizar_ventajas_se_admite_una_transicion():
 
 
 def test_comprobar_directorio_libre(tmp_path):
-    from src.training.trpo import comprobar_directorio_libre
+    from src.utils.archivos import comprobar_directorio_libre
     assert comprobar_directorio_libre(tmp_path / "nuevo") == tmp_path / "nuevo"
     (tmp_path / "vacio").mkdir()
     comprobar_directorio_libre(tmp_path / "vacio")
@@ -1025,7 +1080,7 @@ def test_bc_aprende_de_las_demostraciones_grabadas_con_el_experto(experto_guarda
     disco → carga con comprobación de huella → BC con cada subconjunto."""
     from src.data.demostraciones import cargar_demostraciones
     from src.data.splits import cargar_splits
-    from src.training.loop import entrenar_bc_subconjunto
+    from src.training.bc import entrenar_bc_subconjunto
     from src.utils.seed import crear_generador
 
     cfg = _cfg_grabacion()

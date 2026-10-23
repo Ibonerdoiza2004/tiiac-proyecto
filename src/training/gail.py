@@ -17,22 +17,18 @@ recompensa del discriminador, su actualización y el reajuste de la red de valor
 entrenar_gail monta las piezas de una repetición con un subconjunto de partidas
 y repite la iteración, registrando un retorno de validación cada cierto tiempo.
 guardar_gail y cargar_gail guardan el resultado como el experto, con el
-discriminador y la procedencia de los datos (procedencia_datos).
+discriminador y la procedencia de los datos (procedencia_datos, en barrido.py).
 entrenar_y_guardar_gail es un entrenamiento del barrido completo (run de W&B,
-progreso, entrenamiento y guardado). scripts/entrenar_gail.py reparte el barrido
-con tarea_barrido_gail y, en paralelo, lanza cada entrenamiento en su proceso con
-ejecutar_tarea_barrido, que lo prepara con preparar_proceso_barrido.
+progreso, entrenamiento y guardado): la tarea que scripts/entrenar_gail.py
+reparte con ejecutar_barrido (barrido.py).
 """
 
 from __future__ import annotations
 
-import copy
 import json
 import math
-import signal
 import time
-from collections.abc import Callable, Sequence
-from multiprocessing.connection import Connection
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -46,18 +42,18 @@ from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecNormalize
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
 
-from src.data.demostraciones import config_demostraciones, huella_partidas
 from src.data.entornos import crear_entorno_vectorizado
 from src.data.loaders import pares_de_subconjunto, tensores_de_pares
-from src.data.splits import SplitsDemostraciones, huella_archivo
+from src.data.splits import SplitsDemostraciones
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, comprobar_arquitectura, construir_discriminador
-from src.training.trpo import (comprobar_directorio_libre, config_trpo, crear_trpo,
-                               escribir_carpeta_nueva, estadisticas_normalizacion,
+from src.training.barrido import comprobar_config_comun
+from src.training.trpo import (config_trpo, crear_trpo, estadisticas_normalizacion,
                                evaluar_retorno, iteracion_trpo)
-from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
-from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, validar_semilla
-from src.utils.tracking import RegistroProgreso, abrir_run, registrar, terminar_run
+from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
+from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
+from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
+from src.utils.tracking import RegistroProgreso, abrir_run_barrido, registrar, terminar_run
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
@@ -699,11 +695,10 @@ def comprobar_config_barrido(cfg: dict) -> None:
     """Comprueba la configuración del barrido de GAIL antes de entrenar nada.
 
     Reúne lo que cada entrenamiento comprobaría por su cuenta (secciones gail,
-    gail.discriminador, trpo y demostraciones, con frecuencia_pares, y
-    experimento.semilla_repeticiones) y lo propio del barrido
-    (experimento.repeticiones y experimento.procesos, enteros positivos). Así
-    scripts/entrenar_gail.py rechaza una configuración no válida una sola vez y
-    sin lanzar procesos, en lugar de fallar en cada entrenamiento.
+    gail.discriminador y trpo) y lo común a los barridos (comprobar_config_comun:
+    demostraciones y experimento). Así scripts/entrenar_gail.py rechaza una
+    configuración no válida una sola vez y sin lanzar procesos, en lugar de
+    fallar en cada entrenamiento.
 
     Raises:
         ValueError: Si falta alguna clave o algún valor no es válido.
@@ -711,21 +706,7 @@ def comprobar_config_barrido(cfg: dict) -> None:
     _config_gail(cfg)
     _config_discriminador(cfg)
     config_trpo(cfg)
-    dcfg = config_demostraciones(cfg)
-    if not es_entero_positivo(dcfg.get("frecuencia_pares")):
-        raise ValueError("demostraciones.frecuencia_pares debe ser un entero positivo, no "
-                         f"{dcfg.get('frecuencia_pares')!r}")
-    ecfg = cfg.get("experimento")
-    if not isinstance(ecfg, dict):
-        raise ValueError("La configuración necesita la sección experimento")
-    for clave in ("repeticiones", "procesos"):
-        if not es_entero_positivo(ecfg.get(clave)):
-            raise ValueError(f"experimento.{clave} debe ser un entero positivo, "
-                             f"no {ecfg.get(clave)!r}")
-    try:
-        validar_semilla(ecfg.get("semilla_repeticiones"))
-    except ValueError as error:
-        raise ValueError(f"experimento.semilla_repeticiones no es válida: {error}") from error
+    comprobar_config_comun(cfg)
 
 
 def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones,
@@ -831,35 +812,6 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         "normalizacion": normalizacion,
     }
     return agente, discriminador, resumen
-
-
-def procedencia_datos(ruta_demostraciones: Path, ruta_splits: Path,
-                      trayectorias: Sequence[Trayectoria]) -> dict[str, str]:
-    """Describe con qué datos se entrenó, para los metadatos de guardar_gail.
-
-    Args:
-        ruta_demostraciones: NPZ de demostraciones del que salen las partidas.
-        ruta_splits: JSON de splits usado.
-        trayectorias: Las partidas cargadas de ese NPZ.
-
-    Returns:
-        Las rutas (relativas a la carpeta de trabajo, o solo el nombre), la
-        huella de cada archivo (huella_dataset, huella_splits) y la del
-        contenido de las partidas (huella_partidas), que no cambia con los
-        metadatos del NPZ.
-
-    Raises:
-        FileNotFoundError: Si falta alguno de los archivos.
-        ValueError: Si trayectorias no es una secuencia de Trayectoria.
-    """
-    ruta_demostraciones, ruta_splits = Path(ruta_demostraciones), Path(ruta_splits)
-    return {
-        "demostraciones": ruta_registrada(ruta_demostraciones),
-        "splits": ruta_registrada(ruta_splits),
-        "huella_dataset": huella_archivo(ruta_demostraciones),
-        "huella_splits": huella_archivo(ruta_splits),
-        "huella_partidas": huella_partidas(trayectorias),
-    }
 
 
 def _para_json(valor: object) -> object:
@@ -1013,11 +965,7 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
         ValueError: Si algo no es válido (ver entrenar_gail y guardar_gail).
         FileExistsError: Si destino existe con contenido.
     """
-    entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
-    cfg_run = copy.deepcopy(cfg)
-    cfg_run["experimento"]["nombre"] = (f"{cfg['experimento']['nombre']}-gail-{entorno}-"
-                                        f"c{cantidad}-r{repeticion}")
-    run = abrir_run(cfg_run)
+    run = abrir_run_barrido(cfg, "gail", cantidad, repeticion)
     progreso = RegistroProgreso(run, f"cantidad {cantidad}, repetición {repeticion}",
                                 cfg["trpo"]["pasos_por_iteracion"], cfg["gail"]["iteraciones"])
     try:
@@ -1030,58 +978,3 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
         raise
     terminar_run(run)
     return resumen
-
-
-def preparar_proceso_barrido() -> None:
-    """Prepara un proceso del barrido en paralelo: un hilo de PyTorch y sin Ctrl+C.
-
-    Con un solo hilo, el resultado es el mismo que en serie (con varios cambia el
-    orden de las sumas y el redondeo) y los procesos no se reparten los núcleos.
-    Ctrl+C lo recoge solo el proceso principal, que termina los demás; si no, cada
-    proceso imprimiría su propia traza de error.
-    """
-    torch.set_num_threads(1)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-
-def ejecutar_tarea_barrido(conexion: Connection, tarea: Callable[[tuple[Any, ...]], Any],
-                           argumentos: tuple[Any, ...]) -> None:
-    """Cuerpo de cada proceso del barrido en paralelo: prepara el proceso, ejecuta y envía.
-
-    Prepara el proceso con preparar_proceso_barrido, ejecuta tarea(argumentos)
-    (tarea_barrido_gail en el script) y envía su resultado por conexion. Si el
-    proceso muere antes de enviarlo, por ejemplo porque el sistema lo mata por
-    falta de memoria, la conexión se cierra sin datos y quien espera recibe
-    EOFError en lugar de quedarse esperando para siempre.
-
-    Args:
-        conexion: Extremo de envío de un Pipe; se cierra al terminar.
-        tarea: Función de nivel de módulo (el proceso nuevo la importa).
-        argumentos: Lo que recibe tarea.
-    """
-    preparar_proceso_barrido()
-    try:
-        conexion.send(tarea(argumentos))
-    finally:
-        conexion.close()
-
-
-def tarea_barrido_gail(argumentos: tuple[Any, ...]) -> tuple[int, int, dict[str, Any] | None,
-                                                               str | None]:
-    """Ejecuta entrenar_y_guardar_gail para un elemento del barrido sin propagar sus errores.
-
-    Args:
-        argumentos: (cfg, trayectorias, splits, cantidad, repeticion, destino, datos), los
-            argumentos de entrenar_y_guardar_gail en una tupla, como los reparte un Pool.
-
-    Returns:
-        (cantidad, repeticion, resumen, None) si va bien, o (cantidad, repeticion, None,
-        descripción del error) si falla: un fallo no detiene el resto del barrido.
-    """
-    cfg, trayectorias, splits, cantidad, repeticion, destino, datos = argumentos
-    try:
-        resumen = entrenar_y_guardar_gail(cfg, trayectorias, splits, cantidad, repeticion,
-                                          destino, datos)
-    except Exception as error:  # noqa: BLE001 - se informa y sigue el barrido
-        return cantidad, repeticion, None, repr(error)
-    return cantidad, repeticion, resumen, None

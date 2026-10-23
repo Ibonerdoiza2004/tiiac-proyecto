@@ -32,9 +32,10 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from src.data.demostraciones import generar_dataset  # noqa: E402
-from src.training.trpo import (cargar_politica_experto,  # noqa: E402
-                               comprobar_directorio_libre)
+from src.training.trpo import cargar_politica_experto  # noqa: E402
+from src.utils.archivos import comprobar_directorio_libre  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
+from src.utils.procedencia import avisar_estado_git  # noqa: E402
 
 
 def main() -> int:
@@ -90,13 +91,7 @@ def main() -> int:
     print(f"huella de {resultado['demostraciones'].name}: {resultado['huella_dataset']}")
     print(f"huella de {resultado['splits'].name}: {resultado['huella_splits']}")
     print(f"huella de las partidas: {resultado['huella_partidas']}")
-    codigo = metadatos["procedencia"]["codigo"]
-    if codigo["commit"] is None:
-        print("aviso: no se pudo leer el commit de git; los metadatos no dicen con qué código "
-              "se grabaron", file=sys.stderr)
-    elif codigo["cambios_sin_commit"]:
-        print("aviso: había cambios sin commit; estos datos no se pueden regenerar "
-              "exactamente desde el repositorio", file=sys.stderr)
+    avisar_estado_git(metadatos["procedencia"]["codigo"])
     if args.huella_esperada is not None and args.huella_esperada != resultado["huella_partidas"]:
         print(f"error: la huella de las partidas no coincide con la esperada "
               f"({args.huella_esperada}); son distintas de las congeladas", file=sys.stderr)
