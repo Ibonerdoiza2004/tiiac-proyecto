@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import copy
 import json
-import math
 import shutil
 import tempfile
 import time
@@ -29,12 +28,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 
-from src.data.demostraciones import Politica, config_demostraciones
+from src.data.demostraciones import Politica, comprobar_espacios, config_demostraciones
 from src.data.entornos import crear_entorno_vectorizado
 from src.data.splits import huella_archivo
 from src.models.factory import ACTIVACIONES
@@ -42,20 +40,10 @@ from src.training.evaluacion import evaluar_politica, normalizar_observacion
 from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
 from src.utils.tracking import registrar
+from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_METADATOS = "experto.json"
-
-
-def _es_entero_positivo(valor: object) -> bool:
-    """Indica si valor es un entero no booleano mayor que cero."""
-    return isinstance(valor, int) and not isinstance(valor, bool) and valor > 0
-
-
-def _es_real(valor: object) -> bool:
-    """Indica si valor es un número real finito no booleano."""
-    return (isinstance(valor, (int, float)) and not isinstance(valor, bool)
-            and math.isfinite(valor))
 
 
 def config_trpo(cfg: dict) -> dict:
@@ -69,23 +57,23 @@ def config_trpo(cfg: dict) -> dict:
         raise ValueError("La configuración necesita la sección trpo")
     reglas = {
         "capas_ocultas": lambda v: (isinstance(v, list) and len(v) > 0
-                                    and all(_es_entero_positivo(c) for c in v)),
+                                    and all(es_entero_positivo(c) for c in v)),
         "activacion": lambda v: isinstance(v, str) and v in ACTIVACIONES,
-        "gamma": lambda v: _es_real(v) and 0 < v <= 1,
-        "gae_lambda": lambda v: _es_real(v) and 0 <= v <= 1,
-        "target_kl": lambda v: _es_real(v) and v > 0,
-        "cg_damping": lambda v: _es_real(v) and v >= 0,
-        "pasos_por_iteracion": _es_entero_positivo,
-        "n_entornos": _es_entero_positivo,
+        "gamma": lambda v: es_real_finito(v) and 0 < v <= 1,
+        "gae_lambda": lambda v: es_real_finito(v) and 0 <= v <= 1,
+        "target_kl": lambda v: es_real_finito(v) and v > 0,
+        "cg_damping": lambda v: es_real_finito(v) and v >= 0,
+        "pasos_por_iteracion": es_entero_positivo,
+        "n_entornos": es_entero_positivo,
         "normalizar_observaciones": lambda v: isinstance(v, bool),
-        "limite_normalizacion": lambda v: _es_real(v) and v > 0,
+        "limite_normalizacion": lambda v: es_real_finito(v) and v > 0,
         "normalizar_ventajas": lambda v: isinstance(v, bool),
-        "pasos_gradiente_conjugado": _es_entero_positivo,
-        "busqueda_lineal_factor": lambda v: _es_real(v) and 0 < v < 1,
-        "busqueda_lineal_maximo": _es_entero_positivo,
-        "learning_rate_valor": lambda v: _es_real(v) and v > 0,
-        "pasos_valor": _es_entero_positivo,
-        "batch_size_valor": _es_entero_positivo,
+        "pasos_gradiente_conjugado": es_entero_positivo,
+        "busqueda_lineal_factor": lambda v: es_real_finito(v) and 0 < v < 1,
+        "busqueda_lineal_maximo": es_entero_positivo,
+        "learning_rate_valor": lambda v: es_real_finito(v) and v > 0,
+        "pasos_valor": es_entero_positivo,
+        "batch_size_valor": es_entero_positivo,
     }
     for clave, valida in reglas.items():
         if clave not in tcfg:
@@ -125,11 +113,11 @@ def _config_experto(cfg: dict) -> dict:
     if not isinstance(ecfg, dict):
         raise ValueError("La configuración necesita la sección experto")
     reglas = {
-        "pasos_totales": _es_entero_positivo,
-        "retorno_objetivo": _es_real,
+        "pasos_totales": es_entero_positivo,
+        "retorno_objetivo": es_real_finito,
         "semilla": _semilla_valida,
-        "evaluar_cada": _es_entero_positivo,
-        "episodios_evaluacion": _es_entero_positivo,
+        "evaluar_cada": es_entero_positivo,
+        "episodios_evaluacion": es_entero_positivo,
         "evaluacion_determinista": lambda v: isinstance(v, bool),
     }
     for clave, valida in reglas.items():
@@ -141,12 +129,9 @@ def _config_experto(cfg: dict) -> dict:
 
 
 def _comprobar_espacios(observacion: spaces.Space, accion: spaces.Space) -> None:
-    """Admite observaciones Box 1-D y acciones Discrete con start 0 o Box 1-D."""
-    if not isinstance(observacion, spaces.Box) or len(observacion.shape) != 1:
-        raise ValueError("Espacio de observación no compatible: se admite Box de una dimensión")
-    discreta = isinstance(accion, spaces.Discrete) and int(accion.start) == 0
-    continua = isinstance(accion, spaces.Box) and len(accion.shape) == 1
-    if not (discreta or continua):
+    """Admite los espacios de comprobar_espacios, con Discrete solo si empieza en 0."""
+    comprobar_espacios(observacion, accion)
+    if isinstance(accion, spaces.Discrete) and int(accion.start) != 0:
         raise ValueError("Espacio de acción no compatible: se admite Discrete con start 0 "
                          "(sb3 genera índices 0..n-1) o Box de una dimensión")
 

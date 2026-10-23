@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 
 from src.data.splits import SplitsDemostraciones, validar_splits
 from src.data.tipos import LoteTransiciones, Trayectoria, es_id_episodio
+from src.utils.validacion import es_entero, es_entero_positivo
 
 
 class DatasetPlaceholder(Dataset):
@@ -83,8 +84,7 @@ def submuestrear_pares(
         ValueError: Frecuencia no válida, colección vacía o elementos que no son
             Trayectoria, id_episodio fuera del rango de int64 o generador no válido.
     """
-    if (isinstance(frecuencia, (bool, np.bool_))
-            or not isinstance(frecuencia, (int, np.integer)) or frecuencia < 1):
+    if not es_entero_positivo(frecuencia):
         raise ValueError(f"frecuencia debe ser un entero positivo, no {frecuencia!r}")
     if not isinstance(generador, np.random.Generator):
         raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")
@@ -237,8 +237,7 @@ def pares_de_subconjunto(
             or not all(isinstance(t, Trayectoria) for t in trayectorias)):
         raise ValueError("Se requiere una secuencia de objetos Trayectoria")
     validar_splits(splits, [t.id_episodio for t in trayectorias])
-    if (isinstance(cantidad, (bool, np.bool_)) or not isinstance(cantidad, (int, np.integer))
-            or cantidad not in splits.subconjuntos):
+    if not es_entero(cantidad) or cantidad not in splits.subconjuntos:
         raise ValueError(f"No hay subconjunto de {cantidad!r} partidas; "
                          f"disponibles: {sorted(splits.subconjuntos)}")
 
@@ -283,8 +282,7 @@ def construir_loaders_bc(
         raise ValueError("La configuración necesita demostraciones.frecuencia_pares y "
                          "bc.batch_size")
     batch_size = bcfg["batch_size"]
-    if (isinstance(batch_size, (bool, np.bool_)) or not isinstance(batch_size, (int, np.integer))
-            or batch_size < 1):
+    if not es_entero_positivo(batch_size):
         raise ValueError(f"bc.batch_size debe ser un entero positivo, no {batch_size!r}")
     validacion, train = pares_de_subconjunto(trayectorias, splits, cantidad, cfg, generador)
     return (DataLoader(DatasetTransiciones(train, espacio_accion),

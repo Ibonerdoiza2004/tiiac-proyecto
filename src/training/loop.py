@@ -20,6 +20,7 @@ from src.data.splits import SplitsDemostraciones
 from src.data.tipos import Trayectoria
 from src.models.factory import PoliticaBC, construir_politica_bc
 from src.utils.tracking import registrar
+from src.utils.validacion import es_entero_positivo, es_real_finito
 
 OPTIMIZADORES = {
     "adam": torch.optim.Adam,
@@ -80,8 +81,7 @@ def evaluar(modelo: nn.Module, loader: DataLoader, cfg: dict) -> dict[str, float
 def _entero_positivo_de_cfg(bcfg: dict, clave: str) -> int:
     """Lee bc.clave y comprueba que es un entero positivo."""
     valor = bcfg.get(clave)
-    if (isinstance(valor, (bool, np.bool_)) or not isinstance(valor, (int, np.integer))
-            or valor < 1):
+    if not es_entero_positivo(valor):
         raise ValueError(f"bc.{clave} debe ser un entero positivo, no {valor!r}")
     return int(valor)
 
@@ -193,9 +193,7 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
         raise ValueError(f"bc.optimizador desconocido: {optimizador!r}; "
                          f"opciones: {sorted(OPTIMIZADORES)}")
     learning_rate = bcfg.get("learning_rate")
-    if (isinstance(learning_rate, (bool, np.bool_))
-            or not isinstance(learning_rate, (int, float, np.integer, np.floating))
-            or not math.isfinite(learning_rate) or learning_rate <= 0):
+    if not es_real_finito(learning_rate) or learning_rate <= 0:
         raise ValueError(f"bc.learning_rate debe ser un real positivo, no {learning_rate!r}")
     normalizar = bcfg.get("normalizar_observaciones")
     if not isinstance(normalizar, (bool, np.bool_)):

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from src.utils.validacion import es_entero
+
 ID_EPISODIO_MINIMO = int(np.iinfo(np.int64).min)
 ID_EPISODIO_MAXIMO = int(np.iinfo(np.int64).max)
 
@@ -16,8 +18,7 @@ def es_id_episodio(valor: object) -> bool:
 
     El rango permite guardar los IDs en arrays int64 y tensores sin perder precisión.
     """
-    return (isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
-            and ID_EPISODIO_MINIMO <= int(valor) <= ID_EPISODIO_MAXIMO)
+    return es_entero(valor) and ID_EPISODIO_MINIMO <= int(valor) <= ID_EPISODIO_MAXIMO
 
 
 @dataclass(frozen=True, slots=True)

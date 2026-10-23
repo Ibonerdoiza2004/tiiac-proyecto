@@ -55,9 +55,10 @@ from src.models.factory import Discriminador, comprobar_arquitectura, construir_
 from src.training.trpo import (comprobar_directorio_libre, config_trpo, crear_trpo,
                                escribir_carpeta_nueva, estadisticas_normalizacion,
                                evaluar_retorno, iteracion_trpo)
-from src.utils.procedencia import estado_git, ruta_registrada, versiones_y_hardware
+from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, validar_semilla
 from src.utils.tracking import RegistroProgreso, abrir_run, registrar, terminar_run
+from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_DISCRIMINADOR = "discriminador.pt"
@@ -93,8 +94,7 @@ def _config_discriminador(cfg: dict) -> dict:
     def real(clave: str) -> float:
         """Devuelve dcfg[clave] si es un real finito no booleano."""
         valor = dcfg[clave]
-        if (isinstance(valor, bool) or not isinstance(valor, (int, float))
-                or not math.isfinite(valor)):
+        if not es_real_finito(valor):
             raise ValueError(f"gail.discriminador.{clave} debe ser un real finito, no {valor!r}")
         return float(valor)
 
@@ -104,7 +104,7 @@ def _config_discriminador(cfg: dict) -> dict:
     if real("learning_rate") <= 0:
         raise ValueError("gail.discriminador.learning_rate debe ser positivo")
     pasos = dcfg["pasos_adam"]
-    if isinstance(pasos, bool) or not isinstance(pasos, int) or pasos <= 0:
+    if not es_entero_positivo(pasos):
         raise ValueError(
             f"gail.discriminador.pasos_adam debe ser un entero positivo, no {pasos!r}")
     if real("peso_entropia") < 0:
@@ -214,8 +214,7 @@ def muestrear_expertos(pares: LoteTransiciones, cantidad: int,
     total = len(np.asarray(pares.estados))
     if total == 0:
         raise ValueError("No hay pares expertos que muestrear")
-    if isinstance(cantidad, (bool, np.bool_)) or not isinstance(cantidad, (int, np.integer)) \
-            or cantidad <= 0:
+    if not es_entero_positivo(cantidad):
         raise ValueError(f"cantidad debe ser un entero positivo, no {cantidad!r}")
     if not isinstance(generador, np.random.Generator):
         raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")
@@ -681,14 +680,10 @@ def _config_gail(cfg: dict) -> dict:
     if not isinstance(gcfg, dict):
         raise ValueError("La configuración necesita la sección gail")
 
-    def entero_positivo(valor: object) -> bool:
-        """Indica si valor es un entero no booleano mayor que cero."""
-        return isinstance(valor, int) and not isinstance(valor, bool) and valor > 0
-
     reglas = {
-        "iteraciones": entero_positivo,
-        "evaluar_cada": entero_positivo,
-        "episodios_evaluacion": entero_positivo,
+        "iteraciones": es_entero_positivo,
+        "evaluar_cada": es_entero_positivo,
+        "episodios_evaluacion": es_entero_positivo,
         "evaluacion_determinista": lambda v: isinstance(v, bool),
         "recompensa": lambda v: v in MODOS_RECOMPENSA,
     }
@@ -698,12 +693,6 @@ def _config_gail(cfg: dict) -> dict:
         if not valida(gcfg[clave]):
             raise ValueError(f"gail.{clave} no es válido: {gcfg[clave]!r}")
     return gcfg
-
-
-def _es_entero_positivo(valor: object) -> bool:
-    """Indica si valor es un entero (de Python o NumPy, no booleano) mayor que cero."""
-    return (isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
-            and valor > 0)
 
 
 def comprobar_config_barrido(cfg: dict) -> None:
@@ -723,14 +712,14 @@ def comprobar_config_barrido(cfg: dict) -> None:
     _config_discriminador(cfg)
     config_trpo(cfg)
     dcfg = config_demostraciones(cfg)
-    if not _es_entero_positivo(dcfg.get("frecuencia_pares")):
+    if not es_entero_positivo(dcfg.get("frecuencia_pares")):
         raise ValueError("demostraciones.frecuencia_pares debe ser un entero positivo, no "
                          f"{dcfg.get('frecuencia_pares')!r}")
     ecfg = cfg.get("experimento")
     if not isinstance(ecfg, dict):
         raise ValueError("La configuración necesita la sección experimento")
     for clave in ("repeticiones", "procesos"):
-        if not _es_entero_positivo(ecfg.get(clave)):
+        if not es_entero_positivo(ecfg.get(clave)):
             raise ValueError(f"experimento.{clave} debe ser un entero positivo, "
                              f"no {ecfg.get(clave)!r}")
     try:
@@ -883,13 +872,11 @@ def _para_json(valor: object) -> object:
         return {clave: _para_json(v) for clave, v in valor.items()}
     if isinstance(valor, (list, tuple)):
         return [_para_json(v) for v in valor]
-    if isinstance(valor, (np.integer, np.floating, np.bool_)):
-        valor = valor.item()
+    if not (valor is None or isinstance(valor, (str, int, float, bool))):
+        valor = a_json(valor)  # escalares de NumPy; TypeError con cualquier otra cosa
     if isinstance(valor, float) and not math.isfinite(valor):
         return None
-    if valor is None or isinstance(valor, (str, int, float, bool)):
-        return valor
-    raise TypeError(f"{type(valor).__name__} no se puede guardar en JSON")
+    return valor
 
 
 def guardar_gail(directorio: Path, agente: TRPO, discriminador: Discriminador, cfg: dict,

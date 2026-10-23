@@ -14,6 +14,8 @@ import torch.nn as nn
 from gymnasium import spaces
 from torch.distributions import Categorical, Distribution, Independent, Normal
 
+from src.utils.validacion import es_entero_positivo, es_real_finito
+
 ACTIVACIONES = {
     "tanh": nn.Tanh,
     "relu": nn.ReLU,
@@ -35,18 +37,6 @@ class ModeloPlaceholder(nn.Module):
         return self.red(x)
 
 
-def _es_entero_positivo(valor: object) -> bool:
-    """Indica si valor es un entero no booleano mayor que cero."""
-    return (isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
-            and valor > 0)
-
-
-def _es_real_finito(valor: object) -> bool:
-    """Indica si valor es un número real finito no booleano."""
-    return (isinstance(valor, (int, float, np.integer, np.floating))
-            and not isinstance(valor, (bool, np.bool_)) and bool(np.isfinite(valor)))
-
-
 def comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
     """Comprueba la lista de capas ocultas y el nombre de la activación.
 
@@ -58,7 +48,7 @@ def comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
             estar vacía) o activacion no es una clave de ACTIVACIONES.
     """
     if (isinstance(capas_ocultas, (str, bytes)) or not isinstance(capas_ocultas, Sequence)
-            or not all(_es_entero_positivo(c) for c in capas_ocultas)):
+            or not all(es_entero_positivo(c) for c in capas_ocultas)):
         raise ValueError(
             f"capas_ocultas debe ser una lista de enteros positivos, no {capas_ocultas!r}")
     if not isinstance(activacion, str) or activacion not in ACTIVACIONES:
@@ -69,10 +59,10 @@ def comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
 def _comprobar_dimensiones(dim_observacion: object, dim_accion: object,
                            continua: object) -> None:
     """Comprueba los tamaños del estado y de la acción y el tipo de acción."""
-    if not _es_entero_positivo(dim_observacion):
+    if not es_entero_positivo(dim_observacion):
         raise ValueError(
             f"dim_observacion debe ser un entero positivo, no {dim_observacion!r}")
-    if not _es_entero_positivo(dim_accion):
+    if not es_entero_positivo(dim_accion):
         raise ValueError(f"dim_accion debe ser un entero positivo, no {dim_accion!r}")
     if not isinstance(continua, (bool, np.bool_)):
         raise ValueError(f"continua debe ser un booleano, no {continua!r}")
@@ -162,7 +152,7 @@ class _PerceptronNormalizado(nn.Module):
             raise ValueError(f"Se esperaban {nombre} reales [N, {self.dim_entrada}] con N > 0")
         if not torch.isfinite(entradas).all():
             raise ValueError(f"Los {nombre} para normalizar deben ser finitos")
-        if not _es_real_finito(epsilon) or epsilon <= 0:
+        if not es_real_finito(epsilon) or epsilon <= 0:
             raise ValueError(f"epsilon debe ser un real positivo finito, no {epsilon!r}")
         datos = entradas.detach().to(torch.float64)
         media = datos.mean(dim=0)
@@ -220,7 +210,7 @@ class PoliticaBC(_PerceptronNormalizado):
         """
         _comprobar_dimensiones(dim_observacion, dim_accion, continua)
         comprobar_arquitectura(capas_ocultas, activacion)
-        if continua and not _es_real_finito(log_std_inicial):
+        if continua and not es_real_finito(log_std_inicial):
             raise ValueError("Con acciones continuas log_std_inicial debe ser un real finito, "
                              f"no {log_std_inicial!r}")
         if not continua and log_std_inicial is not None:

@@ -16,6 +16,8 @@ import numpy as np
 import torch
 from stable_baselines3.common.vec_env import VecEnv
 
+from src.utils.validacion import es_entero, es_entero_positivo
+
 
 def fijar_seed(seed: int, determinista: bool = True) -> None:
     """Fija las semillas de las tres fuentes de aleatoriedad del proyecto.
@@ -47,8 +49,7 @@ def validar_semilla(semilla: object) -> int:
     Raises:
         ValueError: Si no es un entero no negativo.
     """
-    if (isinstance(semilla, (bool, np.bool_))
-            or not isinstance(semilla, (int, np.integer)) or semilla < 0):
+    if not es_entero(semilla) or semilla < 0:
         raise ValueError(f"La semilla debe ser un entero no negativo, no {semilla!r}")
     return int(semilla)
 
@@ -90,8 +91,7 @@ def semillas_independientes(semilla: int, cantidad: int) -> list[int]:
         ValueError: Si la semilla o la cantidad no son válidas.
     """
     base = validar_semilla(semilla)
-    if (isinstance(cantidad, (bool, np.bool_)) or not isinstance(cantidad, (int, np.integer))
-            or cantidad <= 0):
+    if not es_entero_positivo(cantidad):
         raise ValueError(f"cantidad debe ser un entero positivo, no {cantidad!r}")
     hijas = np.random.SeedSequence(base).spawn(int(cantidad))
     return [int(hija.generate_state(1)[0]) for hija in hijas]
@@ -130,8 +130,7 @@ def semillas_repeticion(semilla: int, repeticion: int) -> dict[str, int]:
         ValueError: Si la semilla o la repetición no son válidas.
     """
     base = validar_semilla(semilla)
-    if (isinstance(repeticion, (bool, np.bool_)) or not isinstance(repeticion, (int, np.integer))
-            or repeticion < 0):
+    if not es_entero(repeticion) or repeticion < 0:
         raise ValueError(f"repeticion debe ser un entero no negativo, no {repeticion!r}")
     hija = np.random.SeedSequence(base).spawn(int(repeticion) + 1)[int(repeticion)]
     return {uso: int(nieta.generate_state(1)[0])

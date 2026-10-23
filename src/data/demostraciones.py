@@ -26,6 +26,7 @@ from src.data.splits import comprobar_cantidades, crear_splits, guardar_splits, 
 from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria, es_id_episodio
 from src.utils.seed import (crear_generador, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes, validar_semilla)
+from src.utils.validacion import es_entero
 
 Politica = Callable[[NDArray[Any]], Any]
 """Recibe una observación en bruto del entorno y devuelve la acción que se le pasa a step."""
@@ -65,8 +66,13 @@ def _escalar_numpy_a_python(valor: object) -> object:
     raise TypeError(f"Tipo no serializable en JSON: {type(valor).__name__}")
 
 
-def _comprobar_espacios(espacio_observacion: spaces.Space, espacio_accion: spaces.Space) -> None:
-    """Rechaza espacios que el formato todavía no admite."""
+def comprobar_espacios(espacio_observacion: spaces.Space, espacio_accion: spaces.Space) -> None:
+    """Rechaza espacios que el formato todavía no admite: Box de una dimensión para las
+    observaciones y Discrete o Box de una dimensión para las acciones.
+
+    Raises:
+        ValueError: Si alguno de los espacios no es de esos tipos.
+    """
     if not isinstance(espacio_observacion, spaces.Box) or len(espacio_observacion.shape) != 1:
         raise ValueError("Espacio de observación no compatible: se admite Box de una dimensión")
     discreto = isinstance(espacio_accion, spaces.Discrete)
@@ -90,8 +96,7 @@ def _validar_trayectoria(
     if not isinstance(trayectoria, Trayectoria):
         raise ValueError(f"{contexto}: se esperaba un objeto Trayectoria")
     identificador = trayectoria.id_episodio
-    if (isinstance(identificador, (bool, np.bool_))
-            or not isinstance(identificador, (int, np.integer))):
+    if not es_entero(identificador):
         raise ValueError(f"{contexto}: id_episodio debe ser un entero")
     if not es_id_episodio(identificador):
         raise ValueError(f"{contexto}: id_episodio debe estar en el rango de int64 "
@@ -156,7 +161,7 @@ def _validar_coleccion(
     """Valida la colección completa y devuelve IDs y arrays de cada partida."""
     if not isinstance(trayectorias, Sequence) or isinstance(trayectorias, str) or not trayectorias:
         raise ValueError("Se requiere una secuencia no vacía de trayectorias")
-    _comprobar_espacios(espacio_observacion, espacio_accion)
+    comprobar_espacios(espacio_observacion, espacio_accion)
     validadas: list[tuple[int, dict[str, NDArray[Any]]]] = []
     identificadores: set[int] = set()
     for indice, trayectoria in enumerate(trayectorias):
@@ -319,8 +324,7 @@ def _leer_manifiesto(archivo: np.lib.npyio.NpzFile) -> dict[str, Any]:
         if (not isinstance(episodio, dict)
                 or set(episodio) != {"id_episodio", "prefijo", "numero_pasos"}
                 or not isinstance(episodio["prefijo"], str)
-                or isinstance(episodio["numero_pasos"], bool)
-                or not isinstance(episodio["numero_pasos"], int)):
+                or not es_entero(episodio["numero_pasos"])):
             raise ValueError(f"Entrada {indice} del manifiesto mal formada")
     prefijos = [episodio["prefijo"] for episodio in episodios]
     if len(set(prefijos)) != len(prefijos):

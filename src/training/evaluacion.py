@@ -28,22 +28,11 @@ from src.data.splits import comprobar_huella
 from src.models.factory import PoliticaBC
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
 from src.utils.seed import generador_torch_aislado, semillas_independientes, validar_semilla
+from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _FORMATO_BC = "tiiac-politica-bc"
 _VERSION_BC = 1
 _CLAVES_ESTADISTICAS = ("media", "varianza", "epsilon", "limite")
-
-
-def _es_entero_positivo(valor: object) -> bool:
-    """Indica si valor es un entero (de Python o NumPy, no booleano) mayor que cero."""
-    return (isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
-            and valor > 0)
-
-
-def _es_real_finito(valor: object) -> bool:
-    """Indica si valor es un real finito (de Python o NumPy, no booleano)."""
-    return (isinstance(valor, (int, float, np.integer, np.floating))
-            and not isinstance(valor, (bool, np.bool_)) and bool(np.isfinite(valor)))
 
 
 def config_evaluacion(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -57,7 +46,7 @@ def config_evaluacion(cfg: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(ecfg, dict):
         raise ValueError("La configuración necesita la sección evaluacion")
     episodios = ecfg.get("episodios")
-    if not _es_entero_positivo(episodios):
+    if not es_entero_positivo(episodios):
         raise ValueError("evaluacion.episodios debe ser un entero positivo")
     if "semilla" not in ecfg:
         raise ValueError("Falta evaluacion.semilla en la configuración")
@@ -114,7 +103,7 @@ def normalizar_observacion(observacion: np.ndarray,
     if not (np.isfinite(media).all() and np.isfinite(varianza).all()) or (varianza < 0).any():
         raise ValueError("media y varianza deben ser finitas y la varianza no negativa")
     epsilon, limite = estadisticas["epsilon"], estadisticas["limite"]
-    if not (_es_real_finito(epsilon) and epsilon > 0 and _es_real_finito(limite) and limite > 0):
+    if not (es_real_finito(epsilon) and epsilon > 0 and es_real_finito(limite) and limite > 0):
         raise ValueError("epsilon y limite deben ser reales positivos finitos")
     escala = np.sqrt(varianza + epsilon)
     return np.clip((observacion - media) / escala, -limite, limite).astype(np.float32)
@@ -226,7 +215,7 @@ def evaluar_politica(
         ValueError: Si episodios, semilla, modo, estadísticas o configuración no
             son válidos, o el agente no es compatible con el entorno.
     """
-    if not _es_entero_positivo(episodios):
+    if not es_entero_positivo(episodios):
         raise ValueError("episodios debe ser un entero positivo")
     semillas = semillas_independientes(validar_semilla(semilla), int(episodios))
     if not isinstance(determinista, bool):
@@ -270,7 +259,7 @@ def _metadatos_checkpoint(cfg: dict[str, Any], metadatos: dict[str, Any]) -> dic
     if not isinstance(metadatos, dict) or not requeridos <= metadatos.keys():
         raise ValueError("metadatos necesita semilla, subconjunto y huella_dataset")
     semilla = validar_semilla(metadatos["semilla"])
-    if not _es_entero_positivo(metadatos["subconjunto"]):
+    if not es_entero_positivo(metadatos["subconjunto"]):
         raise ValueError("metadatos.subconjunto debe ser un entero positivo (partidas de train), "
                          f"no {metadatos['subconjunto']!r}")
     comprobar_huella(metadatos["huella_dataset"])

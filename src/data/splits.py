@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from src.data.tipos import Trayectoria, es_id_episodio
+from src.utils.validacion import es_entero
 
 _FORMATO = "tiiac-splits"
 _VERSION = 1
@@ -67,11 +68,6 @@ def huella_archivo(ruta: str | Path) -> str:
     return resumen.hexdigest()
 
 
-def _es_entero(valor: object) -> bool:
-    """Indica si el valor es un entero de Python o NumPy que no sea booleano."""
-    return isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
-
-
 def comprobar_cantidades(
     cantidad_train: int, cantidad_validacion: int, cantidades_subconjuntos: Sequence[int],
 ) -> None:
@@ -87,12 +83,12 @@ def comprobar_cantidades(
     """
     for nombre, valor in (("cantidad_train", cantidad_train),
                           ("cantidad_validacion", cantidad_validacion)):
-        if not _es_entero(valor) or valor <= 0:
+        if not es_entero(valor) or valor <= 0:
             raise ValueError(f"{nombre} debe ser un entero positivo, no {valor!r}")
     if (isinstance(cantidades_subconjuntos, (str, bytes))
             or not isinstance(cantidades_subconjuntos, Sequence) or not cantidades_subconjuntos):
         raise ValueError("cantidades_subconjuntos debe ser una secuencia no vacía de enteros")
-    if not all(_es_entero(c) and c > 0 for c in cantidades_subconjuntos):
+    if not all(es_entero(c) and c > 0 for c in cantidades_subconjuntos):
         raise ValueError("Las cantidades de los subconjuntos deben ser enteros positivos")
     if any(a >= b for a, b in zip(cantidades_subconjuntos, cantidades_subconjuntos[1:])):
         raise ValueError("Las cantidades de los subconjuntos deben ser estrictamente crecientes")
@@ -217,7 +213,7 @@ def validar_splits(splits: SplitsDemostraciones, ids_disponibles: Iterable[int])
     if not isinstance(splits.subconjuntos, Mapping) or not splits.subconjuntos:
         raise ValueError("subconjuntos debe ser un diccionario no vacío")
     for cantidad in splits.subconjuntos:
-        if not _es_entero(cantidad) or cantidad <= 0:
+        if not es_entero(cantidad) or cantidad <= 0:
             raise ValueError(f"Cantidad de subconjunto no válida: {cantidad!r}")
     anterior: set[int] = set()
     for cantidad in sorted(splits.subconjuntos):
