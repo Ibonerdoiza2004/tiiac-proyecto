@@ -231,3 +231,45 @@ def test_generador_torch_aislado_depende_de_su_semilla_y_restaura_el_global():
         with generador_torch_aislado(-1):
             pass
 
+
+def test_semillas_repeticion_dan_una_semilla_por_uso_y_repeticion():
+    from src.utils.seed import USOS_REPETICION, semillas_repeticion
+    # Más repeticiones que las 7 de la config, por si un perfil usa más.
+    semillas = [semillas_repeticion(3000, r) for r in range(20)]
+    assert all(set(s) == set(USOS_REPETICION) for s in semillas)
+    todas = [valor for s in semillas for valor in s.values()]
+    # Ninguna se repite entre repeticiones ni entre usos.
+    assert len(set(todas)) == len(todas)
+    # Ni entre bases cercanas: con base + repetición, (3000, 1) sería (3001, 0).
+    vecinas = [v for base in range(3000, 3006) for r in range(6)
+               for v in semillas_repeticion(base, r).values()]
+    assert len(set(vecinas)) == len(vecinas)
+    assert all(isinstance(v, int) and v >= 0 for v in todas)
+    # Cada repetición depende solo de su número y de la base, no de cuántas haya.
+    assert semillas_repeticion(3000, 3) == semillas[3]
+    assert semillas_repeticion(np.int64(3000), np.int64(3)) == semillas[3]
+    assert semillas_repeticion(3001, 3) != semillas[3]
+
+
+def test_semillas_repeticion_no_toca_los_generadores_globales():
+    import random
+
+    import torch
+
+    from src.utils.seed import semillas_repeticion
+    estados = random.getstate(), np.random.get_state()[1].copy(), torch.get_rng_state()
+    semillas_repeticion(3000, 2)
+    assert random.getstate() == estados[0]
+    assert np.array_equal(np.random.get_state()[1], estados[1])
+    assert torch.equal(torch.get_rng_state(), estados[2])
+
+
+@pytest.mark.parametrize("semilla,repeticion,mensaje", [
+    (-1, 0, "entero no negativo"), (True, 0, "entero no negativo"),
+    (3000, -1, "repeticion"), (3000, True, "repeticion"), (3000, 1.0, "repeticion"),
+])
+def test_semillas_repeticion_rechaza_argumentos_no_validos(semilla, repeticion, mensaje):
+    from src.utils.seed import semillas_repeticion
+    with pytest.raises(ValueError, match=mensaje):
+        semillas_repeticion(semilla, repeticion)
+

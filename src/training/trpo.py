@@ -8,8 +8,9 @@
   bloques y se queda con el mejor modelo.
 - guardar_experto y cargar_experto guardan el modelo y sus metadatos.
 - politica_trpo convierte el modelo en una función de observación a acción, la
-  que usan evaluar_retorno y la grabación de demostraciones (jugar_partida);
-  cargar_politica_experto la prepara desde un experto guardado.
+  que usa la grabación de demostraciones (jugar_partida); cargar_politica_experto
+  la prepara desde un experto guardado. evaluar_retorno delega en el protocolo
+  común de evaluación (evaluar_politica, en evaluacion.py).
 
 Las semillas salen de src/utils/seed.py: nunca se pasa seed= a TRPO, porque sb3
 volvería a sembrar los generadores globales y los entornos por su cuenta.
@@ -19,42 +20,33 @@ from __future__ import annotations
 
 import copy
 import json
-import math
+import shutil
+import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 
-from src.data.demostraciones import Politica, config_demostraciones
+from src.data.demostraciones import Politica, comprobar_espacios, config_demostraciones
 from src.data.entornos import crear_entorno_vectorizado
 from src.data.splits import huella_archivo
 from src.models.factory import ACTIVACIONES
 from src.training.evaluacion import evaluar_politica, normalizar_observacion
-from src.utils.procedencia import estado_git, ruta_registrada, versiones_y_hardware
+from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
 from src.utils.tracking import registrar
+from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_METADATOS = "experto.json"
 
 
-def _es_entero_positivo(valor: object) -> bool:
-    """Indica si valor es un entero no booleano mayor que cero."""
-    return isinstance(valor, int) and not isinstance(valor, bool) and valor > 0
-
-
-def _es_real(valor: object) -> bool:
-    """Indica si valor es un número real finito no booleano."""
-    return (isinstance(valor, (int, float)) and not isinstance(valor, bool)
-            and math.isfinite(valor))
-
-
-def _config_trpo(cfg: dict) -> dict:
+def config_trpo(cfg: dict) -> dict:
     """Devuelve la sección trpo comprobada.
 
     Raises:
@@ -65,23 +57,23 @@ def _config_trpo(cfg: dict) -> dict:
         raise ValueError("La configuración necesita la sección trpo")
     reglas = {
         "capas_ocultas": lambda v: (isinstance(v, list) and len(v) > 0
-                                    and all(_es_entero_positivo(c) for c in v)),
+                                    and all(es_entero_positivo(c) for c in v)),
         "activacion": lambda v: isinstance(v, str) and v in ACTIVACIONES,
-        "gamma": lambda v: _es_real(v) and 0 < v <= 1,
-        "gae_lambda": lambda v: _es_real(v) and 0 <= v <= 1,
-        "target_kl": lambda v: _es_real(v) and v > 0,
-        "cg_damping": lambda v: _es_real(v) and v >= 0,
-        "pasos_por_iteracion": _es_entero_positivo,
-        "n_entornos": _es_entero_positivo,
+        "gamma": lambda v: es_real_finito(v) and 0 < v <= 1,
+        "gae_lambda": lambda v: es_real_finito(v) and 0 <= v <= 1,
+        "target_kl": lambda v: es_real_finito(v) and v > 0,
+        "cg_damping": lambda v: es_real_finito(v) and v >= 0,
+        "pasos_por_iteracion": es_entero_positivo,
+        "n_entornos": es_entero_positivo,
         "normalizar_observaciones": lambda v: isinstance(v, bool),
-        "limite_normalizacion": lambda v: _es_real(v) and v > 0,
+        "limite_normalizacion": lambda v: es_real_finito(v) and v > 0,
         "normalizar_ventajas": lambda v: isinstance(v, bool),
-        "pasos_gradiente_conjugado": _es_entero_positivo,
-        "busqueda_lineal_factor": lambda v: _es_real(v) and 0 < v < 1,
-        "busqueda_lineal_maximo": _es_entero_positivo,
-        "learning_rate_valor": lambda v: _es_real(v) and v > 0,
-        "pasos_valor": _es_entero_positivo,
-        "batch_size_valor": _es_entero_positivo,
+        "pasos_gradiente_conjugado": es_entero_positivo,
+        "busqueda_lineal_factor": lambda v: es_real_finito(v) and 0 < v < 1,
+        "busqueda_lineal_maximo": es_entero_positivo,
+        "learning_rate_valor": lambda v: es_real_finito(v) and v > 0,
+        "pasos_valor": es_entero_positivo,
+        "batch_size_valor": es_entero_positivo,
     }
     for clave, valida in reglas.items():
         if clave not in tcfg:
@@ -111,17 +103,6 @@ def _semilla_valida(valor: object) -> bool:
     return True
 
 
-def _a_json(valor: object) -> object:
-    """Convierte escalares de NumPy a tipos de Python para guardarlos en JSON.
-
-    Raises:
-        TypeError: Si el valor no se puede convertir, como hace json por defecto.
-    """
-    if isinstance(valor, (np.integer, np.floating, np.bool_)):
-        return valor.item()
-    raise TypeError(f"{type(valor).__name__} no se puede guardar en JSON")
-
-
 def _config_experto(cfg: dict) -> dict:
     """Devuelve la sección experto comprobada.
 
@@ -132,11 +113,11 @@ def _config_experto(cfg: dict) -> dict:
     if not isinstance(ecfg, dict):
         raise ValueError("La configuración necesita la sección experto")
     reglas = {
-        "pasos_totales": _es_entero_positivo,
-        "retorno_objetivo": _es_real,
+        "pasos_totales": es_entero_positivo,
+        "retorno_objetivo": es_real_finito,
         "semilla": _semilla_valida,
-        "evaluar_cada": _es_entero_positivo,
-        "episodios_evaluacion": _es_entero_positivo,
+        "evaluar_cada": es_entero_positivo,
+        "episodios_evaluacion": es_entero_positivo,
         "evaluacion_determinista": lambda v: isinstance(v, bool),
     }
     for clave, valida in reglas.items():
@@ -148,12 +129,9 @@ def _config_experto(cfg: dict) -> dict:
 
 
 def _comprobar_espacios(observacion: spaces.Space, accion: spaces.Space) -> None:
-    """Admite observaciones Box 1-D y acciones Discrete con start 0 o Box 1-D."""
-    if not isinstance(observacion, spaces.Box) or len(observacion.shape) != 1:
-        raise ValueError("Espacio de observación no compatible: se admite Box de una dimensión")
-    discreta = isinstance(accion, spaces.Discrete) and int(accion.start) == 0
-    continua = isinstance(accion, spaces.Box) and len(accion.shape) == 1
-    if not (discreta or continua):
+    """Admite los espacios de comprobar_espacios, con Discrete solo si empieza en 0."""
+    comprobar_espacios(observacion, accion)
+    if isinstance(accion, spaces.Discrete) and int(accion.start) != 0:
         raise ValueError("Espacio de acción no compatible: se admite Discrete con start 0 "
                          "(sb3 genera índices 0..n-1) o Box de una dimensión")
 
@@ -178,7 +156,7 @@ def crear_trpo(cfg: dict, venv: VecEnv) -> TRPO:
         ValueError: Si la configuración o los espacios no son válidos, o si el
             VecEnv no tiene trpo.n_entornos instancias.
     """
-    tcfg = _config_trpo(cfg)
+    tcfg = config_trpo(cfg)
     if not isinstance(venv, VecEnv):
         raise ValueError("venv debe ser un VecEnv")
     if venv.num_envs != tcfg["n_entornos"]:
@@ -333,7 +311,7 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         ValueError: Si la configuración no es válida o experto.pasos_totales no es
             múltiplo de trpo.pasos_por_iteracion.
     """
-    tcfg, ecfg = _config_trpo(cfg), _config_experto(cfg)
+    tcfg, ecfg = config_trpo(cfg), _config_experto(cfg)
     if ecfg["pasos_totales"] % tcfg["pasos_por_iteracion"]:
         raise ValueError("experto.pasos_totales debe ser múltiplo de trpo.pasos_por_iteracion "
                          f"({ecfg['pasos_totales']} entre {tcfg['pasos_por_iteracion']}): cada "
@@ -413,6 +391,36 @@ def comprobar_directorio_libre(directorio: Path) -> Path:
     return directorio
 
 
+def escribir_carpeta_nueva(directorio: Path, escribir: Callable[[Path], None]) -> None:
+    """Escribe una carpeta de resultados entera o nada: nunca la deja a medias.
+
+    escribir(temporal) crea los archivos en una carpeta temporal junto a
+    directorio, que después se renombra a directorio (en el mismo sistema de
+    archivos, el cambio de nombre es inmediato). Si escribir falla, también por
+    Ctrl+C, la temporal se borra y directorio queda como estaba, así que se puede
+    volver a guardar ahí. Comprueba antes, como comprobar_directorio_libre, que
+    directorio no existe o está vacía.
+
+    Raises:
+        FileExistsError: Si directorio existe con contenido, antes o al terminar.
+        Lo que lance escribir.
+    """
+    directorio = comprobar_directorio_libre(directorio)
+    directorio.parent.mkdir(parents=True, exist_ok=True)
+    temporal = Path(tempfile.mkdtemp(prefix=f".{directorio.name}.", suffix=".tmp",
+                                     dir=directorio.parent))
+    try:
+        escribir(temporal)
+        # Una carpeta vacía ya creada se sustituye; con contenido, no.
+        comprobar_directorio_libre(directorio)
+        if directorio.exists():
+            directorio.rmdir()
+        temporal.rename(directorio)
+    except BaseException:
+        shutil.rmtree(temporal, ignore_errors=True)
+        raise
+
+
 def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
                     resumen: dict[str, Any]) -> None:
     """Guarda el experto en un directorio nuevo: modelo.zip y experto.json.
@@ -434,11 +442,16 @@ def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
                  "entorno_ejecucion": versiones_y_hardware()}
     # Se serializa antes de crear nada: un NaN no deja una carpeta a medias.
     texto = json.dumps(metadatos, ensure_ascii=False, indent=2, allow_nan=False,
-                       default=_a_json)
-    directorio.mkdir(parents=True, exist_ok=True)
-    with (directorio / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
-        archivo.write(texto)
-    modelo.save(directorio / _ARCHIVO_MODELO)
+                       default=a_json)
+
+    def escribir(carpeta: Path) -> None:
+        """Escribe experto.json y modelo.zip en carpeta."""
+        with (carpeta / _ARCHIVO_METADATOS).open("x", encoding="utf-8") as archivo:
+            archivo.write(texto)
+        modelo.save(carpeta / _ARCHIVO_MODELO)
+
+    # Si falla al escribir (disco lleno, Ctrl+C), no queda una carpeta a medias.
+    escribir_carpeta_nueva(directorio, escribir)
 
 
 def cargar_experto(directorio: Path) -> tuple[TRPO, dict[str, Any]]:

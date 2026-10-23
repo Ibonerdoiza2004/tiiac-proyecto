@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 
 from src.data.splits import SplitsDemostraciones, validar_splits
 from src.data.tipos import LoteTransiciones, Trayectoria, es_id_episodio
+from src.utils.validacion import es_entero, es_entero_positivo
 
 
 class DatasetPlaceholder(Dataset):
@@ -83,8 +84,7 @@ def submuestrear_pares(
         ValueError: Frecuencia no válida, colección vacía o elementos que no son
             Trayectoria, id_episodio fuera del rango de int64 o generador no válido.
     """
-    if (isinstance(frecuencia, (bool, np.bool_))
-            or not isinstance(frecuencia, (int, np.integer)) or frecuencia < 1):
+    if not es_entero_positivo(frecuencia):
         raise ValueError(f"frecuencia debe ser un entero positivo, no {frecuencia!r}")
     if not isinstance(generador, np.random.Generator):
         raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")
@@ -202,19 +202,63 @@ class DatasetTransiciones(Dataset):
         return self.estados[i], self.acciones[i]
 
 
+def pares_de_subconjunto(
+    trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones, cantidad: int,
+    cfg: dict, generador: np.random.Generator,
+) -> tuple[LoteTransiciones, LoteTransiciones]:
+    """Devuelve los pares (validación, train) de un subconjunto de partidas.
+
+    Train son los pares submuestreados de las partidas del subconjunto cantidad
+    y validación los de las partidas de validación, con la misma frecuencia, de
+    modo que ninguna partida aporta pares a ambos. Con el mismo generador se
+    sortean primero los pares de validación y después los de train. Así, con la
+    misma semilla, validación tiene los mismos pares para cualquier cantidad,
+    las partidas que comparten dos subconjuntos aportan los mismos pares de
+    train en ambos, y BC y GAIL entrenan con los mismos pares expertos.
+
+    Args:
+        trayectorias: Todas las partidas del dataset para el que se crearon los splits.
+        splits: Splits de esas partidas.
+        cantidad: Número de partidas de train que se usan, por ejemplo 1, 4, 7 o 10.
+            Tiene que haber un subconjunto de ese tamaño: splits.subconjuntos
+            asocia cada tamaño con los IDs de sus partidas.
+        cfg: Configuración resuelta con demostraciones.frecuencia_pares (común a BC
+            y GAIL).
+        generador: Generador de src.utils.seed.crear_generador.
+
+    Raises:
+        ValueError: Splits que no corresponden a las partidas, cantidad sin
+            subconjunto, configuración incompleta o datos no válidos.
+    """
+    dcfg = cfg.get("demostraciones") if isinstance(cfg, dict) else None
+    if not isinstance(dcfg, dict) or "frecuencia_pares" not in dcfg:
+        raise ValueError("La configuración necesita demostraciones.frecuencia_pares")
+    if (isinstance(trayectorias, (str, bytes)) or not isinstance(trayectorias, Sequence)
+            or not all(isinstance(t, Trayectoria) for t in trayectorias)):
+        raise ValueError("Se requiere una secuencia de objetos Trayectoria")
+    validar_splits(splits, [t.id_episodio for t in trayectorias])
+    if not es_entero(cantidad) or cantidad not in splits.subconjuntos:
+        raise ValueError(f"No hay subconjunto de {cantidad!r} partidas; "
+                         f"disponibles: {sorted(splits.subconjuntos)}")
+
+    por_id = {int(t.id_episodio): t for t in trayectorias}
+    frecuencia = dcfg["frecuencia_pares"]
+    validacion = submuestrear_pares([por_id[i] for i in splits.validacion], frecuencia, generador)
+    train = submuestrear_pares([por_id[i] for i in splits.subconjuntos[cantidad]],
+                               frecuencia, generador)
+    return validacion, train
+
+
 def construir_loaders_bc(
     trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones, cantidad: int,
     espacio_accion: spaces.Space, cfg: dict, generador: np.random.Generator,
 ) -> tuple[DataLoader, DataLoader]:
     """Devuelve (train_loader, val_loader) de BC para un subconjunto de partidas.
 
-    Train usa los pares submuestreados de las partidas del subconjunto cantidad
-    y validación los de las partidas de validación, con la misma frecuencia, de
-    modo que ninguna partida aporta pares a ambos. Con el mismo generador se
-    sortean primero los pares de validación y después los de train. Así, con la
-    misma semilla, validación tiene los mismos pares para cualquier cantidad, y
-    las partidas que comparten dos subconjuntos aportan los mismos pares de
-    train en ambos. Train se baraja en cada época y validación no.
+    Los pares salen de pares_de_subconjunto: los de train, de las partidas del
+    subconjunto cantidad, y los de validación, de las partidas de validación,
+    sorteados en ese orden con el mismo generador. Train se baraja en cada
+    época y validación no.
 
     Args:
         trayectorias: Todas las partidas del dataset para el que se crearon los splits.
@@ -223,7 +267,8 @@ def construir_loaders_bc(
             Tiene que haber un subconjunto de ese tamaño: splits.subconjuntos
             asocia cada tamaño con los IDs de sus partidas.
         espacio_accion: Espacio de acción del entorno.
-        cfg: Configuración resuelta con bc.frecuencia_pares y bc.batch_size.
+        cfg: Configuración resuelta con demostraciones.frecuencia_pares (común a BC
+            y GAIL) y bc.batch_size.
         generador: Generador de src.utils.seed.crear_generador.
 
     Raises:
@@ -231,26 +276,15 @@ def construir_loaders_bc(
             subconjunto, configuración incompleta o datos no válidos.
     """
     bcfg = cfg.get("bc") if isinstance(cfg, dict) else None
-    if not isinstance(bcfg, dict) or not {"frecuencia_pares", "batch_size"} <= bcfg.keys():
-        raise ValueError("La configuración necesita bc.frecuencia_pares y bc.batch_size")
+    dcfg = cfg.get("demostraciones") if isinstance(cfg, dict) else None
+    if (not isinstance(bcfg, dict) or "batch_size" not in bcfg
+            or not isinstance(dcfg, dict) or "frecuencia_pares" not in dcfg):
+        raise ValueError("La configuración necesita demostraciones.frecuencia_pares y "
+                         "bc.batch_size")
     batch_size = bcfg["batch_size"]
-    if (isinstance(batch_size, (bool, np.bool_)) or not isinstance(batch_size, (int, np.integer))
-            or batch_size < 1):
+    if not es_entero_positivo(batch_size):
         raise ValueError(f"bc.batch_size debe ser un entero positivo, no {batch_size!r}")
-    if (isinstance(trayectorias, (str, bytes)) or not isinstance(trayectorias, Sequence)
-            or not all(isinstance(t, Trayectoria) for t in trayectorias)):
-        raise ValueError("Se requiere una secuencia de objetos Trayectoria")
-    validar_splits(splits, [t.id_episodio for t in trayectorias])
-    if (isinstance(cantidad, (bool, np.bool_)) or not isinstance(cantidad, (int, np.integer))
-            or cantidad not in splits.subconjuntos):
-        raise ValueError(f"No hay subconjunto de {cantidad!r} partidas; "
-                         f"disponibles: {sorted(splits.subconjuntos)}")
-
-    por_id = {int(t.id_episodio): t for t in trayectorias}
-    frecuencia = bcfg["frecuencia_pares"]
-    validacion = submuestrear_pares([por_id[i] for i in splits.validacion], frecuencia, generador)
-    train = submuestrear_pares([por_id[i] for i in splits.subconjuntos[cantidad]],
-                               frecuencia, generador)
+    validacion, train = pares_de_subconjunto(trayectorias, splits, cantidad, cfg, generador)
     return (DataLoader(DatasetTransiciones(train, espacio_accion),
                        batch_size=int(batch_size), shuffle=True),
             DataLoader(DatasetTransiciones(validacion, espacio_accion),

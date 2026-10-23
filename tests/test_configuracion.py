@@ -35,7 +35,8 @@ def test_todos_los_entornos_activos_resuelven_base_y_smoke(entorno):
 
     assert normal["entorno"] == perfil["entorno"]
     assert normal["trpo"]["n_entornos"] == perfil["trpo"]["n_entornos"]
-    assert normal["bc"]["frecuencia_pares"] == perfil["bc"]["frecuencia_pares"]
+    assert (normal["demostraciones"]["frecuencia_pares"]
+            == perfil["demostraciones"]["frecuencia_pares"])
     assert normal["origen"]["entorno"] == entorno.value
     assert normal["origen"]["archivos"] == [
         "configs/default.yaml", f"configs/entornos/{entorno.value}.yaml",
@@ -59,7 +60,7 @@ def test_ajustes_sobrescriben_recursivamente_y_listas_se_reemplazan():
     })
     assert cfg["bc"]["capas_ocultas"] == [8]
     assert cfg["bc"]["learning_rate"] == 0.02
-    assert cfg["bc"]["frecuencia_pares"] == 10
+    assert cfg["demostraciones"]["frecuencia_pares"] == 10
     assert cfg["datos"]["subset"] == 12
 
 
@@ -152,7 +153,9 @@ def test_config_resuelta_se_integra_con_politica_y_loaders_bc():
 
 TAMANOS = [("experimento", "repeticiones"), ("demostraciones", "partidas_train"),
            ("demostraciones", "partidas_validacion"), ("demostraciones", "subconjuntos"),
-           ("gail", "iteraciones"), ("evaluacion", "episodios"),
+           ("demostraciones", "frecuencia_pares"), ("gail", "iteraciones"),
+           ("gail", "evaluar_cada"), ("gail", "episodios_evaluacion"),
+           ("gail", "evaluacion_determinista"), ("evaluacion", "episodios"),
            ("evaluacion", "semilla"), ("evaluacion", "determinista")]
 
 
@@ -172,7 +175,9 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     base["experimento"]["repeticiones"] = 3
     base["demostraciones"].update(partidas_train=30, partidas_validacion=9,
                                   subconjuntos=[5, 30])
-    base["gail"]["iteraciones"] = 20
+    base["demostraciones"]["frecuencia_pares"] = 3
+    base["gail"].update(iteraciones=20, evaluar_cada=1, episodios_evaluacion=50,
+                        evaluacion_determinista=False)
     base["evaluacion"].update(episodios=12, semilla=123, determinista=False)
     (tmp_path / "entornos").mkdir()
     (tmp_path / "base.yaml").write_text(yaml.safe_dump(base), encoding="utf-8")
@@ -180,12 +185,16 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     (tmp_path / "entornos" / "cartpole.yaml").write_text(perfil.read_text(encoding="utf-8"),
                                                          encoding="utf-8")
     cfg = resolver_configuracion(tmp_path / "base.yaml", "cartpole")
-    assert cfg["experimento"]["repeticiones"] == 7
-    tamanos = {clave: cfg["demostraciones"][clave]
-               for clave in ("partidas_train", "partidas_validacion", "subconjuntos")}
+    assert cfg["experimento"]["repeticiones"] == 5
+    tamanos = {clave: cfg["demostraciones"][clave] for clave in
+               ("partidas_train", "partidas_validacion", "subconjuntos", "frecuencia_pares")}
     assert tamanos == {"partidas_train": 10, "partidas_validacion": 5,
-                       "subconjuntos": [1, 4, 7, 10]}
-    assert cfg["gail"]["iteraciones"] == 300
+                       "subconjuntos": [1, 4, 7, 10], "frecuencia_pares": 10}
+    evaluacion = {clave: cfg["gail"][clave] for clave in
+                  ("iteraciones", "evaluar_cada", "episodios_evaluacion",
+                   "evaluacion_determinista")}
+    assert evaluacion == {"iteraciones": 80, "evaluar_cada": 10, "episodios_evaluacion": 10,
+                          "evaluacion_determinista": True}
     assert cfg["evaluacion"] == {"episodios": 50, "semilla": 9000, "determinista": True}
 
 
@@ -210,4 +219,20 @@ def test_los_tamanos_del_experimento_son_coherentes(entorno, smoke):
                           demostraciones["subconjuntos"], crear_generador(0), "a" * 64)
     assert sorted(splits.subconjuntos) == demostraciones["subconjuntos"]
     assert len(splits.train) == demostraciones["subconjuntos"][-1]
+
+
+def test_la_frecuencia_de_pares_ya_no_esta_en_bc():
+    """Es común a BC y GAIL: vive en demostraciones y la sección bc la rechaza."""
+    cfg = resolver_configuracion(BASE, "cartpole")
+    assert "frecuencia_pares" not in cfg["bc"]
+    with pytest.raises(ValueError, match="desconocida: bc.frecuencia_pares"):
+        resolver_configuracion(BASE, "cartpole", {"bc": {"frecuencia_pares": 10}})
+
+
+def test_la_semilla_de_las_repeticiones_esta_en_la_config():
+    from src.utils.seed import semillas_repeticion
+    cfg = resolver_configuracion(BASE, "cartpole")
+    semilla = cfg["experimento"]["semilla_repeticiones"]
+    for repeticion in range(cfg["experimento"]["repeticiones"]):
+        semillas_repeticion(semilla, repeticion)
 

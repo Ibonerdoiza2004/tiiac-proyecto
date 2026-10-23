@@ -16,6 +16,8 @@ import numpy as np
 import torch
 from stable_baselines3.common.vec_env import VecEnv
 
+from src.utils.validacion import es_entero, es_entero_positivo
+
 
 def fijar_seed(seed: int, determinista: bool = True) -> None:
     """Fija las semillas de las tres fuentes de aleatoriedad del proyecto.
@@ -47,8 +49,7 @@ def validar_semilla(semilla: object) -> int:
     Raises:
         ValueError: Si no es un entero no negativo.
     """
-    if (isinstance(semilla, (bool, np.bool_))
-            or not isinstance(semilla, (int, np.integer)) or semilla < 0):
+    if not es_entero(semilla) or semilla < 0:
         raise ValueError(f"La semilla debe ser un entero no negativo, no {semilla!r}")
     return int(semilla)
 
@@ -90,11 +91,50 @@ def semillas_independientes(semilla: int, cantidad: int) -> list[int]:
         ValueError: Si la semilla o la cantidad no son válidas.
     """
     base = validar_semilla(semilla)
-    if (isinstance(cantidad, (bool, np.bool_)) or not isinstance(cantidad, (int, np.integer))
-            or cantidad <= 0):
+    if not es_entero_positivo(cantidad):
         raise ValueError(f"cantidad debe ser un entero positivo, no {cantidad!r}")
     hijas = np.random.SeedSequence(base).spawn(int(cantidad))
     return [int(hija.generate_state(1)[0]) for hija in hijas]
+
+
+USOS_REPETICION = ("modelo", "pares", "entornos", "evaluacion")
+
+
+def semillas_repeticion(semilla: int, repeticion: int) -> dict[str, int]:
+    """Devuelve las semillas de una repetición de BC y GAIL.
+
+    BC y GAIL comparten las de cada repetición, así que la repetición r de los
+    dos parte del mismo punto aleatorio. Cada uso tiene su semilla:
+
+    - modelo: fijar_seed antes de crear la red (pesos iniciales, orden de los
+      batches y acciones muestreadas al entrenar);
+    - pares: crear_generador para elegir los pares de cada partida
+      (submuestrear_pares) y los pares expertos de GAIL (muestrear_expertos);
+    - entornos: los entornos de entrenamiento de GAIL;
+    - evaluacion: las partidas de validación que se registran durante GAIL.
+
+    Salen de numpy.random.SeedSequence(semilla).spawn(...): la repetición r es
+    la hija r, y sus usos son nietos. Así cada repetición depende solo de su
+    número (no de cuántas haya) y ninguna semilla se repite entre repeticiones
+    ni entre usos.
+
+    Args:
+        semilla: Semilla base de las repeticiones. Va en configs/
+            (experimento.semilla_repeticiones).
+        repeticion: Número de repetición, entero no negativo.
+
+    Returns:
+        {uso: semilla} para cada uso de USOS_REPETICION.
+
+    Raises:
+        ValueError: Si la semilla o la repetición no son válidas.
+    """
+    base = validar_semilla(semilla)
+    if not es_entero(repeticion) or repeticion < 0:
+        raise ValueError(f"repeticion debe ser un entero no negativo, no {repeticion!r}")
+    hija = np.random.SeedSequence(base).spawn(int(repeticion) + 1)[int(repeticion)]
+    return {uso: int(nieta.generate_state(1)[0])
+            for uso, nieta in zip(USOS_REPETICION, hija.spawn(len(USOS_REPETICION)), strict=True)}
 
 
 @contextmanager

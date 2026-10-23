@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import gymnasium as gym
+import numpy as np
 import sb3_contrib
 import stable_baselines3
 import torch
@@ -51,3 +52,14 @@ def ruta_registrada(ruta: Path) -> str:
         return ruta.resolve().relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return ruta.name
+
+
+def a_json(valor: object) -> object:
+    """Convierte escalares de NumPy a tipos de Python, para usarla como default de json.dumps.
+
+    Raises:
+        TypeError: Si el valor no se puede convertir, como hace json por defecto.
+    """
+    if isinstance(valor, (np.integer, np.floating, np.bool_)):
+        return valor.item()
+    raise TypeError(f"{type(valor).__name__} no se puede guardar en JSON")

@@ -29,8 +29,8 @@ from src.training.trpo import (cargar_experto, cargar_politica_experto, crear_tr
                                entrenar_experto, estadisticas_normalizacion, evaluar_retorno,
                                guardar_experto, iteracion_trpo, normalizar_observacion,
                                politica_trpo)
-from src.utils.configuracion import resolver_configuracion
 from src.utils import procedencia
+from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import (fijar_seed, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes)
 
@@ -490,6 +490,74 @@ def test_dummyvecenv_sin_monitor_no_rompe_la_iteracion():
         venv.close()
 
 
+# --- escribir_carpeta_nueva -----------------------------------------------------------
+
+def _escribir_dos(carpeta: Path) -> None:
+    (carpeta / "a.txt").write_text("a")
+    (carpeta / "b.txt").write_text("b")
+
+
+@pytest.mark.parametrize("previa", ["no_existe", "vacia"])
+def test_escribir_carpeta_nueva_deja_la_carpeta_entera(tmp_path, previa):
+    destino = tmp_path / "padre" / "resultado"
+    if previa == "vacia":
+        destino.mkdir(parents=True)
+    trpo.escribir_carpeta_nueva(destino, _escribir_dos)
+    assert sorted(p.name for p in destino.iterdir()) == ["a.txt", "b.txt"]
+    assert [p.name for p in destino.parent.iterdir()] == ["resultado"]  # sin temporales
+
+
+@pytest.mark.parametrize("error", [OSError("disco lleno"), KeyboardInterrupt()])
+def test_escribir_carpeta_nueva_no_deja_nada_si_falla(tmp_path, error):
+    """Regresión: un fallo a mitad (disco lleno, Ctrl+C) dejaba una carpeta incompleta que
+    además impedía volver a guardar ahí."""
+    destino = tmp_path / "resultado"
+
+    def falla_a_mitad(carpeta: Path) -> None:
+        (carpeta / "a.txt").write_text("a")
+        raise error
+
+    with pytest.raises(type(error)):
+        trpo.escribir_carpeta_nueva(destino, falla_a_mitad)
+    assert list(tmp_path.iterdir()) == []  # ni la carpeta ni la temporal
+    trpo.escribir_carpeta_nueva(destino, _escribir_dos)  # se puede volver a guardar
+    assert sorted(p.name for p in destino.iterdir()) == ["a.txt", "b.txt"]
+
+
+def test_escribir_carpeta_nueva_no_sobrescribe(tmp_path):
+    destino = tmp_path / "resultado"
+    destino.mkdir()
+    (destino / "notas.txt").write_text("x")
+    with pytest.raises(FileExistsError):
+        trpo.escribir_carpeta_nueva(destino, _escribir_dos)
+
+    # Si otro proceso la llena mientras se escribe, tampoco: la temporal se borra.
+    otra = tmp_path / "otra"
+
+    def ocupar(carpeta: Path) -> None:
+        _escribir_dos(carpeta)
+        otra.mkdir()
+        (otra / "ajeno.txt").write_text("x")
+
+    with pytest.raises(FileExistsError):
+        trpo.escribir_carpeta_nueva(otra, ocupar)
+    assert [p.name for p in otra.iterdir()] == ["ajeno.txt"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["otra", "resultado"]
+
+
+def test_guardar_experto_no_deja_una_carpeta_a_medias(tmp_path, monkeypatch):
+    cfg = _cfg()
+    modelo, resumen = entrenar_experto(cfg)
+
+    def falla(*a, **k):
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr(modelo, "save", falla)
+    with pytest.raises(OSError, match="disco lleno"):
+        trpo.guardar_experto(tmp_path / "experto", modelo, cfg, resumen)
+    assert list(tmp_path.iterdir()) == []
+
+
 # --- scripts/entrenar_experto.py ----------------------------------------------------
 
 def _script():
@@ -564,6 +632,43 @@ def test_el_script_entrena_y_guarda_con_la_configuracion_resuelta(monkeypatch, t
     assert llamadas["cfg"]["entorno"]["id"] == "CartPole-v1"
     assert llamadas["salida"] == tmp_path / "experto"
     assert "objetivo 500 alcanzado" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fallo,codigo", [(None, 0), ("entrenar", 1), ("guardar", 1)])
+def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypatch, tmp_path):
+    """Regresión: finish() sin código marcaba como correcto en W&B un experto fallido."""
+    script = _script()
+    cierres = []
+
+    class _Run:
+        def log(self, *a, **k) -> None:
+            pass
+
+        def finish(self, exit_code=None) -> None:
+            cierres.append(exit_code)
+
+    resumen = {"entorno": "CartPole-v1", "mejor_retorno": 500.0, "mejor_iteracion": 3,
+               "objetivo": 500, "objetivo_alcanzado": True, "pasos": 15000, "segundos": 12.0}
+
+    def entrenar(cfg, run):
+        if fallo == "entrenar":
+            raise RuntimeError("fallo de prueba")
+        return "modelo", resumen
+
+    def guardar(*a):
+        if fallo == "guardar":
+            raise OSError("disco lleno")
+
+    monkeypatch.setattr(script, "abrir_run", lambda cfg: _Run())
+    monkeypatch.setattr(script, "entrenar_experto", entrenar)
+    monkeypatch.setattr(script, "guardar_experto", guardar)
+    monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--salida", str(tmp_path / "e")])
+    if fallo is None:
+        assert script.main() == 0
+    else:
+        with pytest.raises((RuntimeError, OSError)):
+            script.main()
+    assert cierres == [codigo]
 
 
 def test_el_script_informa_de_una_configuracion_no_valida(monkeypatch, tmp_path, capsys):
@@ -778,9 +883,8 @@ def test_cargar_politica_experto_describe_su_procedencia(experto_guardado):
     assert experto["huella_modelo"] == huella_archivo(experto_guardado / "modelo.zip")
     assert experto["huella_metadatos"] == huella_archivo(experto_guardado / "experto.json")
     resumen = guardado["resumen"]
-    assert (experto["mejor_retorno"], experto["mejor_iteracion"], experto["pasos"],
-            experto["objetivo_alcanzado"]) == (resumen["mejor_retorno"], resumen["mejor_iteracion"],
-                                               resumen["pasos"], resumen["objetivo_alcanzado"])
+    claves = ("mejor_retorno", "mejor_iteracion", "pasos", "objetivo_alcanzado")
+    assert [experto[clave] for clave in claves] == [resumen[clave] for clave in claves]
     assert experto["codigo"] == guardado["codigo"]
     # Sin rutas absolutas: fuera de la carpeta de trabajo solo queda el nombre.
     assert experto["directorio"] == "cartpole"
@@ -914,3 +1018,45 @@ def test_get_data_avisa_del_estado_de_git(codigo, aviso, monkeypatch, tmp_path, 
     assert script.main() == 0
     error = capsys.readouterr().err
     assert (aviso in error) if aviso else "aviso" not in error
+
+
+def test_bc_aprende_de_las_demostraciones_grabadas_con_el_experto(experto_guardado, tmp_path):
+    """Integración de punta a punta: experto guardado → demostraciones y splits en
+    disco → carga con comprobación de huella → BC con cada subconjunto."""
+    from src.data.demostraciones import cargar_demostraciones
+    from src.data.splits import cargar_splits
+    from src.training.loop import entrenar_bc_subconjunto
+    from src.utils.seed import crear_generador
+
+    cfg = _cfg_grabacion()
+    cfg["bc"].update(epocas_maximas=3, paciencia=1)
+    politica, metadatos = cargar_politica_experto(experto_guardado, cfg)
+    resultado = generar_dataset(cfg, politica, tmp_path / "datos", metadatos)
+    entorno = crear_entorno(cfg, None)
+    espacio_observacion, espacio_accion = entorno.observation_space, entorno.action_space
+    try:
+        trayectorias, guardados = cargar_demostraciones(
+            resultado["demostraciones"], espacio_observacion, espacio_accion)
+        splits = cargar_splits(resultado["splits"], huella_archivo(resultado["demostraciones"]),
+                               [t.id_episodio for t in trayectorias])
+        assert guardados["grabacion"]["huella_partidas"] == resultado["huella_partidas"]
+        resumenes = []
+        for cantidad in cfg["demostraciones"]["subconjuntos"]:
+            fijar_seed(0)
+            politica_bc, resumen = entrenar_bc_subconjunto(
+                trayectorias, splits, cantidad, espacio_observacion, espacio_accion, cfg,
+                crear_generador(0))
+            resumenes.append(resumen)
+            assert math.isfinite(resumen["val_perdida"]) and 1 <= resumen["mejor_epoca"] <= 3
+
+            def actuar(observacion, red=politica_bc):
+                with torch.no_grad():
+                    entrada = torch.as_tensor(observacion, dtype=torch.float32).unsqueeze(0)
+                    return int(red.eval()(entrada).argmax(dim=1))
+            partida = jugar_partida(entorno, actuar, 7, 0)
+            assert partida.numero_pasos >= 1
+    finally:
+        entorno.close()
+    # Más partidas de train dan más pares; la validación es la misma para todos.
+    assert resumenes[0]["pares_train"] < resumenes[1]["pares_train"]
+    assert len({r["pares_validacion"] for r in resumenes}) == 1

@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from src.data.tipos import Trayectoria, es_id_episodio
+from src.utils.validacion import es_entero
 
 _FORMATO = "tiiac-splits"
 _VERSION = 1
@@ -67,11 +68,6 @@ def huella_archivo(ruta: str | Path) -> str:
     return resumen.hexdigest()
 
 
-def _es_entero(valor: object) -> bool:
-    """Indica si el valor es un entero de Python o NumPy que no sea booleano."""
-    return isinstance(valor, (int, np.integer)) and not isinstance(valor, (bool, np.bool_))
-
-
 def comprobar_cantidades(
     cantidad_train: int, cantidad_validacion: int, cantidades_subconjuntos: Sequence[int],
 ) -> None:
@@ -87,12 +83,12 @@ def comprobar_cantidades(
     """
     for nombre, valor in (("cantidad_train", cantidad_train),
                           ("cantidad_validacion", cantidad_validacion)):
-        if not _es_entero(valor) or valor <= 0:
+        if not es_entero(valor) or valor <= 0:
             raise ValueError(f"{nombre} debe ser un entero positivo, no {valor!r}")
     if (isinstance(cantidades_subconjuntos, (str, bytes))
             or not isinstance(cantidades_subconjuntos, Sequence) or not cantidades_subconjuntos):
         raise ValueError("cantidades_subconjuntos debe ser una secuencia no vacía de enteros")
-    if not all(_es_entero(c) and c > 0 for c in cantidades_subconjuntos):
+    if not all(es_entero(c) and c > 0 for c in cantidades_subconjuntos):
         raise ValueError("Las cantidades de los subconjuntos deben ser enteros positivos")
     if any(a >= b for a, b in zip(cantidades_subconjuntos, cantidades_subconjuntos[1:])):
         raise ValueError("Las cantidades de los subconjuntos deben ser estrictamente crecientes")
@@ -101,8 +97,14 @@ def comprobar_cantidades(
                          f"{cantidad_train} partidas de train")
 
 
-def _comprobar_huella(huella: object) -> None:
-    """Exige una huella SHA-256 en hexadecimal en minúsculas."""
+def comprobar_huella(huella: object) -> None:
+    """Exige una huella SHA-256 en hexadecimal en minúsculas, como la de huella_archivo.
+
+    La usan los splits y los checkpoints para citar el dataset con el que se crearon.
+
+    Raises:
+        ValueError: Si no es un texto de 64 caracteres hexadecimales en minúsculas.
+    """
     if (not isinstance(huella, str) or len(huella) != 64
             or any(c not in "0123456789abcdef" for c in huella)):
         raise ValueError("La huella del dataset debe ser un SHA-256 hexadecimal de 64 caracteres")
@@ -141,7 +143,7 @@ def crear_splits(
             distinto del pedido, generador o huella no válidos.
     """
     comprobar_cantidades(cantidad_train, cantidad_validacion, cantidades_subconjuntos)
-    _comprobar_huella(huella_dataset)
+    comprobar_huella(huella_dataset)
     if not isinstance(generador, np.random.Generator):
         raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")
     if (isinstance(trayectorias, (str, bytes)) or not isinstance(trayectorias, Sequence)
@@ -190,9 +192,10 @@ def validar_splits(splits: SplitsDemostraciones, ids_disponibles: Iterable[int])
     """
     if not isinstance(splits, SplitsDemostraciones):
         raise ValueError("Se esperaba un objeto SplitsDemostraciones")
-    _comprobar_huella(splits.huella_dataset)
+    comprobar_huella(splits.huella_dataset)
     disponibles = list(ids_disponibles)
-    if not all(es_id_episodio(i) for i in disponibles) or len(set(disponibles)) != len(disponibles):
+    if (not all(es_id_episodio(i) for i in disponibles)
+            or len(set(disponibles)) != len(disponibles)):
         raise ValueError("Los IDs disponibles deben ser enteros del rango de int64 sin repetir")
     for nombre, ids in (("train", splits.train), ("validacion", splits.validacion)):
         if not isinstance(ids, tuple) or not ids or not all(es_id_episodio(i) for i in ids):
@@ -210,7 +213,7 @@ def validar_splits(splits: SplitsDemostraciones, ids_disponibles: Iterable[int])
     if not isinstance(splits.subconjuntos, Mapping) or not splits.subconjuntos:
         raise ValueError("subconjuntos debe ser un diccionario no vacío")
     for cantidad in splits.subconjuntos:
-        if not _es_entero(cantidad) or cantidad <= 0:
+        if not es_entero(cantidad) or cantidad <= 0:
             raise ValueError(f"Cantidad de subconjunto no válida: {cantidad!r}")
     anterior: set[int] = set()
     for cantidad in sorted(splits.subconjuntos):
@@ -306,7 +309,7 @@ def cargar_splits(
     origen = Path(ruta)
     if origen.suffix != ".json":
         raise ValueError("La ruta de splits debe terminar en .json")
-    _comprobar_huella(huella_dataset)
+    comprobar_huella(huella_dataset)
     try:
         contenido = json.loads(origen.read_text(encoding="utf-8"),
                                parse_constant=_rechazar_constante)

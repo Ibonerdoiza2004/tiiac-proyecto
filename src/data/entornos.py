@@ -6,11 +6,11 @@ from collections.abc import Callable
 from typing import Any
 
 import gymnasium as gym
-import numpy as np
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv
 
 from src.utils.seed import sembrar_entorno, sembrar_entorno_vectorizado, validar_semilla
+from src.utils.validacion import es_entero_positivo
 
 
 def crear_entorno(
@@ -73,8 +73,7 @@ def crear_entorno_vectorizado(
     Raises:
         ValueError: si el número de entornos o la semilla no son válidos.
     """
-    if (isinstance(n_entornos, (bool, np.bool_))
-            or not isinstance(n_entornos, (int, np.integer)) or n_entornos <= 0):
+    if not es_entero_positivo(n_entornos):
         raise ValueError("n_entornos debe ser un entero positivo")
     # Se comprueba antes de crear los entornos, para no dejar ninguno abierto.
     validar_semilla(semilla)
