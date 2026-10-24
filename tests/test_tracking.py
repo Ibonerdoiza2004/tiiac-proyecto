@@ -5,7 +5,9 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
+import torch
 
 from src.utils.tracking import (abrir_run, abrir_run_barrido, comprobar_wandb,
                                 crear_grupo, registrar, registrar_resumen,
@@ -72,11 +74,13 @@ def test_comprobar_sesion_online_falla_si_login_devuelve_false(monkeypatch):
 
 
 def test_registrar_solo_envia_metricas_escalares():
-    """Las listas históricas no se envían como métricas W&B."""
+    """Solo se envían escalares numéricos de Python y NumPy, no contenedores/tensores."""
     llamadas = []
     run = SimpleNamespace(log=lambda *a, **kw: llamadas.append((a, kw)))
-    registrar(run, {"loss": 0.5, "retornos": [1.0, 2.0], "longitudes": (3, 4)}, 12)
-    assert llamadas == [(({"loss": 0.5},), {"step": 12})]
+    registrar(run, {"loss": 0.5, "escalar_numpy": np.float32(0.25),
+                    "retornos": [1.0, 2.0], "longitudes": (3, 4), "mapa": {"a": 1},
+                    "array": np.asarray(2.0), "tensor": torch.tensor(3.0)}, 12)
+    assert llamadas == [(({"loss": 0.5, "escalar_numpy": np.float32(0.25)},), {"step": 12})]
 
 
 def test_registrar_rechaza_un_paso_que_disminuye():

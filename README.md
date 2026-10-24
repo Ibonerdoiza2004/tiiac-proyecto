@@ -5,8 +5,7 @@ Ermon, 2016), comparando GAIL y Behavioral Cloning con un experto TRPO y una
 política aleatoria. El primer entorno implementado es CartPole.
 
 - Paper: [Generative Adversarial Imitation Learning](https://arxiv.org/abs/1606.03476)
-- Seguimiento de experimentos: proyecto W&B `tiiac-2026` (enlace público pendiente de que
-  el equipo comparta la URL).
+- Seguimiento de experimentos: [proyecto W&B `tiiac-proyecto`](https://forge.coreweave.com/wandb/a-corral-universidad-de-deusto/tiiac-proyecto).
 - Autores: Asier Corral e Ibon Erdoiza.
 
 ## Instalación
@@ -36,8 +35,9 @@ python scripts/evaluar.py --entorno cartpole --experto checkpoints/expertos/cart
 
 Los barridos aceptan `--cantidades` y `--repeticiones` para repartirlos entre sesiones.
 `experimento.procesos` en la configuración limita los entrenamientos simultáneos.
-La configuración por defecto registra runs en W&B online. En el primer uso, inicia
-sesión en una terminal con `wandb login`; la credencial se guarda fuera del repositorio.
+La configuración por defecto registra runs en W&B online. Inicia sesión en Forge una
+vez desde una terminal con `wandb login --host https://api.forge.coreweave.com` y sigue
+las instrucciones para autenticarte; la credencial se guarda fuera del repositorio.
 
 Para trabajar sin conexión, cambia `wandb.modo` a `offline` en la configuración; W&B
 guardará los runs localmente y se pueden sincronizar después con `wandb sync`. Para una

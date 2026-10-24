@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import time
 import uuid
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +99,7 @@ def registrar(run: Any | None, metricas: dict, paso: int | None = None) -> None:
     if run is None:
         return
     escalares = {clave: valor for clave, valor in metricas.items()
-                 if not isinstance(valor, (list, tuple, dict))}
+                 if isinstance(valor, Real)}
     if escalares:
         if paso is not None:
             registro = _ULTIMOS_PASOS.get(id(run))

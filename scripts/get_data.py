@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -97,7 +98,9 @@ def main() -> int:
     try:
         if cfg.get("wandb", {}).get("modo") == "online":
             usar_artefacto(run, f"experto-{cfg['entorno']['id']}-{grupo}:latest", "experto")
+        inicio = time.perf_counter()
         resultado = generar_dataset(cfg, politica, salida, metadatos)
+        segundos = time.perf_counter() - inicio
         if (args.huella_esperada is not None
                 and args.huella_esperada != resultado["huella_partidas"]):
             terminar_run(run, ValueError("la huella de las partidas no coincide"))
@@ -105,6 +108,8 @@ def main() -> int:
                   f"({args.huella_esperada}); son distintas de las congeladas", file=sys.stderr)
             return 1
         registrar_resumen(run, {"pasos": resultado["pasos"],
+                                "semillas": resultado["semillas"],
+                                "segundos": segundos,
                                 "partidas": len(resultado["retornos"]),
                                 "retorno_medio": sum(resultado["retornos"])
                                 / len(resultado["retornos"]),

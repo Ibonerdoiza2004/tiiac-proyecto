@@ -578,7 +578,8 @@ def generar_dataset(cfg: Mapping[str, Any], politica: Politica, directorio: str 
     Returns:
         Rutas de los dos archivos, huella_dataset y huella_splits (SHA-256 de
         cada archivo), huella_partidas (solo del contenido),
-        IDs de train y validación, pasos totales, retornos y longitudes.
+        IDs de train y validación, pasos totales, retornos y longitudes, y las
+        semillas base, de las partidas y de los splits.
 
     Raises:
         ValueError: Configuración o metadatos no válidos, o partidas
@@ -620,5 +621,7 @@ def generar_dataset(cfg: Mapping[str, Any], politica: Politica, directorio: str 
     return {"demostraciones": ruta_demostraciones, "splits": ruta_splits,
             "huella_dataset": huella, "huella_splits": huella_archivo(ruta_splits),
             "huella_partidas": contenido,
+            "semillas": {"base": semilla, "partidas": semilla_partidas,
+                         "splits": semilla_splits},
             "train": list(splits.train), "validacion": list(splits.validacion),
             "pasos": sum(longitudes), "retornos": retornos, "longitudes": longitudes}

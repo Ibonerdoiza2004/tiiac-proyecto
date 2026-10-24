@@ -1211,6 +1211,8 @@ def test_generar_dataset_guarda_partidas_y_splits_coherentes(
                                                              resultado["validacion"]]
     grabacion = guardados["grabacion"]
     semilla_partidas, semilla_splits = semillas_independientes(cfg["demostraciones"]["semilla"], 2)
+    assert resultado["semillas"] == {"base": cfg["demostraciones"]["semilla"],
+                                      "partidas": semilla_partidas, "splits": semilla_splits}
     assert grabacion == {"semilla": cfg["demostraciones"]["semilla"],
                          "semilla_partidas": semilla_partidas, "semilla_splits": semilla_splits,
                          "partidas": 6, "determinista": False,

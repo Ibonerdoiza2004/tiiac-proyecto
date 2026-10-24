@@ -85,6 +85,8 @@ comprueba en la defensa.
 
 | 2026-10-24 | Redactar una frase breve para el commit de la rama W&B | Codex | Se propuso un título que resume grupos, artefactos y comparación | El usuario decidirá cuándo continuar; no se hizo commit |
 
+| 2026-10-24 | Auditar y corregir detalles de la guía W&B | Codex | El usuario confirmó el enlace Forge como proyecto de pruebas y decidió mantener los nombres de métricas en esta PR. Se añadieron semillas/tiempo al resumen de `get_data.py`, se limita el log a escalares numéricos y el checker reconoce enlaces Forge sin aceptar dominios ajenos. Se pidió una frase para el commit: «Completa la integración de W&B en Forge y mejora su validación y procedencia» | Pruebas específicas: 16/16; suite: 1428 pasaron y 7 fallaron por pruebas de procesos POSIX/`SIGALRM` en Windows y una aserción de stdout; checker 100/100, smoke 5 s. Pendiente CI Python 3.12 y prueba manual W&B online/offline |
+
 <!--
 Ejemplos del nivel que se espera (bórralos cuando tengas los tuyos):
 

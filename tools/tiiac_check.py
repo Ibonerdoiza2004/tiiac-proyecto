@@ -381,7 +381,8 @@ def check_tracking(raiz: Path) -> Resultado:
     else:
         r.fallo("no se registra ningun experimento. Se exige W&B (o equivalente justificado)")
 
-    m = re.search(r"https?://(wandb\.ai|api\.wandb\.ai)/\S+", docs)
+    m = re.search(r"https?://(?:wandb\.ai|api\.wandb\.ai|forge\.coreweave\.com/wandb)/\S+",
+                  docs)
     if m:
         r.bien("el README enlaza el proyecto de W&B", 5)
     else:

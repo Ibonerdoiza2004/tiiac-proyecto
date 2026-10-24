@@ -1011,6 +1011,9 @@ def _script_datos():
 def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tmp_path,
                                                             monkeypatch, capsys):
     script = _script_datos()
+    resumenes = []
+    monkeypatch.setattr(script, "registrar_resumen",
+                        lambda run, resumen: resumenes.append(resumen))
     argumentos = ["get_data.py", "--sin-wandb", "--experto", str(experto_guardado)]
     monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "a")])
     assert script.main() == 0
@@ -1020,6 +1023,9 @@ def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tm
     npz = tmp_path / "a" / "demostraciones.npz"
     assert npz.is_file() and (tmp_path / "a" / "splits.json").is_file()
     assert f"huella de demostraciones.npz: {huella_archivo(npz)}" in salida
+    assert resumenes[0]["semillas"].keys() == {"base", "partidas", "splits"}
+    assert all(isinstance(semilla, int) for semilla in resumenes[0]["semillas"].values())
+    assert resumenes[0]["segundos"] >= 0
 
     monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "b"),
                                      "--huella-esperada", huella])

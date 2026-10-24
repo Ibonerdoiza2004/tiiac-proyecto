@@ -152,6 +152,6 @@ entrenamiento:
   optimizador: adam
 
 wandb:
-  proyecto: tiiac-2026
-  entidad: ""           # vacío = entidad predeterminada de W&B
+  proyecto: tiiac-proyecto
+  entidad: a-corral-universidad-de-deusto
   modo: online          # 'disabled' en los tests
