@@ -6,6 +6,7 @@ que los tests puedan correr con modo='disabled'.
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import Any
 
@@ -28,6 +29,26 @@ def abrir_run(cfg: dict) -> Any | None:
         config=cfg,
         mode=wcfg.get("modo", "online"),
     )
+
+
+def abrir_run_barrido(cfg: dict, metodo: str, cantidad: int, repeticion: int) -> Any | None:
+    """Abre el run de un entrenamiento del barrido (abrir_run), o None si está desactivado.
+
+    Lo llaman las tareas de los barridos de BC y GAIL. El nombre del run es
+    <experimento.nombre>-<metodo>-<entorno>-c<cantidad>-r<repeticion> (provisional
+    hasta el módulo de seguimiento); la configuración guardada no cambia.
+
+    Args:
+        cfg: Configuración resuelta.
+        metodo: "bc" o "gail".
+        cantidad: Tamaño del subconjunto de train.
+        repeticion: Número de repetición.
+    """
+    entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
+    cfg_run = copy.deepcopy(cfg)
+    cfg_run["experimento"]["nombre"] = (f"{cfg['experimento']['nombre']}-{metodo}-{entorno}-"
+                                        f"c{cantidad}-r{repeticion}")
+    return abrir_run(cfg_run)
 
 
 def registrar(run: Any | None, metricas: dict, paso: int | None = None) -> None:

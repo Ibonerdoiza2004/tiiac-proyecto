@@ -1664,7 +1664,8 @@ def _datos_en_disco(carpeta: Path):
 
 def _entrenado(carpeta: Path, cfg=None):
     """Entrena 2 iteraciones con datos en disco y devuelve todo lo que necesita guardar_gail."""
-    from src.training.gail import entrenar_gail, procedencia_datos
+    from src.training.barrido import procedencia_datos
+    from src.training.gail import entrenar_gail
     trayectorias, splits, ruta_npz, ruta_splits = _datos_en_disco(carpeta)
     cfg = cfg or _cfg_gail(iteraciones=2)
     agente, discriminador, resumen = entrenar_gail(cfg, trayectorias, splits, 4, 1)
@@ -1715,7 +1716,7 @@ def test_guardar_y_cargar_gail_conserva_agente_discriminador_y_metadatos(tmp_pat
 def test_procedencia_de_los_datos(tmp_path, monkeypatch):
     from src.data.demostraciones import huella_partidas
     from src.data.splits import huella_archivo
-    from src.training.gail import procedencia_datos
+    from src.training.barrido import procedencia_datos
     trayectorias, _, ruta_npz, ruta_splits = _datos_en_disco(tmp_path)
     monkeypatch.chdir(tmp_path)
     datos = procedencia_datos(ruta_npz, ruta_splits, trayectorias)
@@ -1958,7 +1959,7 @@ def _preparar_script(monkeypatch, argumentos: list[str], cfg: dict | None = None
         resueltas.append((base, entorno, ajustes))
         return copy.deepcopy(cfg or _cfg_script())
 
-    monkeypatch.setattr(script, "resolver_configuracion", resolver)
+    monkeypatch.setattr("src.training.barrido.resolver_configuracion", resolver)
     monkeypatch.setattr("sys.argv", ["entrenar_gail.py", *argumentos])
     return script, resueltas
 
@@ -2049,7 +2050,7 @@ def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monke
         abiertos.append((cfg_run["experimento"]["nombre"], _Run()))
         return abiertos[-1][1]
 
-    monkeypatch.setattr("src.training.gail.abrir_run", abrir)
+    monkeypatch.setattr("src.utils.tracking.abrir_run", abrir)
     monkeypatch.setattr("src.training.gail.entrenar_gail", lambda cfg, t, s, c, r, run:
                         recibidos.append((cfg, run)) or _resumen_falso())
     monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
@@ -2094,7 +2095,7 @@ def test_un_entrenamiento_fallido_se_cierra_como_fallido_en_wandb(fallo, error, 
     """Regresión: finish() sin código marcaba como correctos los entrenamientos fallidos."""
     from src.training.gail import entrenar_y_guardar_gail
     run = _RunCerrable()
-    monkeypatch.setattr("src.training.gail.abrir_run", lambda cfg: run)
+    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda cfg: run)
 
     def entrenar(*_):
         if fallo == "entrenar":
@@ -2176,7 +2177,7 @@ def test_el_script_avisa_del_estado_de_git(codigo, aviso, datos_grabados, tmp_pa
                                                str(tmp_path / "g")])
     monkeypatch.setattr("src.training.gail.entrenar_gail", _resumen_falso)
     monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
-    monkeypatch.setattr(script, "estado_git", lambda: codigo)
+    monkeypatch.setattr("src.training.barrido.estado_git", lambda: codigo)
     assert script.main() == 0
     error = capsys.readouterr().err
     assert (aviso in error) if aviso else "aviso" not in error
@@ -2372,8 +2373,9 @@ class _ContextoFalso:
 
 
 def _con_procesos_falsos(monkeypatch, script) -> dict:
+    import src.training.barrido as barrido
     registro: dict = {"preparados": 0}
-    original = script.multiprocessing.get_context
+    original = barrido.multiprocessing.get_context
 
     def get_context(metodo=None):
         if metodo is None:
@@ -2385,13 +2387,13 @@ def _con_procesos_falsos(monkeypatch, script) -> dict:
         # La de verdad toca las señales, que en un hilo no se puede.
         registro["preparados"] += 1
 
-    monkeypatch.setattr(script.multiprocessing, "get_context", get_context)
-    monkeypatch.setattr("src.training.gail.preparar_proceso_barrido", preparar)
+    monkeypatch.setattr(barrido.multiprocessing, "get_context", get_context)
+    monkeypatch.setattr("src.training.barrido.preparar_proceso_barrido", preparar)
     return registro
 
 
 def test_con_varios_procesos_reparte_las_tareas(datos_grabados, tmp_path, monkeypatch, capsys):
-    from src.training.gail import ejecutar_tarea_barrido
+    from src.training.barrido import ejecutar_tarea_barrido
     cfg = _cfg_script()
     cfg["experimento"]["procesos"] = 3
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
@@ -2434,7 +2436,7 @@ def test_un_envio_truncado_cuenta_como_fallo_y_el_resto_sigue(datos_grabados, tm
     EOFError), que abortaba el barrido y terminaba los demás entrenamientos."""
     import os
     import struct
-    from src.training.gail import ejecutar_tarea_barrido
+    from src.training.barrido import ejecutar_tarea_barrido
     cfg = _cfg_script()
     cfg["experimento"]["procesos"] = 2
     script, _ = _preparar_script(monkeypatch, ["--datos", str(datos_grabados), "--salida",
@@ -2450,7 +2452,7 @@ def test_un_envio_truncado_cuenta_como_fallo_y_el_resto_sigue(datos_grabados, tm
         os.write(conexion.fileno(), struct.pack("!i", 1000) + b"x" * 10)
         conexion.close()
 
-    monkeypatch.setattr(script, "ejecutar_tarea_barrido", ejecutar_o_truncar)
+    monkeypatch.setattr("src.training.barrido.ejecutar_tarea_barrido", ejecutar_o_truncar)
     assert script.main() == 1
     salida = capsys.readouterr()
     assert "error en cantidad 4, repetición 0: el proceso terminó sin resultado" in salida.err
@@ -2480,41 +2482,44 @@ def test_ctrl_c_mientras_se_recibe_tambien_termina_ese_proceso(datos_grabados, t
     assert (registro["lanzados"], registro["terminados"], registro["vivos"]) == (3, 3, 0)
 
 
-def _morir_en_4_0(argumentos):
+def _morir_en_4_0(cfg, trayectorias, splits, cantidad, repeticion, destino, datos):
     """Tarea de prueba para procesos de verdad: la (4, 0) muere como la mata el sistema."""
     import os
     import signal
-    cantidad, repeticion = argumentos[3], argumentos[4]
     if (cantidad, repeticion) == (4, 0):
         os.kill(os.getpid(), signal.SIGKILL)
-    return cantidad, repeticion, _resumen_falso()[2], None
+    return _resumen_falso()[2]
 
 
-def test_si_un_proceso_muere_el_barrido_no_se_queda_esperando(tmp_path, capsys):
+def test_si_un_proceso_muere_el_barrido_no_se_queda_esperando(tmp_path):
     """Regresión: con Pool, un proceso muerto (por ejemplo por falta de memoria) dejaba el
     barrido esperando para siempre. Procesos spawn de verdad; la alarma corta el test si
     vuelve a colgarse."""
     import signal
 
+    from src.training.barrido import ejecutar_barrido
+
     def colgado(*_):
         raise TimeoutError("el barrido se ha quedado esperando")
 
-    script = _script_gail()
+    resultados = {}
     previa = signal.signal(signal.SIGALRM, colgado)
     signal.alarm(120)
     try:
-        fallos = script._entrenar_tareas([(1, 0), (4, 0), (4, 1)], 2, {}, [], None, tmp_path,
-                                         {}, tarea=_morir_en_4_0)
+        fallos = ejecutar_barrido([(1, 0), (4, 0), (4, 1)], 2, _morir_en_4_0,
+                                  lambda c, r: ({}, [], None, c, r, tmp_path, {}),
+                                  lambda resultado: resultados.update(
+                                      {tuple(resultado[:2]): resultado[2:]}))
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previa)
     assert fallos == [(4, 0)]
-    salida = capsys.readouterr()
-    assert "error en cantidad 4, repetición 0: el proceso terminó sin resultado" in salida.err
-    assert f"código de salida {-signal.SIGKILL}" in salida.err
+    resumen, error = resultados[(4, 0)]
+    assert resumen is None and "el proceso terminó sin resultado" in error
+    assert f"código de salida {-signal.SIGKILL}" in error
     # Los otros dos terminan y se informan.
-    assert "cantidad 1, repetición 0: retorno de validación" in salida.out
-    assert "cantidad 4, repetición 1: retorno de validación" in salida.out
+    assert resultados[(1, 0)] == (_resumen_falso()[2], None)
+    assert resultados[(4, 1)] == (_resumen_falso()[2], None)
 
 
 def test_ctrl_c_en_serie_para_el_barrido(datos_grabados, tmp_path, monkeypatch, capsys):
@@ -2552,7 +2557,7 @@ def test_ctrl_c_en_paralelo_termina_los_procesos(datos_grabados, tmp_path, monke
         # Ctrl+C llega al proceso principal mientras espera resultados.
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(script, "wait", interrumpir)
+    monkeypatch.setattr("src.training.barrido.wait", interrumpir)
     assert script.main() == 130
     # Los 3 que estaban en marcha se terminan y se esperan; el cuarto no empieza.
     assert (registro["lanzados"], registro["terminados"], registro["vivos"]) == (3, 3, 0)
@@ -2563,21 +2568,21 @@ def test_preparar_proceso_barrido_deja_un_hilo_y_sin_ctrl_c():
     """En un proceso spawn de verdad, como los del script."""
     import multiprocessing
     import signal
-    from src.training.gail import preparar_proceso_barrido
+    from src.training.barrido import preparar_proceso_barrido
     with multiprocessing.get_context("spawn").Pool(
             1, initializer=preparar_proceso_barrido) as pool:
         assert pool.apply(torch.get_num_threads) == 1
         assert pool.apply(signal.getsignal, (signal.SIGINT,)) == signal.SIG_IGN
 
 
-def test_tarea_barrido_devuelve_el_error_sin_propagarlo(monkeypatch):
-    from src.training.gail import tarea_barrido_gail
-    monkeypatch.setattr("src.training.gail.entrenar_y_guardar_gail",
-                        lambda *a: (_ for _ in ()).throw(ValueError("datos raros")))
-    assert tarea_barrido_gail(("cfg", "t", "s", 4, 2, "d", "datos")) == \
-        (4, 2, None, "ValueError('datos raros')")
-    monkeypatch.setattr("src.training.gail.entrenar_y_guardar_gail", lambda *a: {"pasos": 1})
-    assert tarea_barrido_gail(("cfg", "t", "s", 4, 2, "d", "datos")) == (4, 2, {"pasos": 1}, None)
+def test_cada_tarea_devuelve_el_error_sin_propagarlo():
+    from src.training.barrido import _ejecutar
+
+    def fallar(*argumentos):
+        raise ValueError("datos raros")
+
+    assert _ejecutar(fallar, ("cfg", 4, 2)) == (None, "ValueError('datos raros')")
+    assert _ejecutar(lambda *a: {"pasos": len(a)}, ("cfg", 4, 2)) == ({"pasos": 3}, None)
 
 
 def test_en_paralelo_da_los_mismos_modelos_que_en_serie(datos_grabados, tmp_path, monkeypatch,

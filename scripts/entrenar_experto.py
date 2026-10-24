@@ -24,10 +24,10 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
-from src.training.trpo import (comprobar_directorio_libre, entrenar_experto,  # noqa: E402
-                               guardar_experto)
+from src.training.trpo import entrenar_experto, guardar_experto  # noqa: E402
+from src.utils.archivos import comprobar_directorio_libre  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
-from src.utils.procedencia import estado_git  # noqa: E402
+from src.utils.procedencia import avisar_estado_git, estado_git  # noqa: E402
 from src.utils.tracking import abrir_run, terminar_run  # noqa: E402
 
 
@@ -75,13 +75,7 @@ def main() -> int:
     print(f"mejor retorno: {resumen['mejor_retorno']:.1f} "
           f"(iteración {resumen['mejor_iteracion']}); objetivo {resumen['objetivo']} {estado}")
     print(f"pasos: {resumen['pasos']}; tiempo medido: {resumen['segundos']:.0f} s")
-    codigo = estado_git()
-    if codigo["commit"] is None:
-        print("aviso: no se pudo leer el commit de git; experto.json no dice con qué código "
-              "se entrenó", file=sys.stderr)
-    elif codigo["cambios_sin_commit"]:
-        print("aviso: había cambios sin commit; este experto no se puede reproducir "
-              "exactamente desde el repositorio", file=sys.stderr)
+    avisar_estado_git(estado_git())
     return 0
 
 

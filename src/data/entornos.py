@@ -52,6 +52,21 @@ def crear_entorno(
     return env
 
 
+def espacios_entorno(cfg: dict[str, Any]) -> tuple[gym.Space, gym.Space]:
+    """Devuelve los espacios de observación y de acción del entorno de la configuración.
+
+    Crea el entorno solo para leerlos y lo cierra.
+
+    Raises:
+        ValueError: Si no se puede crear el entorno (ver crear_entorno).
+    """
+    entorno = crear_entorno(cfg, None)
+    try:
+        return entorno.observation_space, entorno.action_space
+    finally:
+        entorno.close()
+
+
 def crear_entorno_vectorizado(
     cfg: dict[str, Any], n_entornos: int, semilla: int,
 ) -> VecEnv:

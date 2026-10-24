@@ -26,7 +26,7 @@ from src.data.loaders import (DatasetTransiciones, construir_loaders_bc, submues
 from src.data.splits import crear_splits
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import ACTIVACIONES, PoliticaBC, construir_politica_bc
-from src.training.loop import entrenar_bc, entrenar_bc_subconjunto, evaluar_bc
+from src.training.bc import entrenar_bc, entrenar_bc_subconjunto, evaluar_bc
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import crear_generador, fijar_seed
 
@@ -701,7 +701,7 @@ def test_evaluar_bc_pone_modo_evaluacion_y_no_calcula_gradientes(continua):
 
 def test_normalizar_no_gasta_numeros_aleatorios_del_barajado(monkeypatch):
     """Ajustar la normalización recorre train sin barajar: no altera la semilla global."""
-    import src.training.loop as loop
+    import src.training.bc as bc
     estados, acciones = _datos_aprendibles(False, n=40)
     loader = _loader(estados, acciones, DISCRETO, batch_size=8, barajar=True)
     original = PoliticaBC.ajustar_normalizacion
@@ -718,7 +718,7 @@ def test_normalizar_no_gasta_numeros_aleatorios_del_barajado(monkeypatch):
     antes = torch.get_rng_state()
     monkeypatch.setattr(PoliticaBC, "ajustar_normalizacion", ajustar)
     with pytest.raises(RuntimeError, match="parar tras normalizar"):
-        loop.entrenar_bc(politica, loader, loader, _cfg(epocas_maximas=1))
+        bc.entrenar_bc(politica, loader, loader, _cfg(epocas_maximas=1))
     assert torch.equal(antes, capturas[0])
 
 
@@ -793,8 +793,8 @@ def test_sin_normalizar_se_admite_cualquier_loader():
 ], ids=["perdida_inf", "perdida_nan", "acierto_nan"])
 def test_entrenar_bc_rechaza_metricas_de_validacion_no_finitas(metricas, monkeypatch):
     """Regresión: una validación infinita se aceptaba como mejor resultado."""
-    import src.training.loop as loop
-    monkeypatch.setattr(loop, "evaluar_bc", lambda politica, loader: dict(metricas))
+    import src.training.bc as bc
+    monkeypatch.setattr(bc, "evaluar_bc", lambda politica, loader: dict(metricas))
     estados, acciones = _datos_aprendibles(False, n=16)
     loader = _loader(estados, acciones, DISCRETO)
     with pytest.raises(FloatingPointError, match="validación no finitas en la época 1"):
@@ -830,8 +830,8 @@ def test_entrenar_bc_aprende_una_relacion_sencilla(continua):
 @pytest.mark.parametrize("paciencia", [1, 2, 5])
 def test_entrenar_bc_para_tras_paciencia_epocas_sin_mejora(paciencia, monkeypatch):
     """Si la validación nunca mejora, la mejor época es la 1 y se para tras paciencia más."""
-    import src.training.loop as loop
-    monkeypatch.setattr(loop, "evaluar_bc", lambda politica, loader: {"perdida": 1.0,
+    import src.training.bc as bc
+    monkeypatch.setattr(bc, "evaluar_bc", lambda politica, loader: {"perdida": 1.0,
                                                                         "acierto": 0.5})
     estados, acciones = _datos_aprendibles(False, n=16)
     loader = _loader(estados, acciones, DISCRETO)
@@ -914,7 +914,7 @@ def test_entrenar_bc_elige_por_perdida_en_discretas_y_por_error_cuadratico_en_co
         segunda = ("error_cuadratico", next(errores)) if continua else ("acierto", 0.5)
         return {"perdida": next(perdidas), segunda[0]: segunda[1]}
 
-    monkeypatch.setattr("src.training.loop.evaluar_bc", evaluar_falso)
+    monkeypatch.setattr("src.training.bc.evaluar_bc", evaluar_falso)
     estados, acciones = _datos_aprendibles(continua, n=8)
     loader = _loader(estados, acciones, CONTINUO if continua else DISCRETO)
     resultado = entrenar_bc(_politica(continua), loader, loader,

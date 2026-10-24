@@ -1,20 +1,15 @@
-"""Predicción, evaluación y checkpoints de las políticas del experimento.
+"""Predicción y evaluación de las políticas del experimento, con un protocolo común.
 
-Para evaluar agentes guardados: experto con ``cargar_experto(dir)`` y sus
-estadísticas en ``metadatos["resumen"]["normalizacion"]``; BC con
-``cargar_politica_bc(ruta)`` y sin estadísticas; agente aleatorio con
-``"aleatorio"``. GAIL usa ``cargar_gail`` y el mismo campo de estadísticas
-que el experto.
+Para evaluar agentes guardados: experto con ``cargar_experto(dir)`` (trpo.py) y
+sus estadísticas en ``metadatos["resumen"]["normalizacion"]``; BC con
+``cargar_politica_bc(ruta)`` (bc.py) y sin estadísticas; agente aleatorio con
+``"aleatorio"``. GAIL usa ``cargar_gail`` (gail.py) y el mismo campo de
+estadísticas que el experto. scripts/evaluar.py los evalúa todos.
 """
 
 from __future__ import annotations
 
 import contextlib
-import json
-import os
-import pickle
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -24,14 +19,10 @@ from sb3_contrib import TRPO
 
 from src.data.demostraciones import jugar_partida, retorno_partida
 from src.data.entornos import crear_entorno
-from src.data.splits import comprobar_huella
 from src.models.factory import PoliticaBC
-from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
 from src.utils.seed import generador_torch_aislado, semillas_independientes, validar_semilla
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
-_FORMATO_BC = "tiiac-politica-bc"
-_VERSION_BC = 1
 _CLAVES_ESTADISTICAS = ("media", "varianza", "epsilon", "limite")
 
 
@@ -246,129 +237,3 @@ def evaluar_politica(
         "longitudes": longitudes,
         "longitud_media": float(np.mean(longitudes)),
     }
-
-
-def _metadatos_checkpoint(cfg: dict[str, Any], metadatos: dict[str, Any]) -> dict[str, Any]:
-    """Completa, comprueba y serializa metadatos de procedencia para un checkpoint.
-
-    La semilla pasa por validar_semilla, el subconjunto es un entero positivo y
-    la huella es un SHA-256 (comprobar_huella). Los escalares de NumPy se
-    guardan como números de Python; nan e infinitos se rechazan.
-    """
-    requeridos = {"semilla", "subconjunto", "huella_dataset"}
-    if not isinstance(metadatos, dict) or not requeridos <= metadatos.keys():
-        raise ValueError("metadatos necesita semilla, subconjunto y huella_dataset")
-    semilla = validar_semilla(metadatos["semilla"])
-    if not es_entero_positivo(metadatos["subconjunto"]):
-        raise ValueError("metadatos.subconjunto debe ser un entero positivo (partidas de train), "
-                         f"no {metadatos['subconjunto']!r}")
-    comprobar_huella(metadatos["huella_dataset"])
-    resultado = {
-        "configuracion": cfg,
-        "entorno": cfg.get("entorno", {}).get("id"),
-        "semilla": semilla,
-        "subconjunto": int(metadatos["subconjunto"]),
-        "huella_dataset": metadatos["huella_dataset"],
-        "codigo": estado_git(),
-        "versiones": versiones_y_hardware(),
-        "adicional": metadatos.get("adicional", {}),
-    }
-    try:
-        return json.loads(json.dumps(resultado, allow_nan=False, default=a_json))
-    except (TypeError, ValueError) as error:
-        raise ValueError(f"metadatos no son JSON finito: {error}") from error
-
-
-def guardar_politica_bc(
-    ruta: Path,
-    politica: PoliticaBC,
-    cfg: dict[str, Any],
-    metadatos: dict[str, Any],
-) -> None:
-    """Guarda BC sin sobrescribir, incluyendo arquitectura, buffers y procedencia.
-
-    La arquitectura (capas ocultas y activación) se lee de la propia política,
-    y la sección bc de la configuración debe coincidir con ella: la activación
-    no tiene pesos y el state_dict no la delata. Se escribe en un archivo
-    temporal junto a ruta que se renombra al final, así que un fallo al
-    escribir no deja un checkpoint a medias.
-
-    Raises:
-        FileExistsError: Si ruta ya existe.
-        ValueError: Si la política, la configuración o los metadatos no son válidos.
-    """
-    ruta = Path(ruta)
-    if ruta.exists():
-        raise FileExistsError(f"{ruta} ya existe; no se sobrescribe")
-    if not isinstance(politica, PoliticaBC):
-        raise ValueError("politica debe ser PoliticaBC")
-    bc_cfg = cfg.get("bc") if isinstance(cfg, dict) else None
-    if not isinstance(bc_cfg, dict):
-        raise ValueError("cfg necesita la sección bc")
-    capas, activacion = list(politica.capas_ocultas), politica.activacion
-    pedidas = bc_cfg.get("capas_ocultas")
-    if not isinstance(pedidas, (list, tuple)) or list(pedidas) != capas:
-        raise ValueError(f"bc.capas_ocultas no coincide con la política: tiene {capas} y la "
-                         f"configuración pide {pedidas!r}")
-    if bc_cfg.get("activacion") != activacion:
-        raise ValueError(f"bc.activacion no coincide con la política: tiene {activacion!r} y "
-                         f"la configuración pide {bc_cfg.get('activacion')!r}")
-    if politica.continua and "log_std_inicial" not in bc_cfg:
-        raise ValueError("La configuración necesita bc.log_std_inicial")
-    arquitectura = {
-        "dim_observacion": politica.dim_observacion,
-        "dim_accion": politica.dim_accion,
-        "continua": politica.continua,
-        "capas_ocultas": capas,
-        "activacion": activacion,
-        "log_std_inicial": (float(bc_cfg["log_std_inicial"])
-                            if politica.continua else None),
-    }
-    payload = {"formato": _FORMATO_BC, "version": _VERSION_BC,
-               "arquitectura": arquitectura, "state_dict": politica.state_dict(),
-               "metadatos": _metadatos_checkpoint(cfg, metadatos)}
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, nombre = tempfile.mkstemp(prefix=f".{ruta.name}.", suffix=".tmp", dir=ruta.parent)
-    os.close(descriptor)
-    temporal = Path(nombre)
-    try:
-        torch.save(payload, temporal)
-        if ruta.exists():
-            raise FileExistsError(f"{ruta} ya existe; no se sobrescribe")
-        temporal.rename(ruta)
-    except BaseException:
-        # También con Ctrl+C: no queda ni el temporal ni un checkpoint a medias.
-        temporal.unlink(missing_ok=True)
-        raise
-
-
-def cargar_politica_bc(ruta: Path) -> tuple[PoliticaBC, dict[str, Any]]:
-    """Carga un checkpoint BC usando deserialización restringida de PyTorch.
-
-    Raises:
-        FileNotFoundError: Si ruta no existe.
-        ValueError: Si el archivo está dañado o no es un checkpoint BC compatible.
-    """
-    ruta = Path(ruta)
-    if not ruta.is_file():
-        raise FileNotFoundError(ruta)
-    try:
-        payload = torch.load(ruta, map_location="cpu", weights_only=True)
-    except (OSError, RuntimeError, ValueError, EOFError, pickle.UnpicklingError) as error:
-        raise ValueError(f"Checkpoint BC dañado o no válido: {ruta}") from error
-    if (not isinstance(payload, dict) or payload.get("formato") != _FORMATO_BC
-            or payload.get("version") != _VERSION_BC):
-        raise ValueError("Formato o versión de checkpoint BC no compatibles")
-    arquitectura = payload.get("arquitectura")
-    if not isinstance(arquitectura, dict):
-        raise ValueError("Checkpoint BC sin arquitectura")
-    try:
-        politica = PoliticaBC(**arquitectura)
-        politica.load_state_dict(payload["state_dict"], strict=True)
-    except (KeyError, TypeError, ValueError, RuntimeError) as error:
-        raise ValueError("Checkpoint BC con arquitectura o pesos incompatibles") from error
-    metadatos = payload.get("metadatos")
-    if not isinstance(metadatos, dict):
-        raise ValueError("Checkpoint BC sin metadatos")
-    politica.eval()
-    return politica, metadatos

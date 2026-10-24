@@ -11,9 +11,9 @@ import torch
 from gymnasium import spaces
 
 from src.models.factory import PoliticaBC
-from src.training.evaluacion import (cargar_politica_bc, config_evaluacion,
-                                     evaluar_final, evaluar_politica,
-                                     guardar_politica_bc, predecir_accion)
+from src.training.bc import cargar_politica_bc, guardar_politica_bc
+from src.training.evaluacion import (config_evaluacion, evaluar_final, evaluar_politica,
+                                     predecir_accion)
 from src.training.trpo import cargar_experto, entrenar_experto, guardar_experto
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import fijar_seed
