@@ -1,103 +1,172 @@
 """Seguimiento de experimentos con Weights & Biases.
 
-Aislado en un modulo para que el resto del codigo no dependa de wandb y para
-que los tests puedan correr con modo='disabled'.
+Este módulo mantiene la dependencia de W&B fuera del resto del proyecto y
+permite ejecutar tests y smoke sin importar el paquete.
 """
 
 from __future__ import annotations
 
 import copy
 import time
+import uuid
+from pathlib import Path
 from typing import Any
 
-
-def abrir_run(cfg: dict) -> Any | None:
-    """Abre un run de W&B, o devuelve None si esta desactivado."""
-    wcfg = cfg.get("wandb", {})
-    if wcfg.get("modo") == "disabled":
-        return None
-    try:
-        import wandb
-    except ImportError:
-        print("aviso: wandb no esta instalado; se sigue sin registrar")
-        return None
-
-    return wandb.init(
-        project=wcfg.get("proyecto", "tiiac-2026"),
-        entity=wcfg.get("entidad") or None,
-        name=cfg["experimento"]["nombre"],
-        config=cfg,
-        mode=wcfg.get("modo", "online"),
-    )
+_ULTIMOS_PASOS: dict[int, tuple[Any, int]] = {}
 
 
-def abrir_run_barrido(cfg: dict, metodo: str, cantidad: int, repeticion: int) -> Any | None:
-    """Abre el run de un entrenamiento del barrido (abrir_run), o None si está desactivado.
+def crear_grupo() -> str:
+    """Crea un identificador corto para agrupar una ejecución completa."""
+    return uuid.uuid4().hex[:12]
 
-    Lo llaman las tareas de los barridos de BC y GAIL. El nombre del run es
-    <experimento.nombre>-<metodo>-<entorno>-c<cantidad>-r<repeticion> (provisional
-    hasta el módulo de seguimiento); la configuración guardada no cambia.
+
+def _wandb_activo(cfg: dict) -> bool:
+    """Indica si la configuración habilita cualquier modo de W&B."""
+    return cfg.get("wandb", {}).get("modo", "online") != "disabled"
+
+
+def comprobar_wandb(cfg: dict, exigir_sesion: bool = False) -> Any | None:
+    """Carga W&B si está activo y, cuando se pide, valida la sesión sin prompt.
 
     Args:
         cfg: Configuración resuelta.
-        metodo: "bc" o "gail".
-        cantidad: Tamaño del subconjunto de train.
-        repeticion: Número de repetición.
+        exigir_sesion: Valida credenciales en modo online antes de entrenar.
+
+    Returns:
+        El módulo W&B si está activo; ``None`` en modo disabled.
+
+    Raises:
+        RuntimeError: Si falta W&B o no se puede validar una sesión online.
     """
+    if not _wandb_activo(cfg):
+        return None
+    try:
+        import wandb
+    except ImportError as error:
+        raise RuntimeError("wandb está activo, pero el paquete wandb no está instalado") from error
+    if exigir_sesion and cfg.get("wandb", {}).get("modo", "online") == "online":
+        try:
+            sesion = wandb.login(quiet=True, anonymous="never", timeout=10)
+        except Exception as error:  # noqa: BLE001 - W&B envuelve errores de red y credenciales
+            raise RuntimeError("no hay una sesión válida de W&B; ejecuta wandb login") from error
+        if not sesion:
+            raise RuntimeError("no hay una sesión válida de W&B; ejecuta wandb login")
+    return wandb
+
+
+def abrir_run(cfg: dict, grupo: str | None = None, job_type: str | None = None,
+              nombre: str | None = None, etiquetas: list[str] | None = None) -> Any | None:
+    """Abre un run con su configuración y metadatos; devuelve None si está disabled.
+
+    Args:
+        cfg: Configuración resuelta del experimento.
+        grupo: Identificador compartido por los runs de una ejecución completa.
+        job_type: Tipo de trabajo (experto, datos, bc, gail o comparacion).
+        nombre: Nombre legible opcional del run.
+        etiquetas: Etiquetas para filtrar entorno, método, cantidad y repetición.
+    """
+    wcfg = cfg.get("wandb", {})
+    wandb = comprobar_wandb(cfg)
+    if wandb is None:
+        return None
+    return wandb.init(
+        project=wcfg.get("proyecto", "tiiac-2026"),
+        entity=wcfg.get("entidad") or None,
+        name=nombre or cfg["experimento"]["nombre"],
+        config=cfg,
+        mode=wcfg.get("modo", "online"),
+        group=grupo,
+        job_type=job_type,
+        tags=list(etiquetas or []),
+    )
+
+
+def abrir_run_barrido(cfg: dict, metodo: str, cantidad: int, repeticion: int,
+                      grupo: str | None = None) -> Any | None:
+    """Abre un run de BC o GAIL con grupo, job_type y etiquetas identificativas."""
     entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
     cfg_run = copy.deepcopy(cfg)
     cfg_run["experimento"]["nombre"] = (f"{cfg['experimento']['nombre']}-{metodo}-{entorno}-"
-                                        f"c{cantidad}-r{repeticion}")
-    return abrir_run(cfg_run)
+                                          f"c{cantidad}-r{repeticion}")
+    return abrir_run(cfg_run, grupo=grupo, job_type=metodo,
+                     etiquetas=[f"entorno:{entorno}", f"metodo:{metodo}",
+                                f"cantidad:{cantidad}", f"repeticion:{repeticion}"])
 
 
 def registrar(run: Any | None, metricas: dict, paso: int | None = None) -> None:
-    """Registra metricas si hay run abierto. Silencioso si no."""
-    if run is not None:
-        run.log(metricas, step=paso)
+    """Registra valores escalares si hay un run, sin importar W&B en disabled."""
+    if run is None:
+        return
+    escalares = {clave: valor for clave, valor in metricas.items()
+                 if not isinstance(valor, (list, tuple, dict))}
+    if escalares:
+        if paso is not None:
+            registro = _ULTIMOS_PASOS.get(id(run))
+            anterior = registro[1] if registro is not None and registro[0] is run else None
+            if anterior is not None and paso < anterior:
+                raise ValueError(f"el paso W&B disminuyó de {anterior} a {paso}")
+            _ULTIMOS_PASOS[id(run)] = (run, paso)
+        run.log(escalares, step=paso)
+
+
+def registrar_resumen(run: Any | None, resumen: dict[str, Any]) -> None:
+    """Añade al summary del run la procedencia y el resumen final del entrenamiento."""
+    summary = getattr(run, "summary", None) if run is not None else None
+    if summary is not None:
+        from src.utils.procedencia import estado_git, versiones_y_hardware
+
+        summary.update({**resumen, "codigo": estado_git(),
+                        "entorno_ejecucion": versiones_y_hardware()})
+
+
+def subir_artefacto(run: Any | None, nombre: str, tipo: str,
+                    archivos: list[Path], metadatos: dict[str, Any] | None = None,
+                    aliases: list[str] | None = None) -> Any | None:
+    """Sube archivos locales como un artefacto versionado relacionado con el run.
+
+    Los caminos se conservan como nombres de archivo dentro del artefacto, sin
+    subir la carpeta global wandb/ ni registros locales.
+    """
+    if run is None or not hasattr(run, "log_artifact"):
+        return None
+    wandb = comprobar_wandb({"wandb": {"modo": "offline"}})
+    artefacto = wandb.Artifact(nombre, type=tipo, metadata=metadatos or {})
+    for archivo in archivos:
+        artefacto.add_file(str(Path(archivo)), name=Path(archivo).name)
+    return run.log_artifact(artefacto, aliases=aliases or ["latest"])
+
+
+def usar_artefacto(run: Any | None, nombre: str,
+                   tipo: str = "demostraciones") -> Any | None:
+    """Declara un artefacto de entrada para registrar el linaje del entrenamiento."""
+    if run is None or not hasattr(run, "use_artifact"):
+        return None
+    comprobar_wandb({"wandb": {"modo": "offline"}})
+    return run.use_artifact(nombre, type=tipo)
 
 
 def terminar_run(run: Any | None, error: BaseException | None = None) -> None:
-    """Cierra el run, si lo hay, con el código de salida que corresponde.
-
-    W&B marca como correcto un run cerrado con finish() sin código, aunque haya
-    fallado. Con error None se cierra con 0 (Finished); con una excepción, con 1
-    (Failed), o 130 si es un Ctrl+C (KeyboardInterrupt), el mismo código que
-    devuelven los scripts.
-
-    Args:
-        run: Run de abrir_run, o None (no hace nada).
-        error: La excepción que interrumpió el entrenamiento, o None si terminó bien.
-    """
-    if run is None:
-        return
-    if error is None:
-        run.finish(exit_code=0)
-    else:
-        run.finish(exit_code=130 if isinstance(error, KeyboardInterrupt) else 1)
+    """Cierra el run con código 0, 1 por fallo o 130 por Ctrl+C."""
+    if run is not None:
+        run.finish(exit_code=(0 if error is None else
+                              130 if isinstance(error, KeyboardInterrupt) else 1))
+        _ULTIMOS_PASOS.pop(id(run), None)
 
 
 class RegistroProgreso:
-    """Hace de run de W&B para un entrenamiento por iteraciones e imprime su progreso.
-
-    Reenvía cada llamada a log al run real, si lo hay, e imprime una línea
-    cuando las medidas son de validación (validacion/retorno_medio): la
-    iteración, los pasos, el retorno, los aciertos del discriminador de la
-    última iteración y el tiempo que queda, estimado con el ritmo medido.
-    """
+    """Reenvía logs a W&B e imprime una línea por validación de GAIL."""
 
     def __init__(self, run: Any | None, etiqueta: str, pasos_por_iteracion: int,
                  iteraciones: int) -> None:
-        """Guarda el run real (o None) y lo necesario para calcular la iteración y el tiempo."""
+        """Guarda el run y el presupuesto necesarios para estimar el tiempo restante."""
         self.run, self.etiqueta = run, etiqueta
         self.pasos_por_iteracion, self.iteraciones = pasos_por_iteracion, iteraciones
         self.inicio = time.perf_counter()
         self.ultimas: dict[str, float] = {}
 
     def log(self, metricas: dict, step: int | None = None) -> None:
-        """Reenvía las medidas e imprime una línea si son de validación."""
-        if self.run is not None:
-            self.run.log(metricas, step=step)
+        """Reenvía métricas y, al validar, muestra retorno y tiempo estimado."""
+        registrar(self.run, metricas, step)
         if "validacion/retorno_medio" not in metricas:
             self.ultimas = metricas
             return

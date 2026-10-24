@@ -190,7 +190,7 @@ def test_entrenar_y_guardar_bc_cierra_su_run_y_marca_los_fallos(flujo, tmp_path,
     trayectorias, splits, datos = cargar_datos(cfg, flujo / "datos")
     runs = []
     monkeypatch.setattr("src.utils.tracking.abrir_run",
-                        lambda c: runs.append(_RunFalso()) or runs[-1])
+                        lambda c, **_: runs.append(_RunFalso()) or runs[-1])
     destino = tmp_path / "bc.pt"
     entrenar_y_guardar_bc(cfg, trayectorias, splits, 1, 0, destino, datos)
     with pytest.raises(FileExistsError):  # el guardado falla: destino ya existe
@@ -202,7 +202,8 @@ def test_entrenar_y_guardar_bc_rechaza_datos_de_otro_npz(flujo, tmp_path, monkey
     cfg = _cfg()
     trayectorias, splits, datos = cargar_datos(cfg, flujo / "datos")
     abiertos = []
-    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda c: abiertos.append(1))
+    monkeypatch.setattr("src.utils.tracking.abrir_run",
+                        lambda c, **_: abiertos.append(1))
     with pytest.raises(ValueError, match="huella del NPZ"):
         entrenar_y_guardar_bc(cfg, trayectorias, splits, 1, 0, tmp_path / "bc.pt",
                               {**datos, "huella_dataset": "b" * 64})

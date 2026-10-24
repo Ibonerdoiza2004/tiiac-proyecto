@@ -38,7 +38,8 @@ from src.training.barrido import comprobar_config_comun
 from src.utils.archivos import escribir_archivo_nuevo
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, validar_semilla
-from src.utils.tracking import abrir_run_barrido, registrar, terminar_run
+from src.utils.tracking import (abrir_run_barrido, registrar, registrar_resumen,
+                                subir_artefacto, terminar_run, usar_artefacto)
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 OPTIMIZADORES = {
@@ -404,7 +405,8 @@ def comprobar_config_barrido_bc(cfg: dict) -> None:
 
 def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
                           splits: SplitsDemostraciones, cantidad: int, repeticion: int,
-                          destino: Path, datos: dict[str, str]) -> dict[str, Any]:
+                          destino: Path, datos: dict[str, str],
+                          grupo: str | None = None) -> dict[str, Any]:
     """Entrena un BC del barrido con las semillas de su repetición y lo guarda.
 
     Las semillas salen de semillas_repeticion, como en GAIL: fijar_seed con la
@@ -437,8 +439,10 @@ def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
     semilla_base = cfg["experimento"]["semilla_repeticiones"]
     semillas = semillas_repeticion(semilla_base, repeticion)
     espacios = espacios_entorno(cfg)
-    run = abrir_run_barrido(cfg, "bc", cantidad, repeticion)
+    run = abrir_run_barrido(cfg, "bc", cantidad, repeticion, grupo)
     try:
+        if cfg.get("wandb", {}).get("modo") == "online":
+            usar_artefacto(run, f"demostraciones-{datos['huella_dataset'][:12]}:latest")
         inicio = time.perf_counter()
         fijar_seed(semillas["modelo"])
         politica, resumen = entrenar_bc_subconjunto(trayectorias, splits, cantidad, *espacios,
@@ -450,6 +454,11 @@ def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
                             {"semilla": semillas["modelo"], "subconjunto": cantidad,
                              "huella_dataset": datos["huella_dataset"],
                              "adicional": {"resumen": resumen, "datos": datos}})
+        registrar_resumen(run, {**resumen, **datos})
+        subir_artefacto(run, f"bc-{cfg['entorno']['id']}-c{cantidad}-r{repeticion}-"
+                        f"{grupo or 'independiente'}", "bc",
+                        [destino], {"cantidad": cantidad, "repeticion": repeticion,
+                                    **datos})
     except BaseException as error:
         # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
         terminar_run(run, error)

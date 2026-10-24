@@ -2046,7 +2046,7 @@ def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monke
         def finish(self, exit_code=None) -> None:
             self.terminado = exit_code
 
-    def abrir(cfg_run):
+    def abrir(cfg_run, **_):
         abiertos.append((cfg_run["experimento"]["nombre"], _Run()))
         return abiertos[-1][1]
 
@@ -2095,7 +2095,7 @@ def test_un_entrenamiento_fallido_se_cierra_como_fallido_en_wandb(fallo, error, 
     """Regresión: finish() sin código marcaba como correctos los entrenamientos fallidos."""
     from src.training.gail import entrenar_y_guardar_gail
     run = _RunCerrable()
-    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda cfg: run)
+    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda cfg, **_: run)
 
     def entrenar(*_):
         if fallo == "entrenar":

@@ -714,7 +714,8 @@ def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypa
         if fallo == "guardar":
             raise OSError("disco lleno")
 
-    monkeypatch.setattr(script, "abrir_run", lambda cfg: _Run())
+    monkeypatch.setattr(script, "abrir_run", lambda cfg, **_: _Run())
+    monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: None)
     monkeypatch.setattr(script, "entrenar_experto", entrenar)
     monkeypatch.setattr(script, "guardar_experto", guardar)
     monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--salida", str(tmp_path / "e")])
@@ -1010,7 +1011,7 @@ def _script_datos():
 def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tmp_path,
                                                             monkeypatch, capsys):
     script = _script_datos()
-    argumentos = ["get_data.py", "--experto", str(experto_guardado)]
+    argumentos = ["get_data.py", "--sin-wandb", "--experto", str(experto_guardado)]
     monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "a")])
     assert script.main() == 0
     salida = capsys.readouterr().out
@@ -1041,12 +1042,13 @@ def test_get_data_no_graba_si_algo_no_es_valido(caso, mensaje, experto_guardado,
                                                  monkeypatch, capsys):
     script = _script_datos()
     salida = tmp_path / "datos"
-    argumentos = ["get_data.py", "--experto", str(experto_guardado), "--salida", str(salida)]
+    argumentos = ["get_data.py", "--sin-wandb", "--experto", str(experto_guardado),
+                  "--salida", str(salida)]
     if caso == "salida ocupada":
         salida.mkdir()
         (salida / "algo.txt").write_text("x", encoding="utf-8")
     elif caso == "sin experto":
-        argumentos[2] = str(tmp_path / "no-existe")
+        argumentos[3] = str(tmp_path / "no-existe")
     else:
         argumentos += ["--config", str(tmp_path / "no-existe.yaml")]
     grabado = []
@@ -1068,7 +1070,7 @@ def test_get_data_avisa_del_estado_de_git(codigo, aviso, monkeypatch, tmp_path, 
                  "procedencia": {"codigo": codigo}}
     monkeypatch.setattr(script, "cargar_politica_experto",
                         lambda directorio, cfg: (lambda o: int(o[2] > 0), metadatos))
-    monkeypatch.setattr("sys.argv", ["get_data.py", "--experto", "x",
+    monkeypatch.setattr("sys.argv", ["get_data.py", "--sin-wandb", "--experto", "x",
                                      "--salida", str(tmp_path / "datos")])
     assert script.main() == 0
     error = capsys.readouterr().err

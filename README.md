@@ -1,137 +1,65 @@
-<!--
-PLANTILLA. Sustituye TODO lo que va entre <angulos>. Borra este comentario.
+# TIIAC: GAIL y Behavioral Cloning
 
-Un README se lee en treinta segundos o no se lee. Quien lo abre quiere saber
-tres cosas: qué es esto, cómo lo ejecuto, y funcionó o no. En ese orden.
+Replicación educativa de **Generative Adversarial Imitation Learning** (Ho y
+Ermon, 2016), comparando GAIL y Behavioral Cloning con un experto TRPO y una
+política aleatoria. El primer entorno implementado es CartPole.
 
-Recuerda que en noviembre otra pareja va a clonar este repositorio y va a
-intentar reproducir una métrica SIN PREGUNTAROS NADA. Este fichero es lo único
-que van a tener.
--->
-
-# <Título del proyecto>
-
-Replicación de **<Autores, año · Título del paper>** sobre **<dataset>**,
-con <aplicativo: buscador semántico / detector en vídeo / lo que sea> construido encima.
-
-- **Paper:** <enlace a arXiv o DOI>
-- **Implementación de referencia:** <enlace, o «ninguna: el paper se implementa desde cero»>
-- **Seguimiento de experimentos:** <enlace al proyecto de W&B — obligatorio>
-- **Autoría:** <Nombre 1>, <Nombre 2>
-
-## Resultado
-
-| Métrica | Paper | Nuestra réplica | Escala |
-|---|---|---|---|
-| <accuracy> | <0.72> | <0.68> | <CIFAR-10, subset de 5.000> |
-
-<Una frase honesta sobre la diferencia. Una desviación bien explicada puntúa
-igual que un acierto; una desviación sin explicar, no.>
+- Paper: [Generative Adversarial Imitation Learning](https://arxiv.org/abs/1606.03476)
+- Seguimiento de experimentos: proyecto W&B `tiiac-2026` (enlace público pendiente de que
+  el equipo comparta la URL).
+- Autores: Asier Corral e Ibon Erdoiza.
 
 ## Instalación
 
+Se usa Python 3.12 y las versiones fijadas en `requirements.txt`:
+
 ```bash
-git clone <url>
-cd <repo>
-python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-## Datos
+## Recorrido experimental
 
-Las demostraciones no se descargan: se graban con nuestro experto TRPO, y ni
-el experto ni los datos se versionan. Se obtienen con:
+El experto, las demostraciones y los modelos se guardan localmente y no se versionan.
+Cada paso imprime un identificador de grupo W&B. Pásalo al siguiente comando con
+`--grupo` para reunir la ejecución completa en un grupo:
 
 ```bash
 python scripts/entrenar_experto.py --entorno cartpole
-python scripts/get_data.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha>
+python scripts/get_data.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> --grupo <grupo>
+python scripts/entrenar_bc.py --entorno cartpole --datos data/demostraciones/cartpole/<fecha> --grupo <grupo>
+python scripts/entrenar_gail.py --entorno cartpole --datos data/demostraciones/cartpole/<fecha> --grupo <grupo>
+python scripts/evaluar.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> --bc checkpoints/bc/cartpole/<fecha> --gail checkpoints/gail/cartpole/<fecha> --grupo <grupo>
 ```
 
-`get_data.py` graba 15 partidas con el experto estocástico, como el código
-original, sin filtrarlas. Escribe `demostraciones.npz` y `splits.json` (10
-partidas de train con subconjuntos 1, 4, 7 y 10, y 5 de validación) en
-`data/demostraciones/cartpole/<fecha>` e imprime las huellas SHA-256. Las
-semillas salen de `demostraciones.semilla` en `configs/default.yaml`. Con
-`--huella-esperada <huella de las partidas>` comprueba que una regeneración da
-las mismas partidas. Medido el 19 de octubre en CPU (WSL2, 12 núcleos):
-CartPole, 7401 pasos y 244 KB en 6 s.
+Los barridos aceptan `--cantidades` y `--repeticiones` para repartirlos entre sesiones.
+`experimento.procesos` en la configuración limita los entrenamientos simultáneos.
+La configuración por defecto registra runs en W&B online. En el primer uso, inicia
+sesión en una terminal con `wandb login`; la credencial se guarda fuera del repositorio.
 
-Procedencia: datos propios, generados en `CartPole-v1` de Gymnasium (licencia
-MIT). Datos congelados: pendiente de acordar en el equipo; cuando se congelen,
-aquí irán su ubicación y sus huellas.
+Para trabajar sin conexión, cambia `wandb.modo` a `offline` en la configuración; W&B
+guardará los runs localmente y se pueden sincronizar después con `wandb sync`. Para una
+ejecución sin seguimiento, añade `--sin-wandb` al comando correspondiente. Los tests y
+el smoke usan `disabled`.
 
-## Ejecución
+El sistema registra runs por tarea (`experto`, `datos`, `bc`, `gail` y `comparacion`),
+su configuración, procedencia, resumen, etiquetas y artefactos versionados. La tabla
+de comparación y los retornos por episodio también quedan en el JSON local de evaluación.
+Los nombres de métricas siguen siendo los actuales hasta acordarlos con el equipo.
+
+## Comprobaciones
 
 ```bash
-# Experto TRPO (no se versiona): se regenera con la misma semilla de la config.
-# Medido: 53 s en CPU para CartPole. --sin-wandb si no hay cuenta de W&B.
-python scripts/entrenar_experto.py --entorno cartpole
-
-# GAIL (no se versiona): un entrenamiento por tamaño de subconjunto y repetición,
-# guardados en checkpoints/gail/<entorno>/<fecha>. --cantidades y --repeticiones
-# eligen una parte del barrido para repartirlo en varias sesiones, y
-# experimento.procesos (config) cuántos entrenamientos van a la vez, uno por núcleo.
-# experimento.procesos está en 5 para el PC en el que se midió (6 núcleos físicos);
-# en otra máquina, como mucho sus núcleos físicos y unos 830 MB de RAM por proceso.
-# Medido en CPU para CartPole (10 entornos): 2,1-2,6 s por iteración con un solo
-# entrenamiento y 4,2 s con 4 a la vez; el barrido completo está pendiente de medir.
-python scripts/entrenar_gail.py --entorno cartpole --datos data/demostraciones/cartpole/<fecha>
-
-# BC (no se versiona): el mismo barrido y las mismas opciones que GAIL, con las
-# semillas de cada repetición, así que cada BC usa los mismos pares que su GAIL.
-# Se guarda en checkpoints/bc/<entorno>/<fecha>/cantidad_<c>/repeticion_<r>.pt.
-python scripts/entrenar_bc.py --entorno cartpole --datos data/demostraciones/cartpole/<fecha>
-
-# Evaluación final: experto, aleatorio y cada BC y GAIL con las mismas partidas
-# (sección evaluacion de la config: 50, semilla 9000, deterministas). Comprueba
-# que BC y GAIL usaron los mismos datos y guarda un JSON nuevo con los retornos.
-python scripts/evaluar.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> --bc checkpoints/bc/cartpole/<fecha> --gail checkpoints/gail/cartpole/<fecha>
-
-# Smoke test: el pipeline entero en miniatura. Menos de 5 minutos en CPU.
 python run.py --smoke --entorno cartpole
-
-# Entrenamiento completo. Menos de 20 minutos en una T4 de Colab gratuito.
-python run.py --config configs/default.yaml --entorno cartpole
-
-# El aplicativo, sobre el checkpoint entrenado.
-python -m src.app.serve --checkpoint checkpoints/mejor.pt
+python -m pytest tests/ -q
+python tools/tiiac_check.py .
 ```
 
-## Estructura
-
-```
-configs/      Todos los hiperparámetros. Ninguno escrito a fuego en el código
-src/data/     Carga, splits y transformaciones
-src/models/   La arquitectura replicada
-src/training/ Bucle de entrenamiento y evaluación
-src/app/      La capa de servicio: carga un checkpoint y responde
-scripts/      Descarga de datos y utilidades
-tests/        Tests de forma, invariancia y reproducibilidad
-run.py        Punto de entrada único
-```
-
-## Reproducibilidad
-
-- Semilla fijada en `src/utils/seed.py`, valor en `configs/`.
-- Dependencias con versión exacta en `requirements.txt`.
-- Presupuesto de cómputo declarado: **<tiempo real> en <hardware>**.
-- Qué se recortó respecto al paper y qué se pierde con ello: <explicación>.
-
-## Decisiones donde el paper no especifica
-
-<La sección que distingue replicar de copiar. Lista lo que tuvisteis que
-decidir vosotros y con qué criterio. Sale de la ficha de replicación.>
-
-| Ambigüedad del paper | Qué decidimos | Por qué |
-|---|---|---|
-| <no dice el schedule de lr> | <cosine con warmup de 5 épocas> | <es lo habitual en la familia de trabajos citada> |
-
-## Tests
-
-```bash
-pytest tests/ -q
-```
+El smoke se ejecuta con W&B desactivado. El entrenamiento completo no forma parte de
+las comprobaciones rutinarias.
 
 ## Uso de IA
 
-Documentado en [`AI_USAGE.md`](AI_USAGE.md), según la guía docente.
+Las conversaciones del proyecto se registran en [`AI_USAGE.md`](AI_USAGE.md).

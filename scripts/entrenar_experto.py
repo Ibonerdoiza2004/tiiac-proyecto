@@ -28,7 +28,8 @@ from src.training.trpo import entrenar_experto, guardar_experto  # noqa: E402
 from src.utils.archivos import comprobar_directorio_libre  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 from src.utils.procedencia import avisar_estado_git, estado_git  # noqa: E402
-from src.utils.tracking import abrir_run, terminar_run  # noqa: E402
+from src.utils.tracking import (abrir_run, comprobar_wandb, crear_grupo,  # noqa: E402
+                                registrar_resumen, subir_artefacto, terminar_run)
 
 
 def main() -> int:
@@ -43,6 +44,7 @@ def main() -> int:
                     help="directorio nuevo donde guardar el experto "
                          "(por defecto checkpoints/expertos/<entorno>/<fecha>)")
     ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
+    ap.add_argument("--grupo", default=None, help="grupo W&B compartido con el resto del flujo")
     args = ap.parse_args()
 
     ajustes = {"wandb": {"modo": "disabled"}} if args.sin_wandb else None
@@ -59,11 +61,23 @@ def main() -> int:
     except FileExistsError as error:
         print(f"error: {error}; elige otra --salida", file=sys.stderr)
         return 2
+    try:
+        comprobar_wandb(cfg, exigir_sesion=True)
+    except RuntimeError as error:
+        print(f"error de W&B: {error}", file=sys.stderr)
+        return 2
 
-    run = abrir_run(cfg)
+    grupo = args.grupo or crear_grupo()
+    print(f"grupo W&B: {grupo}")
+    run = abrir_run(cfg, grupo=grupo, job_type="experto",
+                    etiquetas=[f"entorno:{cfg['entorno']['id']}", "metodo:experto"])
     try:
         modelo, resumen = entrenar_experto(cfg, run)
         guardar_experto(salida, modelo, cfg, resumen)
+        registrar_resumen(run, resumen)
+        subir_artefacto(run, f"experto-{cfg['entorno']['id']}-{grupo}", "experto",
+                        [salida / "modelo.zip", salida / "experto.json"],
+                        {"entorno": cfg["entorno"]["id"], "grupo": grupo})
     except BaseException as error:
         # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
         terminar_run(run, error)

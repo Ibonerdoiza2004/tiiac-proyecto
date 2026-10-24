@@ -50,6 +50,8 @@ from src.utils.archivos import escribir_archivo_nuevo  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 from src.utils.procedencia import (a_json, avisar_estado_git, estado_git,  # noqa: E402
                                    ruta_registrada, versiones_y_hardware)
+from src.utils.tracking import (abrir_run, comprobar_wandb, crear_grupo, registrar_resumen,  # noqa: E402
+                                subir_artefacto, terminar_run, usar_artefacto)
 
 
 def _cargar_agentes(cfg: dict, args: argparse.Namespace) -> tuple[list[dict[str, Any]],
@@ -129,10 +131,13 @@ def main() -> int:
     ap.add_argument("--salida", type=Path, default=None,
                     help="archivo JSON nuevo (por defecto "
                          "checkpoints/evaluacion/<entorno>/<fecha>.json)")
+    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
+    ap.add_argument("--grupo", default=None, help="grupo W&B de esta ejecución completa")
     args = ap.parse_args()
 
     try:
-        cfg = resolver_configuracion(args.config, args.entorno, {"wandb": {"modo": "disabled"}})
+        ajustes = {"wandb": {"modo": "disabled"}} if args.sin_wandb else None
+        cfg = resolver_configuracion(args.config, args.entorno, ajustes)
         protocolo = config_evaluacion(cfg)
     except (OSError, ValueError) as error:
         print(f"error de configuración: {error}", file=sys.stderr)
@@ -148,11 +153,20 @@ def main() -> int:
     except (OSError, ValueError) as error:
         print(f"error con los modelos: {error}", file=sys.stderr)
         return 2
+    try:
+        comprobar_wandb(cfg, exigir_sesion=True)
+    except RuntimeError as error:
+        print(f"error de W&B: {error}", file=sys.stderr)
+        return 2
 
     # Un hilo, como al entrenar: el resultado no depende de cuántos núcleos haya.
     torch.set_num_threads(1)
     inicio = time.perf_counter()
     resultados = []
+    grupo = args.grupo or crear_grupo()
+    print(f"grupo W&B: {grupo}")
+    run = abrir_run(cfg, grupo=grupo, job_type="comparacion",
+                    etiquetas=[f"entorno:{cfg['entorno']['id']}", "metodo:comparacion"])
     try:
         for entrada in agentes:
             resultado = evaluar_final(entrada["agente"], cfg, entrada["estadisticas"])
@@ -167,15 +181,55 @@ def main() -> int:
                   f"retorno {resultado['retorno_medio']:7.1f} ± "
                   f"{resultado['retorno_desviacion']:6.1f}", flush=True)
     except KeyboardInterrupt:
+        terminar_run(run, KeyboardInterrupt())
         print("interrumpido: no se ha guardado nada", file=sys.stderr)
         return 130
+    except BaseException as error:
+        terminar_run(run, error)
+        raise
     segundos = time.perf_counter() - inicio
     texto = json.dumps({"entorno": cfg["entorno"]["id"], "protocolo": protocolo,
                         "huella_dataset": huella, "segundos": segundos,
                         "codigo": estado_git(), "entorno_ejecucion": versiones_y_hardware(),
                         "resultados": resultados},
                        ensure_ascii=False, indent=2, allow_nan=False, default=a_json)
-    escribir_archivo_nuevo(salida, lambda temporal: temporal.write_text(texto, encoding="utf-8"))
+    try:
+        escribir_archivo_nuevo(salida,
+                               lambda temporal: temporal.write_text(texto, encoding="utf-8"))
+        if run is not None:
+            wandb = comprobar_wandb(cfg)
+            if cfg.get("wandb", {}).get("modo") == "online":
+                for entrada in agentes:
+                    metodo = entrada["metodo"]
+                    if metodo == "experto":
+                        nombre = f"experto-{cfg['entorno']['id']}-{grupo}:latest"
+                        usar_artefacto(run, nombre, "experto")
+                    elif metodo in ("bc", "gail"):
+                        nombre = (f"{metodo}-{cfg['entorno']['id']}-c{entrada['cantidad']}-"
+                                  f"r{entrada['repeticion']}-{grupo}:latest")
+                        usar_artefacto(run, nombre, metodo)
+            columnas = ["metodo", "cantidad", "repeticion", "retorno_medio",
+                        "retorno_desviacion", "longitud_media"]
+            tabla = wandb.Table(columns=columnas)
+            episodios = wandb.Table(columns=["metodo", "cantidad", "repeticion",
+                                             "episodio", "retorno", "longitud"])
+            for fila in resultados:
+                tabla.add_data(*(fila.get(k) for k in columnas))
+                for indice, (retorno, longitud) in enumerate(zip(fila["retornos"],
+                                                                  fila["longitudes"])):
+                    episodios.add_data(fila["metodo"], fila["cantidad"], fila["repeticion"],
+                                       indice, retorno, longitud)
+            run.log({"comparacion": tabla, "episodios": episodios})
+        registrar_resumen(run, {"entorno": cfg["entorno"]["id"],
+                                "episodios": protocolo["episodios"],
+                                "semilla": protocolo["semilla"], "segundos": segundos,
+                                "huella_dataset": huella})
+        subir_artefacto(run, f"comparacion-{cfg['entorno']['id']}", "comparacion",
+                        [salida], {"grupo": grupo, "huella_dataset": huella})
+    except BaseException as error:
+        terminar_run(run, error)
+        raise
+    terminar_run(run)
     print(f"{len(resultados)} agentes evaluados con {protocolo['episodios']} partidas cada uno "
           f"en {segundos:.0f} s; resultados en {salida}")
     avisar_estado_git(estado_git())

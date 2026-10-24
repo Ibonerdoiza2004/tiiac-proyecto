@@ -22,7 +22,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.utils.seed import fijar_seed          # noqa: E402
-from src.utils.tracking import abrir_run       # noqa: E402
+from src.utils.tracking import (abrir_run, comprobar_wandb, crear_grupo,  # noqa: E402
+                                terminar_run)
 from src.data.loaders import construir_loaders  # noqa: E402
 from src.models.factory import construir_modelo  # noqa: E402
 from src.training.loop import entrenar, evaluar  # noqa: E402
@@ -46,10 +47,14 @@ def main() -> int:
                     help="perfil de entorno que se combina con la configuracion base")
     ap.add_argument("--solo-evaluar", action="store_true",
                     help="carga el checkpoint y evalua, sin entrenar")
+    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
+    ap.add_argument("--grupo", default=None, help="grupo W&B compartido con otros scripts")
     args = ap.parse_args()
 
     try:
-        ajustes = cargar_config(Path("configs/smoke.yaml")) if args.smoke else None
+        ajustes = cargar_config(Path("configs/smoke.yaml")) if args.smoke else {}
+        if args.sin_wandb:
+            ajustes["wandb"] = {"modo": "disabled"}
         cfg = resolver_configuracion(args.config, args.entorno, ajustes)
         if args.smoke:
             cfg["origen"]["archivos"].append("configs/smoke.yaml")
@@ -57,31 +62,30 @@ def main() -> int:
         print(f"error de configuración: {error}", file=sys.stderr)
         return 2
 
-    # 1 · reproducibilidad, antes que nada
-    fijar_seed(cfg["experimento"]["seed"])
-
-    # 2 · seguimiento del experimento
-    run = abrir_run(cfg)
-
-    # 3 · datos
-    train_loader, val_loader = construir_loaders(cfg)
-
-    # 4 · modelo
-    modelo = construir_modelo(cfg)
-
-    # 5 · entrenar y evaluar
-    if not args.solo_evaluar:
-        entrenar(modelo, train_loader, val_loader, cfg, run)
-    metricas = evaluar(modelo, val_loader, cfg)
-
-    # 6 · el smoke test TIENE que imprimir una metrica: es la prueba de que el
-    #     pipeline llega hasta el final. El checker lo comprueba.
-    print("\n=== metricas ===")
-    for k, v in metricas.items():
-        print(f"{k}: {v:.4f}")
-
-    if run is not None:
-        run.finish()
+    try:
+        comprobar_wandb(cfg, exigir_sesion=True)
+    except RuntimeError as error:
+        print(f"error de W&B: {error}", file=sys.stderr)
+        return 2
+    grupo = args.grupo or crear_grupo()
+    print(f"grupo W&B: {grupo}")
+    run = abrir_run(cfg, grupo=grupo, job_type="experimento",
+                    etiquetas=[f"entorno:{cfg['entorno']['id']}"])
+    try:
+        # Abrir el run antes de fijar la semilla evita que W&B altere el entrenamiento.
+        fijar_seed(cfg["experimento"]["seed"])
+        train_loader, val_loader = construir_loaders(cfg)
+        modelo = construir_modelo(cfg)
+        if not args.solo_evaluar:
+            entrenar(modelo, train_loader, val_loader, cfg, run)
+        metricas = evaluar(modelo, val_loader, cfg)
+        print("\n=== metricas ===")
+        for k, v in metricas.items():
+            print(f"{k}: {v:.4f}")
+    except BaseException as error:
+        terminar_run(run, error)
+        raise
+    terminar_run(run)
     return 0
 
 
