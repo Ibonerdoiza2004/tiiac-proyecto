@@ -97,13 +97,19 @@ def main() -> int:
                     etiquetas=[f"entorno:{cfg['entorno']['id']}", "metodo:datos"])
     try:
         if cfg.get("wandb", {}).get("modo") == "online":
-            usar_artefacto(run, f"experto-{cfg['entorno']['id']}-{grupo}:latest", "experto")
+            huella_modelo = metadatos["experto"]["huella_modelo"]
+            usar_artefacto(run,
+                           f"experto-{cfg['entorno']['id']}-{huella_modelo[:12]}:latest",
+                           "experto")
         inicio = time.perf_counter()
         resultado = generar_dataset(cfg, politica, salida, metadatos)
         segundos = time.perf_counter() - inicio
         if (args.huella_esperada is not None
                 and args.huella_esperada != resultado["huella_partidas"]):
             terminar_run(run, ValueError("la huella de las partidas no coincide"))
+            print(f"huella de demostraciones.npz: {resultado['huella_dataset']}")
+            print(f"huella de splits.json: {resultado['huella_splits']}")
+            print(f"huella de las partidas: {resultado['huella_partidas']}")
             print(f"error: la huella de las partidas no coincide con la esperada "
                   f"({args.huella_esperada}); son distintas de las congeladas", file=sys.stderr)
             return 1

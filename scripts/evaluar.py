@@ -46,6 +46,7 @@ from src.training.bc import cargar_politica_bc  # noqa: E402
 from src.training.evaluacion import config_evaluacion, evaluar_final  # noqa: E402
 from src.training.gail import cargar_gail  # noqa: E402
 from src.training.trpo import cargar_experto  # noqa: E402
+from src.data.splits import huella_archivo  # noqa: E402
 from src.utils.archivos import escribir_archivo_nuevo  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 from src.utils.procedencia import (a_json, avisar_estado_git, estado_git,  # noqa: E402
@@ -202,11 +203,16 @@ def main() -> int:
                 for entrada in agentes:
                     metodo = entrada["metodo"]
                     if metodo == "experto":
-                        nombre = f"experto-{cfg['entorno']['id']}-{grupo}:latest"
+                        huella_modelo = huella_archivo(entrada["ruta"] / "modelo.zip")
+                        nombre = (f"experto-{cfg['entorno']['id']}-"
+                                  f"{huella_modelo[:12]}:latest")
                         usar_artefacto(run, nombre, "experto")
                     elif metodo in ("bc", "gail"):
+                        ruta_modelo = (entrada["ruta"] if metodo == "bc" else
+                                       entrada["ruta"] / "modelo.zip")
+                        huella_modelo = huella_archivo(ruta_modelo)
                         nombre = (f"{metodo}-{cfg['entorno']['id']}-c{entrada['cantidad']}-"
-                                  f"r{entrada['repeticion']}-{grupo}:latest")
+                                  f"r{entrada['repeticion']}-{huella_modelo[:12]}:latest")
                         usar_artefacto(run, nombre, metodo)
             columnas = ["metodo", "cantidad", "repeticion", "retorno_medio",
                         "retorno_desviacion", "longitud_media"]

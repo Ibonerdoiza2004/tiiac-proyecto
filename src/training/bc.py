@@ -31,7 +31,7 @@ from torch.utils.data import (
 
 from src.data.entornos import espacios_entorno
 from src.data.loaders import construir_loaders_bc
-from src.data.splits import SplitsDemostraciones, comprobar_huella
+from src.data.splits import SplitsDemostraciones, comprobar_huella, huella_archivo
 from src.data.tipos import Trayectoria
 from src.models.factory import PoliticaBC, comprobar_arquitectura, construir_politica_bc
 from src.training.barrido import comprobar_config_comun
@@ -455,10 +455,11 @@ def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
                              "huella_dataset": datos["huella_dataset"],
                              "adicional": {"resumen": resumen, "datos": datos}})
         registrar_resumen(run, {**resumen, **datos})
+        huella_modelo = huella_archivo(destino)
         subir_artefacto(run, f"bc-{cfg['entorno']['id']}-c{cantidad}-r{repeticion}-"
-                        f"{grupo or 'independiente'}", "bc",
+                        f"{huella_modelo[:12]}", "bc",
                         [destino], {"cantidad": cantidad, "repeticion": repeticion,
-                                    **datos})
+                                    "huella_modelo": huella_modelo, **datos})
     except BaseException as error:
         # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
         terminar_run(run, error)

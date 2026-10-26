@@ -25,6 +25,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from src.training.trpo import entrenar_experto, guardar_experto  # noqa: E402
+from src.data.splits import huella_archivo  # noqa: E402
 from src.utils.archivos import comprobar_directorio_libre  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 from src.utils.procedencia import avisar_estado_git, estado_git  # noqa: E402
@@ -75,9 +76,12 @@ def main() -> int:
         modelo, resumen = entrenar_experto(cfg, run)
         guardar_experto(salida, modelo, cfg, resumen)
         registrar_resumen(run, resumen)
-        subir_artefacto(run, f"experto-{cfg['entorno']['id']}-{grupo}", "experto",
-                        [salida / "modelo.zip", salida / "experto.json"],
-                        {"entorno": cfg["entorno"]["id"], "grupo": grupo})
+        if run is not None:
+            huella_modelo = huella_archivo(salida / "modelo.zip")
+            subir_artefacto(run, f"experto-{cfg['entorno']['id']}-{huella_modelo[:12]}",
+                            "experto", [salida / "modelo.zip", salida / "experto.json"],
+                            {"entorno": cfg["entorno"]["id"],
+                             "huella_modelo": huella_modelo})
     except BaseException as error:
         # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
         terminar_run(run, error)

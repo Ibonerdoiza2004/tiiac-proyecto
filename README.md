@@ -5,8 +5,12 @@ Ermon, 2016), comparando GAIL y Behavioral Cloning con un experto TRPO y una
 política aleatoria. El primer entorno implementado es CartPole.
 
 - Paper: [Generative Adversarial Imitation Learning](https://arxiv.org/abs/1606.03476)
-- Seguimiento de experimentos: [proyecto W&B `tiiac-proyecto`](https://forge.coreweave.com/wandb/a-corral-universidad-de-deusto/tiiac-proyecto).
+- Seguimiento de experimentos: [proyecto W&B `tiiac-proyecto`](https://wandb.ai/a-corral-universidad-de-deusto/tiiac-proyecto)
 - Autores: Asier Corral e Ibon Erdoiza.
+
+## Resultado
+
+Pendiente de completar por el equipo.
 
 ## Instalación
 
@@ -19,11 +23,37 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
+## Datos
+
+Las demostraciones se generan localmente con el experto TRPO; no se descargan
+ni se versionan. Ejecuta:
+
+```bash
+python scripts/entrenar_experto.py --entorno cartpole
+python scripts/get_data.py --entorno cartpole \
+  --experto checkpoints/expertos/cartpole/<fecha> --grupo <grupo>
+python scripts/get_data.py --entorno cartpole \
+  --experto checkpoints/expertos/cartpole/<fecha> --grupo <grupo> \
+  --huella-esperada <huella-de-las-partidas>
+```
+
+`get_data.py` graba 15 partidas con el experto estocástico: 10 para train y 5
+para validación. Guarda `demostraciones.npz` y `splits.json` en una carpeta
+nueva, con subconjuntos train de 1, 4, 7 y 10 partidas, e imprime las huellas
+SHA-256 del NPZ, de los splits y del contenido de las partidas. La semilla se
+lee de `configs/`. Con `--huella-esperada <huella-de-las-partidas>` comprueba
+que la regeneración produce las mismas partidas y muestra las huellas obtenidas
+aunque no coincidan.
+
+Procedencia: datos propios generados en `CartPole-v1` de Gymnasium (licencia
+MIT). Los datos todavía no están congelados; su ubicación y huellas se
+documentarán cuando el equipo acuerde congelarlos.
+
 ## Recorrido experimental
 
-El experto, las demostraciones y los modelos se guardan localmente y no se versionan.
-Cada paso imprime un identificador de grupo W&B. Pásalo al siguiente comando con
-`--grupo` para reunir la ejecución completa en un grupo:
+El experto, las demostraciones y los modelos se guardan localmente y no se
+versionan. El experto imprime un identificador de grupo W&B; pásalo a los pasos
+siguientes para reunir los runs:
 
 ```bash
 python scripts/entrenar_experto.py --entorno cartpole
@@ -33,21 +63,49 @@ python scripts/entrenar_gail.py --entorno cartpole --datos data/demostraciones/c
 python scripts/evaluar.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> --bc checkpoints/bc/cartpole/<fecha> --gail checkpoints/gail/cartpole/<fecha> --grupo <grupo>
 ```
 
-Los barridos aceptan `--cantidades` y `--repeticiones` para repartirlos entre sesiones.
-`experimento.procesos` en la configuración limita los entrenamientos simultáneos.
-La configuración por defecto registra runs en W&B online. Inicia sesión en Forge una
-vez desde una terminal con `wandb login --host https://api.forge.coreweave.com` y sigue
-las instrucciones para autenticarte; la credencial se guarda fuera del repositorio.
+Los barridos aceptan `--cantidades` y `--repeticiones` para repartirlos entre
+sesiones. `experimento.procesos` limita cuántos entrenamientos se ejecutan a la
+vez. El seguimiento guarda runs, configuración, procedencia, resúmenes y
+artefactos; la evaluación registra las tablas de comparación y de episodios.
 
-Para trabajar sin conexión, cambia `wandb.modo` a `offline` en la configuración; W&B
-guardará los runs localmente y se pueden sincronizar después con `wandb sync`. Para una
-ejecución sin seguimiento, añade `--sin-wandb` al comando correspondiente. Los tests y
-el smoke usan `disabled`.
+## Seguimiento W&B
 
-El sistema registra runs por tarea (`experto`, `datos`, `bc`, `gail` y `comparacion`),
-su configuración, procedencia, resumen, etiquetas y artefactos versionados. La tabla
-de comparación y los retornos por episodio también quedan en el JSON local de evaluación.
-Los nombres de métricas siguen siendo los actuales hasta acordarlos con el equipo.
+El proyecto se ha elegido privado y usará la entidad compartida
+`a-corral-universidad-de-deusto`. Inicia sesión en W&B Cloud con una clave de
+[wandb.ai/authorize](https://wandb.ai/authorize):
+
+```bash
+wandb login --relogin --host https://api.wandb.ai
+```
+
+La credencial se guarda fuera del repositorio. Para trabajar sin conexión,
+cambia `wandb.modo` a `offline` en la configuración y sincroniza luego con
+`wandb sync`. Para no registrar un experimento, usa `--sin-wandb`. Tests y smoke
+usan `disabled`.
+
+## Tiempos medidos
+
+- Experto CartPole: 53 s en CPU, WSL2 con 12 núcleos, para 50 000 pasos; medido
+  el 16 de octubre.
+- Datos CartPole: 6 s en CPU, WSL2 con 12 núcleos, para 15 partidas, 7401 pasos
+  y 244 KB; medido el 19 de octubre.
+- GAIL CartPole con 10 entornos: 2,1–2,6 s por iteración con un entrenamiento
+  a la vez; con 4 entrenamientos simultáneos, 4,2 s por iteración. Medido en
+  CPU; la segunda medición fue en el PC de 6 núcleos físicos y 7,9 GB de RAM
+  disponible en WSL2.
+- `experimento.procesos` está en 5 para ese PC de 6 núcleos físicos.
+- El tiempo del barrido completo sigue pendiente de medir.
+
+## Reproducibilidad (presupuesto)
+
+Las semillas están en `configs/` y se inicializan en `src/utils/seed.py`; las
+dependencias tienen versiones exactas en `requirements.txt`. El smoke cumple el
+límite de 5 minutos en CPU. El barrido completo está pendiente de medir; TRPO
+usa CPU, así que una T4 no acelera estos entrenamientos.
+
+## Decisiones donde el paper no especifica
+
+Pendiente de documentar por el equipo.
 
 ## Comprobaciones
 
@@ -57,8 +115,8 @@ python -m pytest tests/ -q
 python tools/tiiac_check.py .
 ```
 
-El smoke se ejecuta con W&B desactivado. El entrenamiento completo no forma parte de
-las comprobaciones rutinarias.
+El smoke usa W&B desactivado. El entrenamiento completo no forma parte de las
+comprobaciones rutinarias.
 
 ## Uso de IA
 

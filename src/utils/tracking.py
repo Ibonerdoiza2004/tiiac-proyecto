@@ -7,6 +7,7 @@ permite ejecutar tests y smoke sin importar el paquete.
 from __future__ import annotations
 
 import copy
+import sys
 import time
 import uuid
 from numbers import Real
@@ -105,7 +106,9 @@ def registrar(run: Any | None, metricas: dict, paso: int | None = None) -> None:
             registro = _ULTIMOS_PASOS.get(id(run))
             anterior = registro[1] if registro is not None and registro[0] is run else None
             if anterior is not None and paso < anterior:
-                raise ValueError(f"el paso W&B disminuyó de {anterior} a {paso}")
+                print(f"aviso: se omiten métricas con paso W&B decreciente: "
+                      f"{paso} < {anterior}", file=sys.stderr)
+                return
             _ULTIMOS_PASOS[id(run)] = (run, paso)
         run.log(escalares, step=paso)
 
@@ -139,11 +142,20 @@ def subir_artefacto(run: Any | None, nombre: str, tipo: str,
 
 def usar_artefacto(run: Any | None, nombre: str,
                    tipo: str = "demostraciones") -> Any | None:
-    """Declara un artefacto de entrada para registrar el linaje del entrenamiento."""
+    """Declara un artefacto de entrada si existe, sin bloquear el entrenamiento si falla."""
     if run is None or not hasattr(run, "use_artifact"):
         return None
-    comprobar_wandb({"wandb": {"modo": "offline"}})
-    return run.use_artifact(nombre, type=tipo)
+    wandb = comprobar_wandb({"wandb": {"modo": "offline"}})
+    try:
+        return run.use_artifact(nombre, type=tipo)
+    except ValueError as error:
+        print(f"aviso: no se encontró el artefacto {nombre}; se sigue sin registrar el linaje "
+              f"({error})", file=sys.stderr)
+        return None
+    except wandb.errors.CommError as error:
+        print(f"aviso: no se pudo consultar el artefacto {nombre}; "
+              f"se sigue sin registrar el linaje ({error})", file=sys.stderr)
+        return None
 
 
 def terminar_run(run: Any | None, error: BaseException | None = None) -> None:

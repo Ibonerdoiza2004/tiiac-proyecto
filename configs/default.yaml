@@ -153,5 +153,5 @@ entrenamiento:
 
 wandb:
   proyecto: tiiac-proyecto
-  entidad: a-corral-universidad-de-deusto
+  entidad: a-corral-universidad-de-deusto  # Equipo compartido de W&B Cloud.
   modo: online          # 'disabled' en los tests

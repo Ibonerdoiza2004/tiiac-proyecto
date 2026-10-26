@@ -44,7 +44,7 @@ from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepR
 
 from src.data.entornos import crear_entorno_vectorizado
 from src.data.loaders import pares_de_subconjunto, tensores_de_pares
-from src.data.splits import SplitsDemostraciones
+from src.data.splits import SplitsDemostraciones, huella_archivo
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, comprobar_arquitectura, construir_discriminador
 from src.training.barrido import comprobar_config_comun
@@ -978,11 +978,14 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
                                                        repeticion, progreso)
         guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
         registrar_resumen(run, {**resumen, **datos})
-        subir_artefacto(run, f"gail-{cfg['entorno']['id']}-c{cantidad}-r{repeticion}-"
-                        f"{grupo or 'independiente'}", "gail",
-                        [destino / "modelo.zip", destino / "discriminador.pt",
-                         destino / "gail.json"],
-                        {"cantidad": cantidad, "repeticion": repeticion, **datos})
+        if run is not None:
+            huella_modelo = huella_archivo(destino / "modelo.zip")
+            subir_artefacto(run, f"gail-{cfg['entorno']['id']}-c{cantidad}-r{repeticion}-"
+                            f"{huella_modelo[:12]}", "gail",
+                            [destino / "modelo.zip", destino / "discriminador.pt",
+                             destino / "gail.json"],
+                            {"cantidad": cantidad, "repeticion": repeticion,
+                             "huella_modelo": huella_modelo, **datos})
     except BaseException as error:
         # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
         terminar_run(run, error)

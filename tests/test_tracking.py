@@ -97,12 +97,14 @@ def test_registrar_solo_envia_metricas_escalares():
     assert llamadas == [(({"loss": 0.5, "escalar_numpy": np.float32(0.25)},), {"step": 12})]
 
 
-def test_registrar_rechaza_un_paso_que_disminuye():
-    """Un mismo run no acepta pasos menores que uno ya registrado."""
-    run = SimpleNamespace(log=lambda *a, **kw: None)
+def test_registrar_omite_un_paso_que_disminuye(capsys):
+    """Un paso W&B decreciente avisa y omite sus métricas sin cortar el entrenamiento."""
+    llamadas = []
+    run = SimpleNamespace(log=lambda *a, **kw: llamadas.append((a, kw)))
     registrar(run, {"loss": 1.0}, 12)
-    with pytest.raises(ValueError, match="disminuyó"):
-        registrar(run, {"loss": 0.5}, 11)
+    registrar(run, {"loss": 0.5}, 11)
+    assert len(llamadas) == 1
+    assert "paso W&B decreciente" in capsys.readouterr().err
 
 
 def test_registrar_resumen_subir_artefacto_y_cerrar_run(tmp_path):
@@ -143,6 +145,26 @@ def test_usar_artefacto_declara_el_linaje_de_entrada(monkeypatch):
     run = SimpleNamespace(use_artifact=lambda nombre, type: llamadas.append((nombre, type)))
     assert usar_artefacto(run, "demostraciones-a1b2:latest") is None
     assert llamadas == [("demostraciones-a1b2:latest", "demostraciones")]
+
+
+@pytest.mark.parametrize("tipo_error", ["ausente", "red"])
+def test_usar_artefacto_ausente_avisa_y_no_propaga_el_error(monkeypatch, capsys, tipo_error):
+    """La ausencia del artefacto o un error de W&B no detienen el trabajo."""
+    class CommError(Exception):
+        pass
+
+    falso = SimpleNamespace(errors=SimpleNamespace(CommError=CommError))
+    monkeypatch.setitem(sys.modules, "wandb", falso)
+
+    def falla(nombre, type):
+        error = ValueError("artifact not found") if tipo_error == "ausente" else CommError("offline")
+        raise error
+
+    run = SimpleNamespace(use_artifact=falla)
+    assert usar_artefacto(run, "experto-CartPole-v1-abcd1234:latest", "experto") is None
+    aviso = capsys.readouterr().err
+    assert "experto-CartPole-v1-abcd1234:latest" in aviso
+    assert "se sigue sin registrar el linaje" in aviso
 
 
 def test_crear_grupo_devuelve_identificadores_no_vacios_y_distintos():
