@@ -73,6 +73,20 @@ def test_comprobar_sesion_online_falla_si_login_devuelve_false(monkeypatch):
         comprobar_wandb(_cfg("online"), exigir_sesion=True)
 
 
+def test_comprobar_sesion_online_verifica_credenciales_sin_argumentos_no_compatibles(monkeypatch):
+    """El preflight usa solo argumentos disponibles en la versión fijada de W&B."""
+    llamadas = []
+
+    def login(anonymous, timeout, verify):
+        llamadas.append({"anonymous": anonymous, "timeout": timeout, "verify": verify})
+        return True
+
+    falso = SimpleNamespace(login=login)
+    monkeypatch.setitem(sys.modules, "wandb", falso)
+    assert comprobar_wandb(_cfg("online"), exigir_sesion=True) is falso
+    assert llamadas == [{"anonymous": "never", "timeout": 10, "verify": True}]
+
+
 def test_registrar_solo_envia_metricas_escalares():
     """Solo se envían escalares numéricos de Python y NumPy, no contenedores/tensores."""
     llamadas = []

@@ -47,9 +47,9 @@ def comprobar_wandb(cfg: dict, exigir_sesion: bool = False) -> Any | None:
         raise RuntimeError("wandb está activo, pero el paquete wandb no está instalado") from error
     if exigir_sesion and cfg.get("wandb", {}).get("modo", "online") == "online":
         try:
-            sesion = wandb.login(quiet=True, anonymous="never", timeout=10)
+            sesion = wandb.login(anonymous="never", timeout=10, verify=True)
         except Exception as error:  # noqa: BLE001 - W&B envuelve errores de red y credenciales
-            raise RuntimeError("no hay una sesión válida de W&B; ejecuta wandb login") from error
+            raise RuntimeError(f"no se pudo validar la sesión de W&B: {error}") from error
         if not sesion:
             raise RuntimeError("no hay una sesión válida de W&B; ejecuta wandb login")
     return wandb
