@@ -658,9 +658,10 @@ def test_el_script_avisa_del_estado_de_git(codigo, aviso, monkeypatch, tmp_path,
     script = _script()
     resumen = {"entorno": "CartPole-v1", "mejor_retorno": 500.0, "mejor_iteracion": 3,
                "objetivo": 500, "objetivo_alcanzado": True, "pasos": 15000, "segundos": 12.0}
-    monkeypatch.setattr(script, "entrenar_experto", lambda cfg, run: ("modelo", resumen))
-    monkeypatch.setattr(script, "guardar_experto", lambda *a: None)
-    monkeypatch.setattr(script, "estado_git", lambda: codigo)
+    monkeypatch.setattr("src.training.flujo.entrenar_experto",
+                        lambda cfg, run: ("modelo", resumen))
+    monkeypatch.setattr("src.training.flujo.guardar_experto", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.estado_git", lambda: codigo)
     monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--sin-wandb",
                                      "--salida", str(tmp_path / "experto")])
     assert script.main() == 0
@@ -678,8 +679,8 @@ def test_el_script_entrena_y_guarda_con_la_configuracion_resuelta(monkeypatch, t
                           "mejor_iteracion": 3, "objetivo": 500, "objetivo_alcanzado": True,
                           "pasos": 15000, "segundos": 12.0}
 
-    monkeypatch.setattr(script, "entrenar_experto", entrenar)
-    monkeypatch.setattr(script, "guardar_experto",
+    monkeypatch.setattr("src.training.flujo.entrenar_experto", entrenar)
+    monkeypatch.setattr("src.training.flujo.guardar_experto",
                         lambda salida, modelo, cfg, resumen: llamadas.update(salida=salida))
     monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--sin-wandb",
                                      "--salida", str(tmp_path / "experto")])
@@ -707,13 +708,13 @@ def test_el_artefacto_del_experto_se_identifica_por_la_huella_del_modelo(
         (salida / "experto.json").write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: object())
-    monkeypatch.setattr(script, "abrir_run", lambda *a, **k: run)
-    monkeypatch.setattr(script, "entrenar_experto", lambda *a: (object(), resumen))
-    monkeypatch.setattr(script, "guardar_experto", guardar)
-    monkeypatch.setattr(script, "registrar_resumen", lambda *a: None)
-    monkeypatch.setattr(script, "subir_artefacto", lambda *a: subidas.append(a))
-    monkeypatch.setattr(script, "terminar_run", lambda *a: None)
-    monkeypatch.setattr(script, "avisar_estado_git", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.abrir_run", lambda *a, **k: run)
+    monkeypatch.setattr("src.training.flujo.entrenar_experto", lambda *a: (object(), resumen))
+    monkeypatch.setattr("src.training.flujo.guardar_experto", guardar)
+    monkeypatch.setattr("src.training.flujo.registrar_resumen", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.subir_artefacto", lambda *a: subidas.append(a))
+    monkeypatch.setattr("src.training.flujo.terminar_run", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.avisar_estado_git", lambda *a: None)
     destino = tmp_path / "experto"
     monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--salida", str(destino)])
     assert script.main() == 0
@@ -752,11 +753,11 @@ def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypa
         (destino / "experto.json").write_text("{}", encoding="utf-8")
 
     nombres = []
-    monkeypatch.setattr(script, "abrir_run",
+    monkeypatch.setattr("src.training.flujo.abrir_run",
                         lambda cfg, **k: nombres.append(k["nombre"]) or _Run())
     monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: None)
-    monkeypatch.setattr(script, "entrenar_experto", entrenar)
-    monkeypatch.setattr(script, "guardar_experto", guardar)
+    monkeypatch.setattr("src.training.flujo.entrenar_experto", entrenar)
+    monkeypatch.setattr("src.training.flujo.guardar_experto", guardar)
     monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--salida", str(tmp_path / "e")])
     if fallo is None:
         assert script.main() == 0
@@ -861,7 +862,8 @@ def test_el_script_no_entrena_si_la_salida_esta_ocupada(ocupado, monkeypatch, tm
     else:
         salida.write_text("x", encoding="utf-8")
     entrenado = []
-    monkeypatch.setattr(script, "entrenar_experto", lambda *a: entrenado.append(1))
+    monkeypatch.setattr("src.training.flujo.entrenar_experto",
+                        lambda *a: entrenado.append(1))
     monkeypatch.setattr("sys.argv",
                         ["entrenar_experto.py", "--sin-wandb", "--salida", str(salida)])
     assert script.main() == 2
@@ -1052,7 +1054,7 @@ def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tm
                                                             monkeypatch, capsys):
     script = _script_datos()
     resumenes = []
-    monkeypatch.setattr(script, "registrar_resumen",
+    monkeypatch.setattr("src.training.flujo.registrar_resumen",
                         lambda run, resumen: resumenes.append(resumen))
     argumentos = ["get_data.py", "--sin-wandb", "--experto", str(experto_guardado)]
     monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "a")])
@@ -1105,15 +1107,15 @@ def test_get_data_busca_el_artefacto_del_experto_por_huella(
     run = Run()
     nombres = []
     monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: object())
-    monkeypatch.setattr(script, "abrir_run",
+    monkeypatch.setattr("src.training.flujo.abrir_run",
                         lambda *a, **k: nombres.append(k["nombre"]) or run)
-    monkeypatch.setattr(script, "registrar_resumen", lambda *a: None)
-    monkeypatch.setattr(script, "subir_artefacto", lambda *a: None)
-    monkeypatch.setattr(script, "terminar_run", lambda *a: None)
-    monkeypatch.setattr(script, "avisar_estado_git", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.registrar_resumen", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.subir_artefacto", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.terminar_run", lambda *a: None)
+    monkeypatch.setattr("src.training.flujo.avisar_estado_git", lambda *a: None)
     monkeypatch.setattr("src.utils.tracking.comprobar_wandb",
                         lambda cfg: SimpleNamespace(errors=SimpleNamespace(CommError=CommError)))
-    monkeypatch.setattr(script, "generar_dataset", lambda cfg, politica, salida, meta: {
+    monkeypatch.setattr("src.training.flujo.generar_dataset", lambda cfg, politica, salida, meta: {
         "pasos": 1, "semillas": {"base": 1, "partidas": 2, "splits": 3},
         "retornos": [1.0], "huella_dataset": "a" * 64, "huella_splits": "b" * 64,
         "huella_partidas": "c" * 64, "demostraciones": Path("demostraciones.npz"),
@@ -1146,7 +1148,7 @@ def test_get_data_no_graba_si_algo_no_es_valido(caso, mensaje, experto_guardado,
     else:
         argumentos += ["--config", str(tmp_path / "no-existe.yaml")]
     grabado = []
-    monkeypatch.setattr(script, "generar_dataset", lambda *a: grabado.append(1))
+    monkeypatch.setattr("src.training.flujo.generar_dataset", lambda *a: grabado.append(1))
     monkeypatch.setattr("sys.argv", argumentos)
     assert script.main() == 2
     assert not grabado
@@ -1162,7 +1164,7 @@ def test_get_data_avisa_del_estado_de_git(codigo, aviso, monkeypatch, tmp_path, 
     script = _script_datos()
     metadatos = {"entorno": "CartPole-v1", "experto": {}, "configuracion_experto": {},
                  "procedencia": {"codigo": codigo}}
-    monkeypatch.setattr(script, "cargar_politica_experto",
+    monkeypatch.setattr("src.training.flujo.cargar_politica_experto",
                         lambda directorio, cfg: (lambda o: int(o[2] > 0), metadatos))
     monkeypatch.setattr("sys.argv", ["get_data.py", "--sin-wandb", "--experto", "x",
                                      "--salida", str(tmp_path / "datos")])

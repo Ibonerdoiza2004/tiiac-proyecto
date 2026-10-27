@@ -25,8 +25,21 @@ python -m pip install -r requirements.txt
 
 ## Datos
 
-Las demostraciones se generan localmente con el experto TRPO; no se descargan
-ni se versionan. Ejecuta:
+Las demostraciones y el experto no se versionan. En CartPole, el destino acordado
+para congelarlos es `checkpoints/expertos/cartpole/congelado/` y
+`data/demostraciones/cartpole/congelado/`. Con los nombres exactos de los
+artefactos se pueden recuperar en otra máquina con:
+
+```bash
+wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-<12-caracteres>:latest --root data/demostraciones/cartpole/congelado
+wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-<12-caracteres>:latest --root checkpoints/expertos/cartpole/congelado
+```
+
+Los nombres concretos de los artefactos y las huellas SHA-256 del NPZ, los
+splits y las partidas se anotarán aquí al comprobar la publicación online. En
+este checkout no están disponibles esos archivos ni sus huellas; no se deben
+tratar las rutas como congeladas hasta completar esa comprobación. Para
+regenerarlos o contrastarlos con una sesión de W&B activa:
 
 ```bash
 python scripts/entrenar_experto.py --entorno cartpole
@@ -38,7 +51,7 @@ python scripts/get_data.py --entorno cartpole \
 ```
 
 `get_data.py` graba 15 partidas con el experto estocástico: 10 para train y 5
-para validación. Guarda `demostraciones.npz` y `splits.json` en una carpeta
+para validación. Guarda `demostraciones.npz` y `splits.json` en la carpeta
 nueva, con subconjuntos train de 1, 4, 7 y 10 partidas, e imprime las huellas
 SHA-256 del NPZ, de los splits y del contenido de las partidas. La semilla se
 lee de `configs/`. Con `--huella-esperada <huella-de-las-partidas>` comprueba
@@ -46,8 +59,8 @@ que la regeneración produce las mismas partidas y muestra las huellas obtenidas
 aunque no coincidan.
 
 Procedencia: datos propios generados en `CartPole-v1` de Gymnasium (licencia
-MIT). Los datos todavía no están congelados; su ubicación y huellas se
-documentarán cuando el equipo acuerde congelarlos.
+MIT). `configs/entornos/cartpole.yaml` fija las carpetas de congelación y la
+huella de las partidas cuando se hayan generado y verificado.
 
 ## Recorrido experimental
 
@@ -63,6 +76,14 @@ python scripts/entrenar_gail.py --entorno cartpole --datos data/demostraciones/c
 python scripts/evaluar.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> --bc checkpoints/bc/cartpole/<fecha> --gail checkpoints/gail/cartpole/<fecha> --grupo <grupo>
 ```
 
+El punto de entrada completo es `python run.py --entorno cartpole`; requiere
+las carpetas congeladas anteriores. `python run.py --smoke` ejecuta el flujo
+real en miniatura con un experto y datos temporales, sin escribir checkpoints
+ni datos en el repositorio. El smoke terminó en 10 s dentro del checker local
+de Python 3.13 en Windows, usando CPU; el modelo de CPU no estuvo disponible
+para identificarlo en esta sesión. Los scripts individuales siguen disponibles
+para ejecutar etapas por separado.
+
 Los barridos aceptan `--cantidades` y `--repeticiones` para repartirlos entre
 sesiones. `experimento.procesos` limita cuántos entrenamientos se ejecutan a la
 vez. El seguimiento guarda runs, configuración, procedencia, resúmenes y
@@ -77,6 +98,10 @@ El proyecto se ha elegido privado y usará la entidad compartida
 ```bash
 wandb login --relogin --host https://api.wandb.ai
 ```
+
+La clave tiene que ser de una cuenta con acceso a la organización
+`a-corral-universidad-de-deusto`; con una clave de otra organización, W&B
+responde con un error 403 al abrir el run.
 
 La credencial se guarda fuera del repositorio. Para trabajar sin conexión,
 cambia `wandb.modo` a `offline` en la configuración y sincroniza luego con
@@ -94,7 +119,8 @@ usan `disabled`.
   CPU; la segunda medición fue en el PC de 6 núcleos físicos y 7,9 GB de RAM
   disponible en WSL2.
 - `experimento.procesos` está en 5 para ese PC de 6 núcleos físicos.
-- El tiempo del barrido completo sigue pendiente de medir.
+- El tiempo del barrido completo sigue pendiente de medir con las carpetas
+  congeladas y una sesión de W&B Cloud disponible.
 
 ## Reproducibilidad (presupuesto)
 

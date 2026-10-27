@@ -4,6 +4,10 @@ experimento:
   # Elección propia: el código original usa 7 (im_classic_pipeline.yaml, runs); 5 para
   # repartir el barrido en 5 procesos sin que compartan núcleo (presupuesto, regla 5/20).
   repeticiones: 5
+datos:
+  demostraciones: data/demostraciones/cartpole/congelado  # Destino acordado; congelación pendiente.
+  experto: checkpoints/expertos/cartpole/congelado
+  huella_partidas: pendiente
 demostraciones:
   partidas_train: 10  # Igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia; el paper separa 70/30 los pares.

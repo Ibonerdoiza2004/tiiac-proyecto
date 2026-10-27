@@ -37,31 +37,17 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
-from src.training.barrido import MetodoBarrido, main_barrido  # noqa: E402
-from src.training.gail import comprobar_config_barrido, entrenar_y_guardar_gail  # noqa: E402
-
-
-def _describir(resumen: dict[str, Any]) -> str:
-    """Último retorno de validación, pasos y tiempo medido de un entrenamiento."""
-    ultima = resumen["validaciones"][-1]
-    return (f"retorno de validación {ultima['retorno_medio']:.1f} en la iteración "
-            f"{ultima['iteracion']}; {resumen['pasos']} pasos en {resumen['segundos']:.0f} s")
-
-
-GAIL = MetodoBarrido(nombre="gail", comprobar_config=comprobar_config_barrido,
-                     tarea=entrenar_y_guardar_gail,
-                     destino=lambda salida, c, r: salida / f"cantidad_{c}" / f"repeticion_{r}",
-                     describir=_describir)
+from src.training.barrido import main_barrido  # noqa: E402
+from src.training.gail import METODO_GAIL  # noqa: E402
 
 
 def main() -> int:
     """Entrena y guarda cada GAIL elegido; devuelve el código de salida (main_barrido)."""
-    return main_barrido(GAIL, __doc__)
+    return main_barrido(METODO_GAIL, __doc__)
 
 
 if __name__ == "__main__":

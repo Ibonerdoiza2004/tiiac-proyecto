@@ -27,20 +27,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
-from src.data.demostraciones import generar_dataset  # noqa: E402
-from src.training.trpo import cargar_politica_experto  # noqa: E402
-from src.utils.archivos import comprobar_directorio_libre  # noqa: E402
+from src.training.flujo import generar_y_registrar_datos  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
-from src.utils.procedencia import avisar_estado_git  # noqa: E402
-from src.utils.tracking import (abrir_run, comprobar_wandb, crear_grupo, registrar_resumen,  # noqa: E402
-                                nombre_run, subir_artefacto, terminar_run, usar_artefacto)
+from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
 
 
 def main() -> int:
@@ -49,6 +44,12 @@ def main() -> int:
     Códigos: 0 si todo va bien; 1 si la huella de las partidas no coincide con
     --huella-esperada (los archivos se conservan para compararlos); 2 si la configuración, el
     experto o la carpeta de salida no son válidos, sin grabar nada.
+
+    Returns:
+        Código de salida 0, 1 o 2 según el resultado de la etapa.
+
+    Raises:
+        Ninguna: los errores esperados se presentan al usuario como códigos de salida.
     """
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -70,21 +71,11 @@ def main() -> int:
     try:
         ajustes = {"wandb": {"modo": "disabled"}} if args.sin_wandb else None
         cfg = resolver_configuracion(args.config, args.entorno, ajustes)
-    except (OSError, ValueError) as error:
+    except ValueError as error:
         print(f"error de configuración: {error}", file=sys.stderr)
         return 2
     salida = args.salida or (Path("data") / "demostraciones" / args.entorno
                              / datetime.now().strftime("%Y%m%d-%H%M%S"))
-    try:
-        comprobar_directorio_libre(salida)
-    except FileExistsError as error:
-        print(f"error: {error}; elige otra --salida", file=sys.stderr)
-        return 2
-    try:
-        politica, metadatos = cargar_politica_experto(args.experto, cfg)
-    except (OSError, ValueError) as error:
-        print(f"error con el experto: {error}", file=sys.stderr)
-        return 2
     try:
         comprobar_wandb(cfg, exigir_sesion=True)
     except RuntimeError as error:
@@ -93,47 +84,25 @@ def main() -> int:
 
     grupo = args.grupo or crear_grupo()
     print(f"grupo W&B: {grupo}")
-    run = abrir_run(cfg, grupo=grupo, job_type="datos", nombre=nombre_run(cfg, "datos"),
-                    etiquetas=[f"entorno:{cfg['entorno']['id']}", "metodo:datos"])
     try:
-        if cfg.get("wandb", {}).get("modo") == "online":
-            huella_modelo = metadatos["experto"]["huella_modelo"]
-            usar_artefacto(run,
-                           f"experto-{cfg['entorno']['id']}-{huella_modelo[:12]}:latest",
-                           "experto")
-        inicio = time.perf_counter()
-        resultado = generar_dataset(cfg, politica, salida, metadatos)
-        segundos = time.perf_counter() - inicio
-        if (args.huella_esperada is not None
-                and args.huella_esperada != resultado["huella_partidas"]):
-            terminar_run(run, ValueError("la huella de las partidas no coincide"))
-            print(f"huella de demostraciones.npz: {resultado['huella_dataset']}")
-            print(f"huella de splits.json: {resultado['huella_splits']}")
-            print(f"huella de las partidas: {resultado['huella_partidas']}")
-            print(f"error: la huella de las partidas no coincide con la esperada "
-                  f"({args.huella_esperada}); son distintas de las congeladas", file=sys.stderr)
-            return 1
-        registrar_resumen(run, {"pasos": resultado["pasos"],
-                                "semillas": resultado["semillas"],
-                                "segundos": segundos,
-                                "partidas": len(resultado["retornos"]),
-                                "retorno_medio": sum(resultado["retornos"])
-                                / len(resultado["retornos"]),
-                                "huella_dataset": resultado["huella_dataset"],
-                                "huella_splits": resultado["huella_splits"],
-                                "huella_partidas": resultado["huella_partidas"]})
-        subir_artefacto(run, f"demostraciones-{resultado['huella_dataset'][:12]}",
-                        "demostraciones",
-                        [resultado["demostraciones"], resultado["splits"]],
-                        {k: resultado[k] for k in
-                         ("huella_dataset", "huella_splits", "huella_partidas")})
-    except BaseException as error:
-        terminar_run(run, error)
-        if isinstance(error, ValueError):
-            print(f"error de configuración: {error}", file=sys.stderr)
-            return 2
-        raise
-    terminar_run(run)
+        resultado = generar_y_registrar_datos(cfg, args.experto, salida, grupo,
+                                              args.huella_esperada)
+    except FileExistsError as error:
+        print(f"error: {error}; elige otra --salida", file=sys.stderr)
+        return 2
+    except FileNotFoundError as error:
+        print(f"error con el experto: {error}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print(f"error de configuración: {error}", file=sys.stderr)
+        return 2
+    if not resultado["coincide"]:
+        print(f"huella de demostraciones.npz: {resultado['huella_dataset']}")
+        print(f"huella de splits.json: {resultado['huella_splits']}")
+        print(f"huella de las partidas: {resultado['huella_partidas']}")
+        print(f"error: la huella de las partidas no coincide con la esperada "
+              f"({args.huella_esperada}); son distintas de las congeladas", file=sys.stderr)
+        return 1
     retornos = resultado["retornos"]
     print(f"{len(retornos)} partidas y {resultado['pasos']} pasos guardados en {salida}")
     print(f"retorno medio: {sum(retornos) / len(retornos):.1f} "
@@ -142,7 +111,6 @@ def main() -> int:
     print(f"huella de {resultado['demostraciones'].name}: {resultado['huella_dataset']}")
     print(f"huella de {resultado['splits'].name}: {resultado['huella_splits']}")
     print(f"huella de las partidas: {resultado['huella_partidas']}")
-    avisar_estado_git(metadatos["procedencia"]["codigo"])
     if args.huella_esperada is not None:
         print("ok: las partidas coinciden con las congeladas")
     return 0
