@@ -305,12 +305,14 @@ def test_evaluar_usa_artefactos_de_modelo_por_huella_sin_depender_del_grupo(
 
     wandb = SimpleNamespace(errors=SimpleNamespace(CommError=CommError), Table=Table)
     run = Run()
+    nombres = []
     cfg = _cfg()
     cfg["wandb"]["modo"] = "online"
 
     def preparar(script):
         monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: wandb)
-        monkeypatch.setattr(script, "abrir_run", lambda *a, **k: run)
+        monkeypatch.setattr(script, "abrir_run",
+                            lambda *a, **k: nombres.append(k["nombre"]) or run)
         monkeypatch.setattr(script, "registrar_resumen", lambda *a: None)
         monkeypatch.setattr(script, "subir_artefacto", lambda *a: None)
         monkeypatch.setattr(script, "terminar_run", lambda *a: None)
@@ -330,6 +332,7 @@ def test_evaluar_usa_artefactos_de_modelo_por_huella_sin_depender_del_grupo(
         (f"bc-CartPole-v1-c1-r0-{bc[:12]}:latest", "bc"),
         (f"gail-CartPole-v1-c1-r0-{gail[:12]}:latest", "gail"),
     ]
+    assert nombres == ["tiiac-comparacion-cartpole"]
 
 
 def test_evaluar_solo_lo_que_se_pide(flujo, tmp_path, monkeypatch):

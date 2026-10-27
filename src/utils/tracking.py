@@ -83,13 +83,22 @@ def abrir_run(cfg: dict, grupo: str | None = None, job_type: str | None = None,
     )
 
 
+def nombre_run(cfg: dict, metodo: str, cantidad: int | None = None,
+               repeticion: int | None = None) -> str:
+    """Nombre legible: <experimento>-<metodo>-<entorno>[-c<cantidad>-r<repeticion>]."""
+    entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
+    nombre = f"{cfg['experimento']['nombre']}-{metodo}-{entorno}"
+    if cantidad is not None:
+        nombre += f"-c{cantidad}-r{repeticion}"
+    return nombre
+
+
 def abrir_run_barrido(cfg: dict, metodo: str, cantidad: int, repeticion: int,
                       grupo: str | None = None) -> Any | None:
     """Abre un run de BC o GAIL con grupo, job_type y etiquetas identificativas."""
     entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
     cfg_run = copy.deepcopy(cfg)
-    cfg_run["experimento"]["nombre"] = (f"{cfg['experimento']['nombre']}-{metodo}-{entorno}-"
-                                          f"c{cantidad}-r{repeticion}")
+    cfg_run["experimento"]["nombre"] = nombre_run(cfg, metodo, cantidad, repeticion)
     return abrir_run(cfg_run, grupo=grupo, job_type=metodo,
                      etiquetas=[f"entorno:{entorno}", f"metodo:{metodo}",
                                 f"cantidad:{cantidad}", f"repeticion:{repeticion}"])

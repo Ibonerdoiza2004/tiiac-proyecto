@@ -30,7 +30,8 @@ from src.utils.archivos import comprobar_directorio_libre  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 from src.utils.procedencia import avisar_estado_git, estado_git  # noqa: E402
 from src.utils.tracking import (abrir_run, comprobar_wandb, crear_grupo,  # noqa: E402
-                                registrar_resumen, subir_artefacto, terminar_run)
+                                nombre_run, registrar_resumen, subir_artefacto,
+                                terminar_run)
 
 
 def main() -> int:
@@ -70,7 +71,7 @@ def main() -> int:
 
     grupo = args.grupo or crear_grupo()
     print(f"grupo W&B: {grupo}")
-    run = abrir_run(cfg, grupo=grupo, job_type="experto",
+    run = abrir_run(cfg, grupo=grupo, job_type="experto", nombre=nombre_run(cfg, "experto"),
                     etiquetas=[f"entorno:{cfg['entorno']['id']}", "metodo:experto"])
     try:
         modelo, resumen = entrenar_experto(cfg, run)

@@ -52,7 +52,7 @@ from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa:
 from src.utils.procedencia import (a_json, avisar_estado_git, estado_git,  # noqa: E402
                                    ruta_registrada, versiones_y_hardware)
 from src.utils.tracking import (abrir_run, comprobar_wandb, crear_grupo, registrar_resumen,  # noqa: E402
-                                subir_artefacto, terminar_run, usar_artefacto)
+                                nombre_run, subir_artefacto, terminar_run, usar_artefacto)
 
 
 def _cargar_agentes(cfg: dict, args: argparse.Namespace) -> tuple[list[dict[str, Any]],
@@ -167,6 +167,7 @@ def main() -> int:
     grupo = args.grupo or crear_grupo()
     print(f"grupo W&B: {grupo}")
     run = abrir_run(cfg, grupo=grupo, job_type="comparacion",
+                    nombre=nombre_run(cfg, "comparacion"),
                     etiquetas=[f"entorno:{cfg['entorno']['id']}", "metodo:comparacion"])
     try:
         for entrada in agentes:

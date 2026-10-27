@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from src.utils.tracking import (abrir_run, abrir_run_barrido, comprobar_wandb,
-                                crear_grupo, registrar, registrar_resumen,
+                                crear_grupo, nombre_run, registrar, registrar_resumen,
                                 subir_artefacto, terminar_run, usar_artefacto)
 
 
@@ -63,6 +63,17 @@ def test_abrir_run_barrido_identifica_grupo_cantidad_repeticion(monkeypatch):
                               "etiquetas": ["entorno:CartPole-v1", "metodo:gail",
                                             "cantidad:4", "repeticion:2"]}
     assert cfg["experimento"]["nombre"] == "exp"
+
+
+def test_nombre_run_identifica_metodo_entorno_cantidad_y_repeticion():
+    """El nombre distingue método, entorno y, si procede, cada entrenamiento."""
+    cfg = {"experimento": {"nombre": "tiiac"}, "entorno": {"id": "CartPole-v1"},
+           "origen": {"entorno": "cartpole"}}
+    assert nombre_run(cfg, "experto") == "tiiac-experto-cartpole"
+    assert nombre_run(cfg, "bc", 4, 2) == "tiiac-bc-cartpole-c4-r2"
+    sin_perfil = {"experimento": {"nombre": "tiiac"},
+                  "entorno": {"id": "CartPole-v1"}}
+    assert nombre_run(sin_perfil, "datos") == "tiiac-datos-CartPole-v1"
 
 
 def test_comprobar_sesion_online_falla_si_login_devuelve_false(monkeypatch):

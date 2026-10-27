@@ -2,7 +2,7 @@
 # es lo que permite reproducir un experimento sabiendo solo que config se uso.
 
 experimento:
-  nombre: baseline
+  nombre: tiiac  # Prefijo de los nombres de los runs de W&B.
   seed: 42
   # Repeticiones de BC y GAIL por cada subconjunto, con semillas de modelo
   # distintas (codigo original: runs 7 en los entornos clasicos, 1 en MuJoCo).

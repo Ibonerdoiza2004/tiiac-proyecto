@@ -751,7 +751,9 @@ def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypa
         (destino / "modelo.zip").write_bytes(b"modelo")
         (destino / "experto.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(script, "abrir_run", lambda cfg, **_: _Run())
+    nombres = []
+    monkeypatch.setattr(script, "abrir_run",
+                        lambda cfg, **k: nombres.append(k["nombre"]) or _Run())
     monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: None)
     monkeypatch.setattr(script, "entrenar_experto", entrenar)
     monkeypatch.setattr(script, "guardar_experto", guardar)
@@ -762,6 +764,7 @@ def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypa
         with pytest.raises((RuntimeError, OSError)):
             script.main()
     assert cierres == [codigo]
+    assert nombres == ["tiiac-experto-cartpole"]
 
 
 def test_el_script_informa_de_una_configuracion_no_valida(monkeypatch, tmp_path, capsys):
@@ -1100,8 +1103,10 @@ def test_get_data_busca_el_artefacto_del_experto_por_huella(
             self.usados.append((nombre, type))
 
     run = Run()
+    nombres = []
     monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: object())
-    monkeypatch.setattr(script, "abrir_run", lambda *a, **k: run)
+    monkeypatch.setattr(script, "abrir_run",
+                        lambda *a, **k: nombres.append(k["nombre"]) or run)
     monkeypatch.setattr(script, "registrar_resumen", lambda *a: None)
     monkeypatch.setattr(script, "subir_artefacto", lambda *a: None)
     monkeypatch.setattr(script, "terminar_run", lambda *a: None)
@@ -1119,6 +1124,7 @@ def test_get_data_busca_el_artefacto_del_experto_por_huella(
                                      "--salida", str(salida), "--grupo", "grupo-distinto"])
     assert script.main() == 0
     assert run.usados == [(nombre_esperado, "experto")]
+    assert nombres == ["tiiac-datos-cartpole"]
 
 
 @pytest.mark.parametrize("caso,mensaje", [
