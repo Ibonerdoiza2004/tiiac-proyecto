@@ -41,6 +41,7 @@ from src.utils.archivos import comprobar_directorio_libre
 from src.utils.configuracion import TipoEntorno, resolver_configuracion
 from src.utils.procedencia import avisar_estado_git, estado_git, ruta_registrada
 from src.utils.seed import validar_semilla
+from src.utils.tracking import comprobar_wandb, crear_grupo
 from src.utils.validacion import es_entero_positivo
 
 ARCHIVO_DEMOSTRACIONES = "demostraciones.npz"
@@ -341,6 +342,7 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
                     help=f"carpeta nueva para los modelos (por defecto "
                          f"checkpoints/{metodo.nombre}/<entorno>/<fecha>)")
     ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
+    ap.add_argument("--grupo", default=None, help="grupo W&B compartido con otros scripts")
     args = ap.parse_args(argv)
 
     ajustes = {"wandb": {"modo": "disabled"}} if args.sin_wandb else None
@@ -370,6 +372,13 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    try:
+        comprobar_wandb(cfg, exigir_sesion=True)
+    except RuntimeError as error:
+        print(f"error de W&B: {error}", file=sys.stderr)
+        return 2
+    grupo = args.grupo or crear_grupo()
+    print(f"grupo W&B: {grupo}")
 
     def informar(resultado: ResultadoTarea) -> None:
         """Imprime el resultado de un entrenamiento."""
@@ -385,7 +394,8 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
     try:
         fallos = ejecutar_barrido(
             tareas, min(int(cfg["experimento"]["procesos"]), len(tareas)), metodo.tarea,
-            lambda c, r: (cfg, trayectorias, splits, c, r, metodo.destino(salida, c, r), datos),
+            lambda c, r: (cfg, trayectorias, splits, c, r, metodo.destino(salida, c, r),
+                          datos, grupo),
             informar)
     except KeyboardInterrupt:
         # Los guardados se escriben enteros o nada (src/utils/archivos.py); un proceso

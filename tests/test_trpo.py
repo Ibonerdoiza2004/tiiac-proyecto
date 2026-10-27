@@ -12,6 +12,7 @@ import json
 import math
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -689,6 +690,38 @@ def test_el_script_entrena_y_guarda_con_la_configuracion_resuelta(monkeypatch, t
     assert "objetivo 500 alcanzado" in capsys.readouterr().out
 
 
+def test_el_artefacto_del_experto_se_identifica_por_la_huella_del_modelo(
+    monkeypatch, tmp_path
+):
+    """El nombre del artefacto es estable entre grupos y depende del modelo guardado."""
+    script = _script()
+    resumen = {"entorno": "CartPole-v1", "mejor_retorno": 500.0,
+               "mejor_iteracion": 3, "objetivo": 500, "objetivo_alcanzado": True,
+               "pasos": 15000, "segundos": 12.0}
+    subidas = []
+    run = object()
+
+    def guardar(salida, *_):
+        salida.mkdir(parents=True)
+        (salida / "modelo.zip").write_bytes(b"modelo")
+        (salida / "experto.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: object())
+    monkeypatch.setattr(script, "abrir_run", lambda *a, **k: run)
+    monkeypatch.setattr(script, "entrenar_experto", lambda *a: (object(), resumen))
+    monkeypatch.setattr(script, "guardar_experto", guardar)
+    monkeypatch.setattr(script, "registrar_resumen", lambda *a: None)
+    monkeypatch.setattr(script, "subir_artefacto", lambda *a: subidas.append(a))
+    monkeypatch.setattr(script, "terminar_run", lambda *a: None)
+    monkeypatch.setattr(script, "avisar_estado_git", lambda *a: None)
+    destino = tmp_path / "experto"
+    monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--salida", str(destino)])
+    assert script.main() == 0
+    huella = huella_archivo(destino / "modelo.zip")
+    assert subidas[0][1] == f"experto-CartPole-v1-{huella[:12]}"
+    assert subidas[0][4]["huella_modelo"] == huella
+
+
 @pytest.mark.parametrize("fallo,codigo", [(None, 0), ("entrenar", 1), ("guardar", 1)])
 def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypatch, tmp_path):
     """Regresión: finish() sin código marcaba como correcto en W&B un experto fallido."""
@@ -713,8 +746,15 @@ def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypa
     def guardar(*a):
         if fallo == "guardar":
             raise OSError("disco lleno")
+        destino = a[0]
+        destino.mkdir(parents=True)
+        (destino / "modelo.zip").write_bytes(b"modelo")
+        (destino / "experto.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(script, "abrir_run", lambda cfg: _Run())
+    nombres = []
+    monkeypatch.setattr(script, "abrir_run",
+                        lambda cfg, **k: nombres.append(k["nombre"]) or _Run())
+    monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: None)
     monkeypatch.setattr(script, "entrenar_experto", entrenar)
     monkeypatch.setattr(script, "guardar_experto", guardar)
     monkeypatch.setattr("sys.argv", ["entrenar_experto.py", "--salida", str(tmp_path / "e")])
@@ -724,6 +764,7 @@ def test_el_script_cierra_el_run_con_su_codigo_de_salida(fallo, codigo, monkeypa
         with pytest.raises((RuntimeError, OSError)):
             script.main()
     assert cierres == [codigo]
+    assert nombres == ["tiiac-experto-cartpole"]
 
 
 def test_el_script_informa_de_una_configuracion_no_valida(monkeypatch, tmp_path, capsys):
@@ -1010,7 +1051,10 @@ def _script_datos():
 def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tmp_path,
                                                             monkeypatch, capsys):
     script = _script_datos()
-    argumentos = ["get_data.py", "--experto", str(experto_guardado)]
+    resumenes = []
+    monkeypatch.setattr(script, "registrar_resumen",
+                        lambda run, resumen: resumenes.append(resumen))
+    argumentos = ["get_data.py", "--sin-wandb", "--experto", str(experto_guardado)]
     monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "a")])
     assert script.main() == 0
     salida = capsys.readouterr().out
@@ -1019,6 +1063,9 @@ def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tm
     npz = tmp_path / "a" / "demostraciones.npz"
     assert npz.is_file() and (tmp_path / "a" / "splits.json").is_file()
     assert f"huella de demostraciones.npz: {huella_archivo(npz)}" in salida
+    assert resumenes[0]["semillas"].keys() == {"base", "partidas", "splits"}
+    assert all(isinstance(semilla, int) for semilla in resumenes[0]["semillas"].values())
+    assert resumenes[0]["segundos"] >= 0
 
     monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "b"),
                                      "--huella-esperada", huella])
@@ -1028,8 +1075,56 @@ def test_get_data_graba_con_el_experto_y_verifica_la_huella(experto_guardado, tm
     monkeypatch.setattr("sys.argv", [*argumentos, "--salida", str(tmp_path / "c"),
                                      "--huella-esperada", "0" * 64])
     assert script.main() == 1
-    assert "no coincide" in capsys.readouterr().err
+    salida = capsys.readouterr()
+    assert "no coincide" in salida.err
+    assert "huella de las partidas:" in salida.out
+    assert "huella de demostraciones.npz:" in salida.out
+    assert "huella de splits.json:" in salida.out
     assert (tmp_path / "c" / "demostraciones.npz").is_file()  # se conserva para compararlo
+
+
+def test_get_data_busca_el_artefacto_del_experto_por_huella(
+    experto_guardado, tmp_path, monkeypatch
+):
+    """El run de datos encuentra el experto aunque se use otro grupo W&B."""
+    script = _script_datos()
+    _, metadatos = cargar_politica_experto(
+        experto_guardado, resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
+    )
+    nombre_esperado = (f"experto-CartPole-v1-{metadatos['experto']['huella_modelo'][:12]}:latest")
+    class CommError(Exception):
+        pass
+
+    class Run:
+        def __init__(self):
+            self.usados = []
+
+        def use_artifact(self, nombre, type):
+            self.usados.append((nombre, type))
+
+    run = Run()
+    nombres = []
+    monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: object())
+    monkeypatch.setattr(script, "abrir_run",
+                        lambda *a, **k: nombres.append(k["nombre"]) or run)
+    monkeypatch.setattr(script, "registrar_resumen", lambda *a: None)
+    monkeypatch.setattr(script, "subir_artefacto", lambda *a: None)
+    monkeypatch.setattr(script, "terminar_run", lambda *a: None)
+    monkeypatch.setattr(script, "avisar_estado_git", lambda *a: None)
+    monkeypatch.setattr("src.utils.tracking.comprobar_wandb",
+                        lambda cfg: SimpleNamespace(errors=SimpleNamespace(CommError=CommError)))
+    monkeypatch.setattr(script, "generar_dataset", lambda cfg, politica, salida, meta: {
+        "pasos": 1, "semillas": {"base": 1, "partidas": 2, "splits": 3},
+        "retornos": [1.0], "huella_dataset": "a" * 64, "huella_splits": "b" * 64,
+        "huella_partidas": "c" * 64, "demostraciones": Path("demostraciones.npz"),
+        "splits": Path("splits.json"), "train": [0], "validacion": [],
+    })
+    salida = tmp_path / "datos"
+    monkeypatch.setattr("sys.argv", ["get_data.py", "--experto", str(experto_guardado),
+                                     "--salida", str(salida), "--grupo", "grupo-distinto"])
+    assert script.main() == 0
+    assert run.usados == [(nombre_esperado, "experto")]
+    assert nombres == ["tiiac-datos-cartpole"]
 
 
 @pytest.mark.parametrize("caso,mensaje", [
@@ -1041,12 +1136,13 @@ def test_get_data_no_graba_si_algo_no_es_valido(caso, mensaje, experto_guardado,
                                                  monkeypatch, capsys):
     script = _script_datos()
     salida = tmp_path / "datos"
-    argumentos = ["get_data.py", "--experto", str(experto_guardado), "--salida", str(salida)]
+    argumentos = ["get_data.py", "--sin-wandb", "--experto", str(experto_guardado),
+                  "--salida", str(salida)]
     if caso == "salida ocupada":
         salida.mkdir()
         (salida / "algo.txt").write_text("x", encoding="utf-8")
     elif caso == "sin experto":
-        argumentos[2] = str(tmp_path / "no-existe")
+        argumentos[3] = str(tmp_path / "no-existe")
     else:
         argumentos += ["--config", str(tmp_path / "no-existe.yaml")]
     grabado = []
@@ -1068,7 +1164,7 @@ def test_get_data_avisa_del_estado_de_git(codigo, aviso, monkeypatch, tmp_path, 
                  "procedencia": {"codigo": codigo}}
     monkeypatch.setattr(script, "cargar_politica_experto",
                         lambda directorio, cfg: (lambda o: int(o[2] > 0), metadatos))
-    monkeypatch.setattr("sys.argv", ["get_data.py", "--experto", "x",
+    monkeypatch.setattr("sys.argv", ["get_data.py", "--sin-wandb", "--experto", "x",
                                      "--salida", str(tmp_path / "datos")])
     assert script.main() == 0
     error = capsys.readouterr().err

@@ -2018,7 +2018,11 @@ def test_el_barrido_por_defecto_es_el_de_la_configuracion(datos_grabados, tmp_pa
                                                str(tmp_path / "gail")], cfg)
     monkeypatch.setattr("src.training.gail.entrenar_gail", lambda cfg, t, s, c, r, run:
                         llamadas.append((c, r)) or _resumen_falso())
-    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+    def guardar(destino, *_):
+        destino.mkdir(parents=True)
+        (destino / "modelo.zip").write_bytes(b"modelo")
+
+    monkeypatch.setattr("src.training.gail.guardar_gail", guardar)
     assert script.main() == 0
     assert llamadas == [(1, 0), (1, 1)]
 
@@ -2046,14 +2050,19 @@ def test_el_script_abre_un_run_por_entrenamiento(datos_grabados, tmp_path, monke
         def finish(self, exit_code=None) -> None:
             self.terminado = exit_code
 
-    def abrir(cfg_run):
+    def abrir(cfg_run, **_):
         abiertos.append((cfg_run["experimento"]["nombre"], _Run()))
         return abiertos[-1][1]
 
     monkeypatch.setattr("src.utils.tracking.abrir_run", abrir)
     monkeypatch.setattr("src.training.gail.entrenar_gail", lambda cfg, t, s, c, r, run:
                         recibidos.append((cfg, run)) or _resumen_falso())
-    monkeypatch.setattr("src.training.gail.guardar_gail", lambda *a: None)
+
+    def guardar(destino, *_):
+        destino.mkdir(parents=True)
+        (destino / "modelo.zip").write_bytes(b"modelo")
+
+    monkeypatch.setattr("src.training.gail.guardar_gail", guardar)
     assert script.main() == 0
     assert [nombre for nombre, _ in abiertos] == [f"{cfg['experimento']['nombre']}-gail-"
                                                  f"cartpole-c4-r{r}" for r in (0, 1)]
@@ -2091,29 +2100,38 @@ def test_terminar_run_da_el_codigo_de_salida_de_cada_caso():
     ("entrenar", KeyboardInterrupt, 130),
 ])
 def test_un_entrenamiento_fallido_se_cierra_como_fallido_en_wandb(fallo, error, codigo,
-                                                                  monkeypatch):
+                                                                  monkeypatch, tmp_path):
     """Regresión: finish() sin código marcaba como correctos los entrenamientos fallidos."""
+    from src.data.splits import huella_archivo
     from src.training.gail import entrenar_y_guardar_gail
     run = _RunCerrable()
-    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda cfg: run)
+    subidas = []
+    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda cfg, **_: run)
+    monkeypatch.setattr("src.training.gail.subir_artefacto", lambda *a: subidas.append(a))
 
     def entrenar(*_):
         if fallo == "entrenar":
             raise error("fallo de prueba")
         return _resumen_falso()
 
-    def guardar(*_):
+    def guardar(destino, *_):
         if fallo == "guardar":
             raise error("fallo de prueba")
+        destino.mkdir(parents=True)
+        (destino / "modelo.zip").write_bytes(b"modelo")
 
     monkeypatch.setattr("src.training.gail.entrenar_gail", entrenar)
     monkeypatch.setattr("src.training.gail.guardar_gail", guardar)
-    argumentos = (_cfg_script(), [], None, 4, 0, Path("destino"), {})
+    argumentos = (_cfg_script(), [], None, 4, 0, tmp_path / "destino", {})
     if error is None:
         entrenar_y_guardar_gail(*argumentos)
+        huella = huella_archivo(tmp_path / "destino" / "modelo.zip")
+        assert subidas[0][1] == f"gail-CartPole-v1-c4-r0-{huella[:12]}"
+        assert subidas[0][4]["huella_modelo"] == huella
     else:
         with pytest.raises(error):  # el error sigue propagándose
             entrenar_y_guardar_gail(*argumentos)
+        assert subidas == []
     assert run.cierres == [codigo]  # se cierra una sola vez
 
 

@@ -13,6 +13,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -190,7 +191,7 @@ def test_entrenar_y_guardar_bc_cierra_su_run_y_marca_los_fallos(flujo, tmp_path,
     trayectorias, splits, datos = cargar_datos(cfg, flujo / "datos")
     runs = []
     monkeypatch.setattr("src.utils.tracking.abrir_run",
-                        lambda c: runs.append(_RunFalso()) or runs[-1])
+                        lambda c, **_: runs.append(_RunFalso()) or runs[-1])
     destino = tmp_path / "bc.pt"
     entrenar_y_guardar_bc(cfg, trayectorias, splits, 1, 0, destino, datos)
     with pytest.raises(FileExistsError):  # el guardado falla: destino ya existe
@@ -202,11 +203,45 @@ def test_entrenar_y_guardar_bc_rechaza_datos_de_otro_npz(flujo, tmp_path, monkey
     cfg = _cfg()
     trayectorias, splits, datos = cargar_datos(cfg, flujo / "datos")
     abiertos = []
-    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda c: abiertos.append(1))
+    monkeypatch.setattr("src.utils.tracking.abrir_run",
+                        lambda c, **_: abiertos.append(1))
     with pytest.raises(ValueError, match="huella del NPZ"):
         entrenar_y_guardar_bc(cfg, trayectorias, splits, 1, 0, tmp_path / "bc.pt",
                               {**datos, "huella_dataset": "b" * 64})
     assert not abiertos and not (tmp_path / "bc.pt").exists()
+
+
+def test_entrenar_y_guardar_bc_sigue_si_falta_artefacto_y_nombra_por_huella(
+    flujo, tmp_path, monkeypatch, capsys
+):
+    """Un artefacto de linaje ausente avisa, pero el BC se guarda y publica por hash."""
+    from src.data.splits import huella_archivo
+
+    class CommError(Exception):
+        pass
+
+    class RunConArtefactoAusente(_RunFalso):
+        def use_artifact(self, nombre, type):
+            raise ValueError("artifact not found")
+
+    cfg = _cfg()
+    cfg["wandb"]["modo"] = "online"
+    trayectorias, splits, datos = cargar_datos(cfg, flujo / "datos")
+    run = RunConArtefactoAusente()
+    subidas = []
+    monkeypatch.setattr("src.training.bc.abrir_run_barrido", lambda *a: run)
+    monkeypatch.setattr("src.utils.tracking.comprobar_wandb",
+                        lambda cfg: SimpleNamespace(errors=SimpleNamespace(CommError=CommError)))
+    monkeypatch.setattr("src.training.bc.subir_artefacto",
+                        lambda *a, **k: subidas.append((a, k)))
+    destino = tmp_path / "bc.pt"
+    entrenar_y_guardar_bc(cfg, trayectorias, splits, 1, 0, destino, datos, "grupo")
+    huella = huella_archivo(destino)
+    assert destino.is_file()
+    assert run.codigos == [0]
+    assert "se sigue sin registrar el linaje" in capsys.readouterr().err
+    assert subidas[0][0][1] == f"bc-CartPole-v1-c1-r0-{huella[:12]}"
+    assert subidas[0][0][4]["huella_modelo"] == huella
 
 
 # --- evaluación final -------------------------------------------------------------
@@ -240,6 +275,64 @@ def test_evaluar_juega_todos_los_agentes_con_el_mismo_protocolo(flujo, tmp_path,
     assert filas[("experto", None, None)]["retornos"] == evaluar_final(
         experto, cfg, meta["resumen"]["normalizacion"])["retornos"]
     assert "10 agentes evaluados con 2 partidas" in capsys.readouterr().out
+
+
+def test_evaluar_usa_artefactos_de_modelo_por_huella_sin_depender_del_grupo(
+    flujo, tmp_path, monkeypatch
+):
+    """La comparación resuelve experto, BC y GAIL por hashes, no por grupo de ejecución."""
+    from src.data.splits import huella_archivo
+
+    class CommError(Exception):
+        pass
+
+    class Table:
+        def __init__(self, columns):
+            self.columns = columns
+
+        def add_data(self, *datos):
+            pass
+
+    class Run:
+        def __init__(self):
+            self.usados = []
+
+        def use_artifact(self, nombre, type):
+            self.usados.append((nombre, type))
+
+        def log(self, *a, **k):
+            pass
+
+    wandb = SimpleNamespace(errors=SimpleNamespace(CommError=CommError), Table=Table)
+    run = Run()
+    nombres = []
+    cfg = _cfg()
+    cfg["wandb"]["modo"] = "online"
+
+    def preparar(script):
+        monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: wandb)
+        monkeypatch.setattr(script, "abrir_run",
+                            lambda *a, **k: nombres.append(k["nombre"]) or run)
+        monkeypatch.setattr(script, "registrar_resumen", lambda *a: None)
+        monkeypatch.setattr(script, "subir_artefacto", lambda *a: None)
+        monkeypatch.setattr(script, "terminar_run", lambda *a: None)
+        monkeypatch.setattr(script, "avisar_estado_git", lambda *a: None)
+
+    monkeypatch.setattr("src.utils.tracking.comprobar_wandb", lambda cfg: wandb)
+    salida = tmp_path / "evaluacion.json"
+    assert _ejecutar(monkeypatch, "evaluar", _argumentos(
+        flujo, salida, "--cantidades", "1", "--repeticiones", "0", "--grupo", "grupo-nuevo"
+    ), cfg, preparar) == 0
+
+    experto = huella_archivo(flujo / "experto" / "modelo.zip")
+    bc = huella_archivo(flujo / "bc" / "cantidad_1" / "repeticion_0.pt")
+    gail = huella_archivo(flujo / "gail" / "cantidad_1" / "repeticion_0" / "modelo.zip")
+    assert run.usados == [
+        (f"experto-CartPole-v1-{experto[:12]}:latest", "experto"),
+        (f"bc-CartPole-v1-c1-r0-{bc[:12]}:latest", "bc"),
+        (f"gail-CartPole-v1-c1-r0-{gail[:12]}:latest", "gail"),
+    ]
+    assert nombres == ["tiiac-comparacion-cartpole"]
 
 
 def test_evaluar_solo_lo_que_se_pide(flujo, tmp_path, monkeypatch):
