@@ -288,6 +288,18 @@ def test_evaluar_mas_a_menudo_no_cambia_el_entrenamiento():
     assert resultados[0]["retornos"] == resultados[1]["retornos"]
 
 
+def test_entrenar_experto_registra_cada_medida_en_su_seccion_de_wandb():
+    """Las medidas de TRPO se devolvían sin prefijo y caían en la sección genérica."""
+    registros = []
+    run = SimpleNamespace(log=lambda metricas, step=None: registros.append(dict(metricas)))
+    cfg = _cfg()
+    cfg["experto"].update(pasos_totales=64 * 2, evaluar_cada=2, retorno_objetivo=10_000)
+    entrenar_experto(cfg, run)
+    assert {clave.split("/")[0] for m in registros for clave in m} == {"trpo", "evaluacion"}
+    assert {"trpo/pasos", "trpo/partidas", "trpo/retorno_real_medio",
+            "trpo/longitud_media"} == set(registros[0])
+
+
 def test_evaluar_retorno_juega_episodios_completos_con_su_semilla():
     cfg = _cfg()
     modelo, venv = _agente(cfg)

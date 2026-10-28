@@ -48,14 +48,14 @@ from src.data.splits import SplitsDemostraciones, huella_archivo
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, comprobar_arquitectura, construir_discriminador
 from src.training.barrido import MetodoBarrido, comprobar_config_comun
-from src.training.trpo import (config_trpo, crear_trpo, estadisticas_normalizacion,
-                               evaluar_retorno, iteracion_trpo)
+from src.training.trpo import (SECCION_TRPO, config_trpo, crear_trpo,
+                               estadisticas_normalizacion, evaluar_retorno, iteracion_trpo)
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
-from src.utils.tracking import (RegistroProgreso, abrir_run_barrido, nombre_artefacto,
-                                registrar, registrar_resumen, subir_artefacto, terminar_run,
-                                usar_artefacto)
+from src.utils.tracking import (RegistroProgreso, abrir_run_barrido, con_seccion,
+                                nombre_artefacto, registrar, registrar_resumen,
+                                subir_artefacto, terminar_run, usar_artefacto)
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
@@ -781,7 +781,7 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         historial, validaciones = [], []
         for iteracion in range(1, gcfg["iteraciones"] + 1):
             medidas = iteracion_gail(agente, envoltorio, optimizador, pares, generador, cfg)
-            registrar(run, medidas, paso=agente.num_timesteps)
+            registrar(run, con_seccion(medidas, SECCION_TRPO), paso=agente.num_timesteps)
             historial.append({"iteracion": iteracion, **medidas})
             if iteracion % gcfg["evaluar_cada"] and iteracion < gcfg["iteraciones"]:
                 continue

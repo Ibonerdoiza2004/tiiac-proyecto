@@ -1535,9 +1535,14 @@ class _RunFalso:
 def test_entrenar_gail_registra_cada_iteracion_y_cada_validacion():
     run = _RunFalso()
     _, _, resumen = _entrenar(_cfg_gail(), run=run)
-    iteraciones = [(m, paso) for m, paso in run.registros if "pasos" in m]
+    iteraciones = [(m, paso) for m, paso in run.registros if "trpo/pasos" in m]
     validaciones = [(m, paso) for m, paso in run.registros if "validacion/retorno_medio" in m]
     assert len(run.registros) == len(iteraciones) + len(validaciones)
+    # Ninguna métrica cae en la sección genérica de W&B: las de TRPO van en trpo/.
+    assert {clave.split("/")[0] for m, _ in iteraciones for clave in m} == {
+        "trpo", "discriminador", "reajuste"}
+    assert {"trpo/retorno_real_medio", "trpo/longitud_media", "trpo/partidas",
+            "trpo/recompensa_gail_media"} <= set(iteraciones[0][0])
     assert [paso for _, paso in iteraciones] == [64, 128, 192]
     assert [paso for _, paso in validaciones] == [128, 192]
     for metricas, _ in validaciones:

@@ -37,10 +37,12 @@ from src.training.evaluacion import evaluar_politica, normalizar_observacion
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
-from src.utils.tracking import registrar
+from src.utils.tracking import con_seccion, registrar
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
+# Sección de W&B de las medidas de iteracion_trpo, que se devuelven sin prefijo.
+SECCION_TRPO = "trpo"
 _ARCHIVO_METADATOS = "experto.json"
 
 
@@ -331,7 +333,7 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         while modelo.num_timesteps < ecfg["pasos_totales"]:
             iteracion += 1
             medidas = iteracion_trpo(modelo)
-            registrar(run, medidas, paso=modelo.num_timesteps)
+            registrar(run, con_seccion(medidas, SECCION_TRPO), paso=modelo.num_timesteps)
             if (iteracion % ecfg["evaluar_cada"]
                     and modelo.num_timesteps < ecfg["pasos_totales"]):
                 continue

@@ -12,7 +12,7 @@ import torch
 
 from src.utils.configuracion import resolver_configuracion
 from src.utils.tracking import (CARACTERES_HUELLA_ARTEFACTO, abrir_run, abrir_run_barrido,
-                                comprobar_wandb, crear_grupo, descargar_artefacto,
+                                comprobar_wandb, con_seccion, crear_grupo, descargar_artefacto,
                                 nombre_artefacto, nombre_run, registrar, registrar_resumen,
                                 subir_artefacto, terminar_run, usar_artefacto)
 
@@ -64,11 +64,30 @@ def test_abrir_run_barrido_identifica_grupo_cantidad_repeticion(monkeypatch):
     monkeypatch.setattr("src.utils.tracking.abrir_run",
                         lambda *a, **kw: capturas.append((a, kw)) or "run")
     cfg = _cfg("offline")
-    assert abrir_run_barrido(cfg, "gail", 4, 2, "grupo-a") == "run"
+    assert abrir_run_barrido(cfg, "gail", np.int64(4), np.int64(2), "grupo-a") == "run"
     assert capturas[0][1] == {"grupo": "grupo-a", "job_type": "gail",
                               "etiquetas": ["entorno:CartPole-v1", "metodo:gail",
                                             "cantidad:4", "repeticion:2"]}
-    assert cfg["experimento"]["nombre"] == "exp"
+    # En la config para que W&B pueda agrupar por ellos; enteros de Python para el JSON.
+    barrido = capturas[0][0][0]["barrido"]
+    assert barrido == {"metodo": "gail", "cantidad": 4, "repeticion": 2}
+    assert all(type(barrido[k]) is int for k in ("cantidad", "repeticion"))
+    assert cfg["experimento"]["nombre"] == "exp" and "barrido" not in cfg
+
+
+@pytest.mark.parametrize("metricas,esperado", [
+    ({}, {}),
+    ({"pasos": 1.0}, {"trpo/pasos": 1.0}),
+    ({"discriminador/perdida": 0.5}, {"discriminador/perdida": 0.5}),
+    ({"pasos": 1.0, "reajuste/perdida_valor": float("inf"), "partidas": 0.0},
+     {"trpo/pasos": 1.0, "reajuste/perdida_valor": float("inf"), "trpo/partidas": 0.0}),
+    ({"a/b/c": 2}, {"a/b/c": 2}),
+])
+def test_con_seccion_solo_prefija_las_metricas_sin_seccion(metricas, esperado):
+    """Las que ya tienen sección se respetan; los valores no cambian."""
+    original = dict(metricas)
+    assert con_seccion(metricas, "trpo") == esperado
+    assert metricas == original
 
 
 def test_nombre_run_identifica_metodo_entorno_cantidad_y_repeticion():

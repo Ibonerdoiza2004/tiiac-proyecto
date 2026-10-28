@@ -101,10 +101,13 @@ def nombre_run(cfg: dict, metodo: str, cantidad: int | None = None,
 
 def abrir_run_barrido(cfg: dict, metodo: str, cantidad: int, repeticion: int,
                       grupo: str | None = None) -> Any | None:
-    """Abre un run de BC o GAIL con grupo, job_type y etiquetas identificativas."""
+    """Abre un run de BC o GAIL con grupo, job_type, etiquetas y config.barrido identificativos."""
     entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
     cfg_run = copy.deepcopy(cfg)
     cfg_run["experimento"]["nombre"] = nombre_run(cfg, metodo, cantidad, repeticion)
+    # En la config, y no solo en las etiquetas, para que W&B pueda agrupar por ellos.
+    cfg_run["barrido"] = {"metodo": metodo, "cantidad": int(cantidad),
+                          "repeticion": int(repeticion)}
     return abrir_run(cfg_run, grupo=grupo, job_type=metodo,
                      etiquetas=[f"entorno:{entorno}", f"metodo:{metodo}",
                                 f"cantidad:{cantidad}", f"repeticion:{repeticion}"])
@@ -126,6 +129,15 @@ def registrar(run: Any | None, metricas: dict, paso: int | None = None) -> None:
                 return
             _ULTIMOS_PASOS[id(run)] = (run, paso)
         run.log(escalares, step=paso)
+
+
+def con_seccion(metricas: dict[str, Any], seccion: str) -> dict[str, Any]:
+    """Pone en la sección dada (prefijo «<seccion>/») las métricas que no tienen ninguna.
+
+    W&B agrupa los paneles por prefijo; sin él, la métrica cae en la sección genérica.
+    """
+    return {clave if "/" in clave else f"{seccion}/{clave}": valor
+            for clave, valor in metricas.items()}
 
 
 def registrar_resumen(run: Any | None, resumen: dict[str, Any]) -> None:
