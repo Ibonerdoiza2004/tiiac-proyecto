@@ -169,3 +169,40 @@ def test_obtener_datos_congelados_no_sobrescribe_una_carpeta_incompleta(tmp_path
     with pytest.raises(ValueError, match="no están los datos congelados"):
         comprobar_datos_congelados(cfg, datos, experto)
     assert (datos / "otro.txt").read_text(encoding="utf-8") == "contenido ajeno"
+
+
+def test_una_descarga_cortada_no_deja_la_carpeta_a_medias(tmp_path, monkeypatch):
+    """Regresión: una descarga fallida dejaba una carpeta incompleta que luego se saltaba."""
+    cfg, _, _ = _preparar(tmp_path / "origen")
+    destino = tmp_path / "local"
+    datos, experto = destino / "datos", destino / "experto"
+
+    def cortada(_cfg, _nombre, temporal):
+        (Path(temporal) / "demostraciones.npz").write_bytes(b"a medias")
+        raise RuntimeError("conexión perdida")
+
+    cfg["datos"].update(artefacto_demostraciones="demo", artefacto_experto="experto")
+    monkeypatch.setattr("src.training.flujo.descargar_artefacto", cortada)
+    with pytest.raises(RuntimeError, match="conexión perdida"):
+        obtener_datos_congelados(cfg, datos, experto)
+    assert not datos.exists()
+    assert not destino.exists() or not any(destino.iterdir())
+
+
+def test_cada_resultado_es_de_su_agente_en_serie_y_en_paralelo(tmp_path):
+    """Regresión: invertir el reparto de resultados entre agentes pasaba todos los tests."""
+    from src.training.evaluacion import evaluar_final
+    from src.training.flujo import cargar_agentes, evaluar_y_guardar
+
+    cfg, experto, datos = _preparar(tmp_path)
+    ejecutar_experimento(cfg, datos, experto, tmp_path / "run", "t")
+    agentes, huella = cargar_agentes(cfg, experto, tmp_path / "run" / "bc",
+                                     tmp_path / "run" / "gail")
+    esperados = [evaluar_final(a["agente"], cfg, a["estadisticas"])["retornos"]
+                 for a in agentes]
+    for procesos in (1, 2):
+        cfg["experimento"]["procesos"] = procesos
+        resultados = evaluar_y_guardar(cfg, agentes, huella,
+                                       tmp_path / f"eval-{procesos}.json", "t")
+        assert [r["metodo"] for r in resultados] == [a["metodo"] for a in agentes]
+        assert [r["retornos"] for r in resultados] == esperados

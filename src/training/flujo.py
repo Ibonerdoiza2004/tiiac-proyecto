@@ -24,11 +24,12 @@ from src.training.evaluacion import config_evaluacion, evaluar_final
 from src.training.gail import METODO_GAIL, cargar_gail
 from src.training.trpo import (cargar_experto, cargar_politica_experto, entrenar_experto,
                                guardar_experto)
-from src.utils.archivos import comprobar_directorio_libre, escribir_archivo_nuevo
+from src.utils.archivos import (comprobar_directorio_libre, escribir_archivo_nuevo,
+                                escribir_carpeta_nueva)
 from src.utils.procedencia import (a_json, avisar_estado_git, estado_git, ruta_registrada,
                                    versiones_y_hardware)
 from src.utils.tracking import (abrir_run, comprobar_wandb, descargar_artefacto, nombre_run,
-                                registrar, registrar_resumen, subir_artefacto, terminar_run,
+                                registrar_resumen, subir_artefacto, terminar_run,
                                 usar_artefacto)
 from src.utils.validacion import es_entero_positivo
 
@@ -350,13 +351,17 @@ def obtener_datos_congelados(cfg: dict, datos: Path, experto: Path) -> None:
     Raises:
         FileExistsError: Si una carpeta existe con otro contenido.
         RuntimeError: Si no se puede descargar algún artefacto.
+
+    La descarga va a una carpeta temporal que se renombra al final; si falla, no queda nada.
     """
     for carpeta, clave in ((Path(datos), "artefacto_demostraciones"),
                            (Path(experto), "artefacto_experto")):
         if carpeta.is_dir() and any(carpeta.iterdir()):
             continue
-        comprobar_directorio_libre(carpeta)
-        descargar_artefacto(cfg, cfg["datos"][clave], carpeta)
+        # Se descarga en una temporal que solo se renombra si termina bien: una
+        # descarga cortada no deja una carpeta a medias que luego se saltaría.
+        escribir_carpeta_nueva(carpeta, lambda temporal, nombre=cfg["datos"][clave]:
+                               descargar_artefacto(cfg, nombre, temporal))
 
 
 def evaluar_agente_guardado(cfg: dict, metodo: str, ruta: Path | None) -> dict[str, Any]:

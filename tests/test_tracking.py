@@ -102,7 +102,7 @@ def test_comprobar_sesion_online_verifica_credenciales_sin_argumentos_no_compati
 
 def test_descargar_artefacto_usa_entidad_proyecto_y_devuelve_destino(monkeypatch, tmp_path):
     """Pide el artefacto latest de la ruta configurada y devuelve el destino."""
-    class CommError(Exception):
+    class Error(Exception):
         pass
 
     rutas, destinos = [], []
@@ -118,7 +118,7 @@ def test_descargar_artefacto_usa_entidad_proyecto_y_devuelve_destino(monkeypatch
             rutas.append(ruta)
             return Artefacto()
 
-    falso = SimpleNamespace(Api=Api, errors=SimpleNamespace(CommError=CommError))
+    falso = SimpleNamespace(Api=Api, errors=SimpleNamespace(Error=Error))
     monkeypatch.setitem(sys.modules, "wandb", falso)
     cfg = _cfg("disabled")
     destino = tmp_path / "descargado"
@@ -130,17 +130,35 @@ def test_descargar_artefacto_usa_entidad_proyecto_y_devuelve_destino(monkeypatch
 def test_descargar_artefacto_convierte_artefacto_ausente_a_runtime_error(monkeypatch,
                                                                          tmp_path):
     """La ausencia de un artefacto se traduce a RuntimeError para la CLI."""
-    class CommError(Exception):
+    class Error(Exception):
         pass
 
     class Api:
         def artifact(self, _ruta):
             raise ValueError("no existe")
 
-    falso = SimpleNamespace(Api=Api, errors=SimpleNamespace(CommError=CommError))
+    falso = SimpleNamespace(Api=Api, errors=SimpleNamespace(Error=Error))
     monkeypatch.setitem(sys.modules, "wandb", falso)
     with pytest.raises(RuntimeError, match="no se pudo descargar"):
         descargar_artefacto(_cfg("disabled"), "ausente", tmp_path / "datos")
+
+
+def test_descargar_artefacto_sin_sesion_da_runtime_error(monkeypatch, tmp_path):
+    """Regresión: sin sesión, wandb lanza UsageError y run.py terminaba con una traza."""
+    class Error(Exception):
+        pass
+
+    class UsageError(Error):
+        pass
+
+    class Api:
+        def __init__(self):
+            raise UsageError("api_key not configured")
+
+    falso = SimpleNamespace(Api=Api, errors=SimpleNamespace(Error=Error))
+    monkeypatch.setitem(sys.modules, "wandb", falso)
+    with pytest.raises(RuntimeError, match="wandb login"):
+        descargar_artefacto(_cfg("disabled"), "datos", tmp_path / "datos")
 
 
 def test_registrar_solo_envia_metricas_escalares():

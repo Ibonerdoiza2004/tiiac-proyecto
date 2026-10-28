@@ -188,8 +188,9 @@ def descargar_artefacto(cfg: dict, nombre: str, destino: Path) -> Path:
     ruta = f"{cfg['wandb']['entidad']}/{cfg['wandb']['proyecto']}/{nombre}:latest"
     try:
         return Path(wandb.Api().artifact(ruta).download(root=str(destino)))
-    except (ValueError, wandb.errors.CommError) as error:
-        raise RuntimeError(f"no se pudo descargar {ruta}: {error}") from error
+    except (ValueError, wandb.errors.Error) as error:
+        raise RuntimeError(f"no se pudo descargar {ruta} (¿has iniciado sesión con "
+                           f"wandb login?): {error}") from error
 
 
 def terminar_run(run: Any | None, error: BaseException | None = None) -> None:
