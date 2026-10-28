@@ -307,6 +307,40 @@ class MetodoBarrido:
     describir: Callable[[dict[str, Any]], str]
 
 
+def barrer(metodo: MetodoBarrido, cfg: dict, datos: Path, salida: Path, grupo: str,
+           informar: Callable[[ResultadoTarea], None] | None = None,
+           cantidades: Sequence[int] | None = None,
+           repeticiones: Sequence[int] | None = None) -> list[tuple[int, int]]:
+    """Ejecuta el barrido de un método y devuelve las tareas fallidas.
+
+    Args:
+        metodo: Método BC o GAIL.
+        cfg: Configuración resuelta.
+        datos: Carpeta con las demostraciones y los splits.
+        salida: Carpeta nueva para los modelos.
+        grupo: Grupo compartido de W&B.
+        informar: Callback opcional por tarea terminada.
+        cantidades: Subconjuntos a entrenar; por defecto los de la config.
+        repeticiones: Repeticiones a entrenar; por defecto todas.
+
+    Returns:
+        Lista de pares (cantidad, repetición) que fallaron.
+
+    Raises:
+        FileExistsError: Si salida ya existe con contenido.
+        OSError: Si faltan o no se pueden leer los datos.
+        ValueError: Si la configuración, cantidades o repeticiones no son válidas.
+    """
+    salida = comprobar_directorio_libre(Path(salida))
+    trayectorias, splits, procedencia = cargar_datos(cfg, Path(datos))
+    tareas = elegir_tareas(cfg, splits, cantidades, repeticiones)
+    reportar = informar or (lambda _: None)
+    return ejecutar_barrido(
+        tareas, min(int(cfg["experimento"]["procesos"]), len(tareas)), metodo.tarea,
+        lambda c, r: (cfg, trayectorias, splits, c, r, metodo.destino(salida, c, r),
+                      procedencia, grupo), reportar)
+
+
 def main_barrido(metodo: MetodoBarrido, descripcion: str,
                  argv: Sequence[str] | None = None) -> int:
     """Flujo de línea de comandos de un barrido; devuelve el código de salida.
@@ -356,22 +390,6 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
         return 2
     salida = args.salida or (Path("checkpoints") / metodo.nombre / args.entorno
                              / datetime.now().strftime("%Y%m%d-%H%M%S"))
-    # Antes de entrenar: si la salida está ocupada, el entrenamiento se perdería.
-    try:
-        comprobar_directorio_libre(salida)
-    except FileExistsError as error:
-        print(f"error: {error}; elige otra --salida", file=sys.stderr)
-        return 2
-    try:
-        trayectorias, splits, datos = cargar_datos(cfg, args.datos)
-    except (OSError, ValueError) as error:
-        print(f"error con los datos: {error}", file=sys.stderr)
-        return 2
-    try:
-        tareas = elegir_tareas(cfg, splits, args.cantidades, args.repeticiones)
-    except ValueError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
     try:
         comprobar_wandb(cfg, exigir_sesion=True)
     except RuntimeError as error:
@@ -392,11 +410,14 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
 
     inicio = time.perf_counter()
     try:
-        fallos = ejecutar_barrido(
-            tareas, min(int(cfg["experimento"]["procesos"]), len(tareas)), metodo.tarea,
-            lambda c, r: (cfg, trayectorias, splits, c, r, metodo.destino(salida, c, r),
-                          datos, grupo),
-            informar)
+        fallos = barrer(metodo, cfg, args.datos, salida, grupo, informar,
+                        args.cantidades, args.repeticiones)
+    except FileExistsError as error:
+        print(f"error: {error}; elige otra --salida", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print(f"error con los datos: {error}", file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         # Los guardados se escriben enteros o nada (src/utils/archivos.py); un proceso
         # terminado a mitad de guardar puede dejar un temporal oculto, nunca uno a medias.
@@ -404,7 +425,10 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
               "si alguno se estaba guardando, puede quedar un temporal oculto (.*.tmp) que "
               "se puede borrar", file=sys.stderr)
         return 130
-    print(f"{len(tareas) - len(fallos)} de {len(tareas)} entrenamientos guardados en {salida}; "
+    total = len(args.cantidades or cfg["demostraciones"]["subconjuntos"]) * len(
+        args.repeticiones if args.repeticiones is not None
+        else range(cfg["experimento"]["repeticiones"]))
+    print(f"{total - len(fallos)} de {total} entrenamientos guardados en {salida}; "
           f"tiempo total medido: {time.perf_counter() - inicio:.0f} s")
     avisar_estado_git(estado_git())
     return 1 if fallos else 0

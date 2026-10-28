@@ -41,7 +41,7 @@ def test_todos_los_entornos_activos_resuelven_base_y_smoke(entorno):
     assert normal["origen"]["archivos"] == [
         "configs/default.yaml", f"configs/entornos/{entorno.value}.yaml",
     ]
-    assert mini["entrenamiento"]["max_steps"] == 10
+    assert mini["gail"]["iteraciones"] == 2
     assert mini["wandb"]["modo"] == "disabled"
     assert mini["experimento"]["repeticiones"] == 1
     assert mini["origen"]["archivos"] == normal["origen"]["archivos"]
@@ -56,12 +56,12 @@ def test_enum_acepta_valor_textual_y_rechaza_entorno_desconocido():
 def test_ajustes_sobrescriben_recursivamente_y_listas_se_reemplazan():
     cfg = resolver_configuracion(BASE, "cartpole", {
         "bc": {"capas_ocultas": [8], "learning_rate": 0.02},
-        "datos": {"subset": 12},
+        "demostraciones": {"subconjuntos": [1, 12]},
     })
     assert cfg["bc"]["capas_ocultas"] == [8]
     assert cfg["bc"]["learning_rate"] == 0.02
     assert cfg["demostraciones"]["frecuencia_pares"] == 10
-    assert cfg["datos"]["subset"] == 12
+    assert cfg["demostraciones"]["subconjuntos"] == [1, 12]
 
 
 def test_ajustes_vacios_o_none_no_cambian_la_configuracion():
@@ -76,7 +76,7 @@ def test_error_yaml_del_smoke_se_muestra_como_error_de_configuracion(monkeypatch
         raise yaml.YAMLError("sintaxis")
 
     monkeypatch.setattr(sys, "argv", ["run.py", "--smoke"])
-    monkeypatch.setattr(run, "cargar_config", cargar_config_malformada)
+    monkeypatch.setattr(run.yaml, "safe_load", cargar_config_malformada)
 
     assert run.main() == 2
     salida = capsys.readouterr()
@@ -170,6 +170,15 @@ def test_cada_perfil_fija_sus_tamanos_del_experimento(entorno):
         assert cfg[seccion][clave] == perfil[seccion][clave]
 
 
+def test_perfil_cartpole_fija_rutas_y_huella_de_datos_congelados():
+    cfg = resolver_configuracion(BASE, "cartpole")
+    assert cfg["datos"]["demostraciones"] == "data/demostraciones/cartpole/congelado"
+    assert cfg["datos"]["experto"] == "checkpoints/expertos/cartpole/congelado"
+    assert cfg["datos"]["huella_partidas"]
+    assert cfg["datos"]["huella_experto"] == (
+        "4c5f7ad00efdbf97bba1b79d934b572df40ddee48d0f732b23a9d78ad4582195")
+
+
 def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     base = yaml.safe_load(BASE.read_text(encoding="utf-8"))
     base["experimento"]["repeticiones"] = 3
@@ -193,7 +202,7 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     evaluacion = {clave: cfg["gail"][clave] for clave in
                   ("iteraciones", "evaluar_cada", "episodios_evaluacion",
                    "evaluacion_determinista")}
-    assert evaluacion == {"iteraciones": 80, "evaluar_cada": 10, "episodios_evaluacion": 10,
+    assert evaluacion == {"iteraciones": 20, "evaluar_cada": 10, "episodios_evaluacion": 10,
                           "evaluacion_determinista": True}
     assert cfg["evaluacion"] == {"episodios": 50, "semilla": 9000, "determinista": True}
 

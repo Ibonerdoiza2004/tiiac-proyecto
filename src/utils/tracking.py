@@ -167,6 +167,32 @@ def usar_artefacto(run: Any | None, nombre: str,
         return None
 
 
+def descargar_artefacto(cfg: dict, nombre: str, destino: Path) -> Path:
+    """Descarga la última versión de un artefacto del proyecto de W&B en destino.
+
+    Usa la entidad, el proyecto y la sesión de W&B del usuario aunque
+    wandb.modo sea disabled; no abre ningún run.
+
+    Args:
+        cfg: Configuración con la sección wandb.
+        nombre: Nombre del artefacto, sin versión.
+        destino: Carpeta donde se descargan sus archivos.
+
+    Returns:
+        La carpeta con los archivos descargados.
+
+    Raises:
+        RuntimeError: Si falta W&B, no hay sesión o no existe el artefacto.
+    """
+    wandb = comprobar_wandb({"wandb": {"modo": "offline"}})
+    ruta = f"{cfg['wandb']['entidad']}/{cfg['wandb']['proyecto']}/{nombre}:latest"
+    try:
+        return Path(wandb.Api().artifact(ruta).download(root=str(destino)))
+    except (ValueError, wandb.errors.Error) as error:
+        raise RuntimeError(f"no se pudo descargar {ruta} (¿has iniciado sesión con "
+                           f"wandb login?): {error}") from error
+
+
 def terminar_run(run: Any | None, error: BaseException | None = None) -> None:
     """Cierra el run con código 0, 1 por fallo o 130 por Ctrl+C."""
     if run is not None:

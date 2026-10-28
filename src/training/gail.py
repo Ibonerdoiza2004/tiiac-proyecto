@@ -992,3 +992,20 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
         raise
     terminar_run(run)
     return resumen
+
+
+def _describir_gail(resumen: dict[str, Any]) -> str:
+    """Resume la última validación, los pasos y el tiempo de entrenamiento."""
+    ultima = resumen["validaciones"][-1]
+    return (f"retorno de validación {ultima['retorno_medio']:.1f} en la iteración "
+            f"{ultima['iteracion']}; {resumen['pasos']} pasos en {resumen['segundos']:.0f} s")
+
+
+from src.training.barrido import MetodoBarrido  # noqa: E402
+
+METODO_GAIL = MetodoBarrido(
+    nombre="gail", comprobar_config=comprobar_config_barrido,
+    tarea=entrenar_y_guardar_gail,
+    destino=lambda salida, c, r: salida / f"cantidad_{c}" / f"repeticion_{r}",
+    describir=_describir_gail,
+)
