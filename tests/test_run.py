@@ -57,3 +57,18 @@ def test_huella_de_datos_incorrecta_y_solo_evaluar_sin_salida_salen_con_2(tmp_pa
     assert "huella de las partidas" in distinto.stderr
     assert sin_salida.returncode == 2
     assert "--solo-evaluar necesita --salida" in sin_salida.stderr
+
+
+def test_error_al_descargar_datos_sale_con_2(monkeypatch, capsys):
+    """Una descarga fallida se comunica como error de configuración, código 2."""
+    import run
+
+    monkeypatch.setattr(sys, "argv", ["run.py", "--entorno", "cartpole", "--descargar",
+                                       "--sin-wandb"])
+
+    def fallar(*_args):
+        raise RuntimeError("descarga de prueba")
+
+    monkeypatch.setattr(run, "obtener_datos_congelados", fallar)
+    assert run.main() == 2
+    assert "descarga de prueba" in capsys.readouterr().err

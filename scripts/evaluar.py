@@ -33,8 +33,6 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
-
 import torch
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -44,24 +42,6 @@ from src.training.flujo import cargar_agentes, evaluar_y_guardar  # noqa: E402
 from src.training.evaluacion import config_evaluacion  # noqa: E402
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
-
-
-def _cargar_agentes(cfg: dict, args: argparse.Namespace) -> tuple[list[dict[str, Any]],
-                                                                  str | None]:
-    """Carga los agentes que se van a evaluar y comprueba que encajan entre sí.
-
-    Returns:
-        Una entrada por agente (metodo, cantidad, repeticion, ruta, agente y
-        estadísticas de normalización) y la huella del NPZ de los BC y GAIL (None
-        si no hay ninguno).
-
-    Raises:
-        OSError: Si falta algún modelo o no se puede leer.
-        ValueError: Si las cantidades o repeticiones no son válidas, algún modelo
-            es de otro entorno o los BC y GAIL no se entrenaron con los mismos datos.
-    """
-    return cargar_agentes(cfg, args.experto, args.bc, args.gail,
-                          args.cantidades, args.repeticiones)
 
 
 def main() -> int:
@@ -107,7 +87,8 @@ def main() -> int:
               file=sys.stderr)
         return 2
     try:
-        agentes, huella = _cargar_agentes(cfg, args)
+        agentes, huella = cargar_agentes(cfg, args.experto, args.bc, args.gail,
+                                         args.cantidades, args.repeticiones)
     except (OSError, ValueError) as error:
         print(f"error con los modelos: {error}", file=sys.stderr)
         return 2

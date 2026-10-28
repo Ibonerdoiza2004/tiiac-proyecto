@@ -311,6 +311,7 @@ def test_evaluar_usa_artefactos_de_modelo_por_huella_sin_depender_del_grupo(
 
     def preparar(script):
         monkeypatch.setattr(script, "comprobar_wandb", lambda *a, **k: wandb)
+        monkeypatch.setattr("src.training.flujo.comprobar_wandb", lambda *a, **k: wandb)
         monkeypatch.setattr("src.training.flujo.abrir_run",
                             lambda *a, **k: nombres.append(k["nombre"]) or run)
         monkeypatch.setattr("src.training.flujo.registrar_resumen", lambda *a: None)
@@ -396,8 +397,7 @@ def test_evaluar_no_evalua_nada_si_algo_no_es_valido(flujo, tmp_path, monkeypatc
 def test_evaluar_pasa_a_cada_agente_sus_estadisticas_de_normalizacion(monkeypatch, tmp_path):
     """El experto y GAIL se evalúan con la normalización guardada en sus metadatos. En
     CartPole no se normaliza, así que se comprueba con metadatos que sí la tienen."""
-    import argparse
-    script = _script("evaluar")
+    from src.training.flujo import cargar_agentes
     estadisticas = {"experto": {"media": [1.0]}, "gail": {"media": [2.0]}}
 
     def meta(metodo):
@@ -409,9 +409,7 @@ def test_evaluar_pasa_a_cada_agente_sus_estadisticas_de_normalizacion(monkeypatc
                         lambda ruta: ("experto", meta("experto")))
     monkeypatch.setattr("src.training.flujo.cargar_gail",
                         lambda ruta: ("gail", "d", meta("gail")))
-    args = argparse.Namespace(experto=tmp_path, bc=None, gail=tmp_path, cantidades=[4],
-                              repeticiones=[0])
-    agentes, huella = script._cargar_agentes(_cfg(), args)
+    agentes, huella = cargar_agentes(_cfg(), tmp_path, None, tmp_path, [4], [0])
     assert {a["metodo"]: a["estadisticas"] for a in agentes} == {
         "aleatorio": None, "experto": estadisticas["experto"], "gail": estadisticas["gail"]}
     assert huella == "a" * 64

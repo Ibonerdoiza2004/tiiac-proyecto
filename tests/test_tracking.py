@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,8 +11,9 @@ import pytest
 import torch
 
 from src.utils.tracking import (abrir_run, abrir_run_barrido, comprobar_wandb,
-                                crear_grupo, nombre_run, registrar, registrar_resumen,
-                                subir_artefacto, terminar_run, usar_artefacto)
+                                crear_grupo, descargar_artefacto, nombre_run, registrar,
+                                registrar_resumen, subir_artefacto, terminar_run,
+                                usar_artefacto)
 
 
 def _cfg(modo: str = "online") -> dict:
@@ -96,6 +98,49 @@ def test_comprobar_sesion_online_verifica_credenciales_sin_argumentos_no_compati
     monkeypatch.setitem(sys.modules, "wandb", falso)
     assert comprobar_wandb(_cfg("online"), exigir_sesion=True) is falso
     assert llamadas == [{"anonymous": "never", "timeout": 10, "verify": True}]
+
+
+def test_descargar_artefacto_usa_entidad_proyecto_y_devuelve_destino(monkeypatch, tmp_path):
+    """Pide el artefacto latest de la ruta configurada y devuelve el destino."""
+    class CommError(Exception):
+        pass
+
+    rutas, destinos = [], []
+
+    class Artefacto:
+        def download(self, root):
+            destinos.append(root)
+            Path(root).mkdir(parents=True)
+            return root
+
+    class Api:
+        def artifact(self, ruta):
+            rutas.append(ruta)
+            return Artefacto()
+
+    falso = SimpleNamespace(Api=Api, errors=SimpleNamespace(CommError=CommError))
+    monkeypatch.setitem(sys.modules, "wandb", falso)
+    cfg = _cfg("disabled")
+    destino = tmp_path / "descargado"
+    assert descargar_artefacto(cfg, "datos-fijos", destino) == destino
+    assert rutas == ["equipo/prueba/datos-fijos:latest"]
+    assert destinos == [str(destino)]
+
+
+def test_descargar_artefacto_convierte_artefacto_ausente_a_runtime_error(monkeypatch,
+                                                                         tmp_path):
+    """La ausencia de un artefacto se traduce a RuntimeError para la CLI."""
+    class CommError(Exception):
+        pass
+
+    class Api:
+        def artifact(self, _ruta):
+            raise ValueError("no existe")
+
+    falso = SimpleNamespace(Api=Api, errors=SimpleNamespace(CommError=CommError))
+    monkeypatch.setitem(sys.modules, "wandb", falso)
+    with pytest.raises(RuntimeError, match="no se pudo descargar"):
+        descargar_artefacto(_cfg("disabled"), "ausente", tmp_path / "datos")
 
 
 def test_registrar_solo_envia_metricas_escalares():

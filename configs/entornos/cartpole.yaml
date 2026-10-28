@@ -9,6 +9,9 @@ datos:
   demostraciones: data/demostraciones/cartpole/congelado
   experto: checkpoints/expertos/cartpole/congelado
   huella_partidas: 84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73
+  huella_experto: 4c5f7ad00efdbf97bba1b79d934b572df40ddee48d0f732b23a9d78ad4582195  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-ce06866eff92  # Artefacto W&B congelado.
+  artefacto_experto: experto-CartPole-v1-4c5f7ad00efd
 demostraciones:
   partidas_train: 10  # Igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia; el paper separa 70/30 los pares.

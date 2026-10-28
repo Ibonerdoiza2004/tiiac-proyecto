@@ -25,6 +25,9 @@ datos:
   demostraciones: null
   experto: null
   huella_partidas: null
+  huella_experto: null
+  artefacto_demostraciones: null
+  artefacto_experto: null
 
 modelo:
   nombre: mi_modelo

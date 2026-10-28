@@ -12,8 +12,10 @@ import torch
 import yaml
 
 from src.data.demostraciones import generar_dataset
+from src.data.splits import huella_archivo
 from src.training.flujo import (comprobar_datos_congelados, ejecutar_experimento,
-                                evaluar_carpeta, generar_y_registrar_datos,
+                                evaluar_carpeta,
+                                generar_y_registrar_datos, obtener_datos_congelados,
                                 entrenar_y_guardar_experto)
 from src.utils.configuracion import resolver_configuracion
 
@@ -38,6 +40,7 @@ def _preparar(carpeta: Path) -> tuple[dict, Path, Path]:
     resultado = generar_y_registrar_datos(cfg, experto, datos, "test-flujo")
     assert resultado["coincide"]
     cfg["datos"]["huella_partidas"] = resultado["huella_partidas"]
+    cfg["datos"]["huella_experto"] = huella_archivo(experto / "modelo.zip")
     return cfg, experto, datos
 
 
@@ -57,6 +60,7 @@ def test_dos_ejecuciones_y_reevaluacion_conservan_los_retorno(tmp_path):
     segundo = ejecutar_experimento(cfg, datos, experto, tmp_path / "segundo", "test-2")
     retorno = lambda resultado: [fila["retornos"] for fila in resultado["resultados"]]
     assert retorno(primero) == retorno(segundo)
+    cfg["experimento"]["procesos"] = 2
     reevaluado = evaluar_carpeta(cfg, tmp_path / "primero", experto, "test-3")
     assert retorno(primero) == retorno(reevaluado)
 
@@ -72,3 +76,96 @@ def test_comprobar_datos_congelados_acepta_solo_experto_datos_y_huella_validos(t
     cfg_erronea["datos"]["huella_partidas"] = "0" * 64
     with pytest.raises(ValueError, match="huella de las partidas"):
         comprobar_datos_congelados(cfg_erronea, datos, experto)
+    cfg_erronea = copy.deepcopy(cfg)
+    cfg_erronea["datos"]["huella_experto"] = "0" * 64
+    with pytest.raises(ValueError, match="no es el experto congelado"):
+        comprobar_datos_congelados(cfg_erronea, datos, experto)
+
+
+def test_una_evaluacion_no_valida_falla_antes_de_entrenar(tmp_path):
+    """La sección evaluacion se valida antes de iniciar cualquier barrido."""
+    from src.training.flujo import ejecutar_experimento
+
+    cfg, experto, datos = _preparar(tmp_path)
+    cfg["evaluacion"]["episodios"] = 0
+    with pytest.raises(ValueError, match="evaluacion.episodios"):
+        ejecutar_experimento(cfg, datos, experto, tmp_path / "run", "test")
+    assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize("procesos", [0, -1, True, 1.5, None])
+def test_evaluar_y_guardar_rechaza_un_numero_de_procesos_no_valido(tmp_path, procesos):
+    """El reparto de evaluación exige experiment.procesos entero positivo."""
+    from src.training.flujo import evaluar_y_guardar
+
+    cfg = {"evaluacion": {"episodios": 1, "semilla": 0, "determinista": True},
+           "experimento": {"procesos": procesos}}
+    with pytest.raises(ValueError, match="experimento.procesos"):
+        evaluar_y_guardar(cfg, [], None, tmp_path / "evaluacion.json", "test")
+
+
+def test_evaluar_y_guardar_rechaza_una_lista_vacia_de_agentes(tmp_path):
+    """No se inicia un reparto de cero tareas."""
+    from src.training.flujo import evaluar_y_guardar
+
+    cfg = {"evaluacion": {"episodios": 1, "semilla": 0, "determinista": True},
+           "experimento": {"procesos": 1}}
+    with pytest.raises(ValueError, match="no hay agentes"):
+        evaluar_y_guardar(cfg, [], None, tmp_path / "evaluacion.json", "test")
+
+
+def test_obtener_datos_congelados_descarga_carpetas_vacias(tmp_path, monkeypatch):
+    """Descarga ambos artefactos a carpetas vacías y comprueba su procedencia."""
+    import shutil
+
+    cfg, experto_origen, datos_origen = _preparar(tmp_path / "origen")
+    datos, experto = tmp_path / "descargados" / "datos", tmp_path / "descargados" / "experto"
+    datos.mkdir(parents=True)
+    experto.mkdir()
+    llamadas = []
+
+    def descargar(_cfg, nombre, destino):
+        llamadas.append((nombre, destino))
+        origen = datos_origen if nombre == "demo" else experto_origen
+        shutil.copytree(origen, destino, dirs_exist_ok=True)
+        return destino
+
+    cfg["datos"].update(artefacto_demostraciones="demo", artefacto_experto="experto")
+    monkeypatch.setattr("src.training.flujo.descargar_artefacto", descargar)
+    obtener_datos_congelados(cfg, datos, experto)
+    comprobar_datos_congelados(cfg, datos, experto)
+    assert [nombre for nombre, _ in llamadas] == ["demo", "experto"]
+
+
+def test_obtener_datos_congelados_no_descarga_si_ya_estan_completos(tmp_path, monkeypatch):
+    """Las carpetas completas se conservan y no llaman a W&B."""
+    cfg, experto, datos = _preparar(tmp_path)
+    monkeypatch.setattr("src.training.flujo.descargar_artefacto",
+                        lambda *a: pytest.fail("no debe descargar carpetas completas"))
+    obtener_datos_congelados(cfg, datos, experto)
+    comprobar_datos_congelados(cfg, datos, experto)
+
+
+def test_obtener_datos_congelados_no_sobrescribe_una_carpeta_incompleta(tmp_path,
+                                                                        monkeypatch):
+    """Una carpeta ocupada no se modifica y la comprobación posterior la rechaza."""
+    import shutil
+
+    cfg, experto_origen, datos_origen = _preparar(tmp_path / "origen")
+    datos, experto = tmp_path / "local" / "datos", tmp_path / "local" / "experto"
+    datos.mkdir(parents=True)
+    (datos / "otro.txt").write_text("contenido ajeno", encoding="utf-8")
+    llamadas = []
+
+    def descargar(_cfg, nombre, destino):
+        llamadas.append(nombre)
+        shutil.copytree(experto_origen, destino, dirs_exist_ok=True)
+        return destino
+
+    cfg["datos"].update(artefacto_demostraciones="demo", artefacto_experto="experto")
+    monkeypatch.setattr("src.training.flujo.descargar_artefacto", descargar)
+    obtener_datos_congelados(cfg, datos, experto)
+    assert llamadas == ["experto"]
+    with pytest.raises(ValueError, match="no están los datos congelados"):
+        comprobar_datos_congelados(cfg, datos, experto)
+    assert (datos / "otro.txt").read_text(encoding="utf-8") == "contenido ajeno"

@@ -28,20 +28,11 @@ from src.training.flujo import (  # noqa: E402
     entrenar_y_guardar_experto,
     evaluar_carpeta,
     generar_y_registrar_datos,
+    imprimir_resultados,
+    obtener_datos_congelados,
 )
 from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
 from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
-
-
-def _imprimir(resultados: list[dict[str, object]]) -> None:
-    """Imprime una línea con métricas por cada agente evaluado."""
-    print("\n=== métricas ===")
-    for resultado in resultados:
-        nombre = " ".join(str(x) for x in (resultado["metodo"], resultado.get("cantidad"),
-                                           resultado.get("repeticion")) if x is not None)
-        print(f"{nombre}: retorno_medio {resultado['retorno_medio']:.1f} "
-              f"± {resultado['retorno_desviacion']:.1f} "
-              f"(longitud {resultado['longitud_media']:.1f})")
 
 
 def main() -> int:
@@ -58,6 +49,8 @@ def main() -> int:
                     help="carpeta nueva (por defecto checkpoints/run/<entorno>/<fecha>)")
     ap.add_argument("--datos", type=Path, default=None, help="sustituye datos.demostraciones")
     ap.add_argument("--experto", type=Path, default=None, help="sustituye datos.experto")
+    ap.add_argument("--descargar", action="store_true",
+                    help="baja de W&B los datos y el experto congelados que falten")
     ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
     ap.add_argument("--grupo", default=None, help="grupo W&B compartido con otros scripts")
     args = ap.parse_args()
@@ -94,17 +87,19 @@ def main() -> int:
         else:
             datos = args.datos or Path(cfg["datos"]["demostraciones"])
             experto = args.experto or Path(cfg["datos"]["experto"])
+            if args.descargar:
+                obtener_datos_congelados(cfg, datos, experto)
             comprobar_datos_congelados(cfg, datos, experto)
             salida = args.salida or (Path("checkpoints") / "run" / args.entorno
                                      / datetime.now().strftime("%Y%m%d-%H%M%S"))
             resultado = ejecutar_experimento(cfg, datos, experto, salida, grupo)
-    except (OSError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         print("interrumpido", file=sys.stderr)
         return 130
-    _imprimir(resultado["resultados"])
+    imprimir_resultados(resultado["resultados"])
     for fallo in resultado["fallos"]:
         print(f"falló {fallo}", file=sys.stderr)
     return 1 if resultado["fallos"] else 0

@@ -33,15 +33,22 @@ Las demostraciones y el experto no se versionan. Están congelados en
 - `demostraciones.npz`: `ce06866eff929b74d4a377fb9262d7d977a387636542777d14cb6addd9fb204b`
 - `splits.json`: `f6ae1c547e7d08e69d4622cacc069027349b41ec435c7529706e28b46933f910`
 - contenido de las partidas: `84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73`
+- `modelo.zip` del experto: `4c5f7ad00efdbf97bba1b79d934b572df40ddee48d0f732b23a9d78ad4582195`
 
 Los runs W&B del grupo `f24995f3d703` son `tiiac-experto-cartpole` y
 `tiiac-datos-cartpole`; los artefactos son `experto-CartPole-v1-4c5f7ad00efd`
 y `demostraciones-ce06866eff92`. En otra máquina se pueden descargar con:
 
 ```bash
+python run.py --entorno cartpole --descargar
+# También se pueden descargar individualmente:
 wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-ce06866eff92:latest --root data/demostraciones/cartpole/congelado
 wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-4c5f7ad00efd:latest --root checkpoints/expertos/cartpole/congelado
 ```
+
+`--descargar` baja solo las carpetas ausentes o vacías, usando la sesión W&B de
+la organización configurada, y comprueba las huellas antes de entrenar. Nunca
+sobrescribe una carpeta que ya contiene archivos.
 
 Para regenerarlos o contrastarlos con una sesión de W&B activa:
 
@@ -118,15 +125,14 @@ usan `disabled`.
   de 2026, CPU en Windows 11 (AMD64 Family 23 Model 160, 8 procesadores
   lógicos; GPU no usada). El retorno medio de parada fue 500 en 10 episodios.
 - Datos congelados: 4,84 s para 15 partidas y 7500 pasos, en la misma máquina.
-- Barrido completo online con 20 iteraciones de GAIL: 14 min 08 s desde el
-  inicio del flujo hasta acabar los entrenamientos BC/GAIL; 20 min 56 s de
-  pared incluyendo la evaluación final común de 50 episodios. Su resumen W&B
-  registra 293 s de evaluación. Medido el 28 de octubre en la misma CPU, con
-  5 procesos, sin GPU. W&B sincronizó los 20 BC, 20 GAIL y la comparación.
-  Grupo W&B `085dfc3fb185`; comparación `9m0ruxv4`.
-  La evaluación se informa aparte porque no forma parte del entrenamiento de
-  los modelos. El entrenamiento quedó bajo 20 minutos; el flujo con evaluación
-  superó el límite por 56 s.
+- Flujo completo online con 20 iteraciones de GAIL: 1051,8 s (17 min 32 s),
+  medidos con `run.py --entorno cartpole` el 28 de octubre de 2026. BC/GAIL y
+  carga de los agentes ocuparon 11 min 39 s hasta iniciar la evaluación; la
+  fase final paralela, con 50 episodios por agente, tomó 5 min 53 s de pared.
+  El resumen W&B registra 244,8 s dentro de la evaluación. CPU Windows 11,
+  AMD64 Family 23 Model 160, 8 procesadores lógicos, 5 procesos, sin GPU.
+  W&B sincronizó los 20 BC, 20 GAIL y la comparación; grupo `4a2683ef47f9`,
+  run de comparación `pevcn0t1`.
 - El barrido previo de 80 iteraciones también se completó online: unos 42 min
   incluyendo la comparación de 50 episodios. Sirvió para medir el presupuesto;
   el perfil CartPole queda en 20 iteraciones.
@@ -145,13 +151,23 @@ usan `disabled`.
 
 Las semillas están en `configs/` y se inicializan en `src/utils/seed.py`; las
 dependencias tienen versiones exactas en `requirements.txt`. El smoke cumple el
-límite de 5 minutos en CPU. El entrenamiento BC/GAIL medido cumple el límite de
-20 minutos en CPU; la evaluación final de 50 episodios registró 293 s en W&B. TRPO usa
-CPU, así que una T4 no acelera estos entrenamientos.
+límite de 5 minutos en CPU. El flujo completo de CartPole, incluida la evaluación
+paralela de 50 episodios, tardó 17 min 32 s en esta CPU, dentro de la regla 5/20.
+TRPO usa CPU, así que una T4 no acelera estos entrenamientos.
 
 ## Decisiones donde el paper no especifica
 
-Pendiente de documentar por el equipo.
+| Ambigüedad o diferencia | Qué decidimos | Por qué |
+|---|---|---|
+| Iteraciones de GAIL (paper: 300) | 20 en CartPole | Presupuesto de la regla 5/20 |
+| Repeticiones (código original: 7) | 5 | Repartir el barrido en 5 procesos sin compartir núcleo |
+| Entornos por iteración de TRPO | 10 entornos de 500 pasos (mismos 5000 pasos) | Unas 2,7 veces más rápido, medido |
+| Objetivos de la red de valor tras actualizar D | Retornos GAE, no Monte Carlo | Coherente con el resto de TRPO en sb3 |
+| Ajuste del crítico | Adam por minibatches, no región de confianza | Implementación de sb3-contrib |
+| Elección del experto | El mejor por evaluación, parando al llegar a 500 | El original usa un snapshot fijo |
+| Normalización de la entrada del discriminador | Fija con los pares expertos de train | El original la actualiza también con pares del agente |
+| Validación de partidas (paper: 70/30 de pares) | 10 partidas de train y 5 de validación, separadas por trayectoria | Evitar fugas entre episodios |
+| Parada de BC | Paciencia de 20 épocas sobre la pérdida de validación | El paper solo dice «hasta que deja de bajar» |
 
 ## Comprobaciones
 

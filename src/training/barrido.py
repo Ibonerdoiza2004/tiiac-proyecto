@@ -307,6 +307,40 @@ class MetodoBarrido:
     describir: Callable[[dict[str, Any]], str]
 
 
+def barrer(metodo: MetodoBarrido, cfg: dict, datos: Path, salida: Path, grupo: str,
+           informar: Callable[[ResultadoTarea], None] | None = None,
+           cantidades: Sequence[int] | None = None,
+           repeticiones: Sequence[int] | None = None) -> list[tuple[int, int]]:
+    """Ejecuta el barrido de un método y devuelve las tareas fallidas.
+
+    Args:
+        metodo: Método BC o GAIL.
+        cfg: Configuración resuelta.
+        datos: Carpeta con las demostraciones y los splits.
+        salida: Carpeta nueva para los modelos.
+        grupo: Grupo compartido de W&B.
+        informar: Callback opcional por tarea terminada.
+        cantidades: Subconjuntos a entrenar; por defecto los de la config.
+        repeticiones: Repeticiones a entrenar; por defecto todas.
+
+    Returns:
+        Lista de pares (cantidad, repetición) que fallaron.
+
+    Raises:
+        FileExistsError: Si salida ya existe con contenido.
+        OSError: Si faltan o no se pueden leer los datos.
+        ValueError: Si la configuración, cantidades o repeticiones no son válidas.
+    """
+    salida = comprobar_directorio_libre(Path(salida))
+    trayectorias, splits, procedencia = cargar_datos(cfg, Path(datos))
+    tareas = elegir_tareas(cfg, splits, cantidades, repeticiones)
+    reportar = informar or (lambda _: None)
+    return ejecutar_barrido(
+        tareas, min(int(cfg["experimento"]["procesos"]), len(tareas)), metodo.tarea,
+        lambda c, r: (cfg, trayectorias, splits, c, r, metodo.destino(salida, c, r),
+                      procedencia, grupo), reportar)
+
+
 def main_barrido(metodo: MetodoBarrido, descripcion: str,
                  argv: Sequence[str] | None = None) -> int:
     """Flujo de línea de comandos de un barrido; devuelve el código de salida.
@@ -376,8 +410,6 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
 
     inicio = time.perf_counter()
     try:
-        from src.training.flujo import barrer
-
         fallos = barrer(metodo, cfg, args.datos, salida, grupo, informar,
                         args.cantidades, args.repeticiones)
     except FileExistsError as error:
