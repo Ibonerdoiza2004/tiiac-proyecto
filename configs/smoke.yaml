@@ -1,28 +1,17 @@
-# Capa de comprobación: el flujo real en miniatura, con un experto y unos datos
-# temporales (no usa los congelados, que no están en el repositorio). W&B desactivado.
+# Capa sobre default.yaml y el perfil del entorno: solo reduce el trabajo del
+# pipeline de comprobación. W&B se mantiene desactivado.
 experimento:
   nombre: smoke
-  repeticiones: 1
-  procesos: 1
-trpo:
-  pasos_por_iteracion: 500
-  batch_size_valor: 250
-experto:
-  pasos_totales: 1000
-  evaluar_cada: 1
-  episodios_evaluacion: 2
-demostraciones:
-  partidas_train: 2
-  partidas_validacion: 1
-  subconjuntos: [1, 2]
+  repeticiones: 1  # El smoke usa una sola repetición.
+datos:
+  subset: 64
+  batch_size: 8
+  num_workers: 0
 bc:
   epocas_maximas: 2
   paciencia: 1
-gail:
-  iteraciones: 2
-  evaluar_cada: 1
-  episodios_evaluacion: 2
-evaluacion:
-  episodios: 3
+entrenamiento:
+  epochs: 1
+  max_steps: 10
 wandb:
   modo: disabled
