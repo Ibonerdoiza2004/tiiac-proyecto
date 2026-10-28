@@ -200,7 +200,7 @@ def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):
     evaluacion = {clave: cfg["gail"][clave] for clave in
                   ("iteraciones", "evaluar_cada", "episodios_evaluacion",
                    "evaluacion_determinista")}
-    assert evaluacion == {"iteraciones": 80, "evaluar_cada": 10, "episodios_evaluacion": 10,
+    assert evaluacion == {"iteraciones": 20, "evaluar_cada": 10, "episodios_evaluacion": 10,
                           "evaluacion_determinista": True}
     assert cfg["evaluacion"] == {"episodios": 50, "semilla": 9000, "determinista": True}
 

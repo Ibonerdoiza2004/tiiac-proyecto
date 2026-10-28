@@ -5,9 +5,10 @@ experimento:
   # repartir el barrido en 5 procesos sin que compartan núcleo (presupuesto, regla 5/20).
   repeticiones: 5
 datos:
-  demostraciones: data/demostraciones/cartpole/congelado  # Destino acordado; congelación pendiente.
+  # Congelado el 2026-10-28, commit 2a9be76305d0ac83009261f3abf8de3a9718a189.
+  demostraciones: data/demostraciones/cartpole/congelado
   experto: checkpoints/expertos/cartpole/congelado
-  huella_partidas: pendiente
+  huella_partidas: 84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73
 demostraciones:
   partidas_train: 10  # Igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia; el paper separa 70/30 los pares.
@@ -36,10 +37,9 @@ experto:
   # experto perfecto del paper (200 ± 0 en CartPole-v0, tabla 1).
   retorno_objetivo: 500
 gail:
-  # Elección propia por presupuesto de tiempo; el paper usa 300 (tabla 2) y el código
-  # original, max_iter 301.
-  iteraciones: 80
-  evaluar_cada: 10  # Elección propia: 8 mediciones en 80 iteraciones.
+  # Elección propia por regla 5/20; el paper usa 300 (tabla 2) y el original, 301.
+  iteraciones: 20
+  evaluar_cada: 10  # Elección propia: validaciones en 10 y 20 iteraciones.
   episodios_evaluacion: 10  # Elección propia; la evaluación final usa 50.
   evaluacion_determinista: true  # Como evalúa el original las políticas aprendidas.
   # Código original de GAIL: −log(1 − D), porque las partidas terminan al fallar

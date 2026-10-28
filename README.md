@@ -25,21 +25,25 @@ python -m pip install -r requirements.txt
 
 ## Datos
 
-Las demostraciones y el experto no se versionan. En CartPole, el destino acordado
-para congelarlos es `checkpoints/expertos/cartpole/congelado/` y
-`data/demostraciones/cartpole/congelado/`. Con los nombres exactos de los
-artefactos se pueden recuperar en otra máquina con:
+Las demostraciones y el experto no se versionan. Están congelados en
+`checkpoints/expertos/cartpole/congelado/` y
+`data/demostraciones/cartpole/congelado/`, el 2026-10-28 con el commit
+`2a9be76305d0ac83009261f3abf8de3a9718a189`. Las huellas SHA-256 son:
+
+- `demostraciones.npz`: `ce06866eff929b74d4a377fb9262d7d977a387636542777d14cb6addd9fb204b`
+- `splits.json`: `f6ae1c547e7d08e69d4622cacc069027349b41ec435c7529706e28b46933f910`
+- contenido de las partidas: `84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73`
+
+Los runs W&B del grupo `f24995f3d703` son `tiiac-experto-cartpole` y
+`tiiac-datos-cartpole`; los artefactos son `experto-CartPole-v1-4c5f7ad00efd`
+y `demostraciones-ce06866eff92`. En otra máquina se pueden descargar con:
 
 ```bash
-wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-<12-caracteres>:latest --root data/demostraciones/cartpole/congelado
-wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-<12-caracteres>:latest --root checkpoints/expertos/cartpole/congelado
+wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-ce06866eff92:latest --root data/demostraciones/cartpole/congelado
+wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-4c5f7ad00efd:latest --root checkpoints/expertos/cartpole/congelado
 ```
 
-Los nombres concretos de los artefactos y las huellas SHA-256 del NPZ, los
-splits y las partidas se anotarán aquí al comprobar la publicación online. En
-este checkout no están disponibles esos archivos ni sus huellas; no se deben
-tratar las rutas como congeladas hasta completar esa comprobación. Para
-regenerarlos o contrastarlos con una sesión de W&B activa:
+Para regenerarlos o contrastarlos con una sesión de W&B activa:
 
 ```bash
 python scripts/entrenar_experto.py --entorno cartpole
@@ -59,8 +63,8 @@ que la regeneración produce las mismas partidas y muestra las huellas obtenidas
 aunque no coincidan.
 
 Procedencia: datos propios generados en `CartPole-v1` de Gymnasium (licencia
-MIT). `configs/entornos/cartpole.yaml` fija las carpetas de congelación y la
-huella de las partidas cuando se hayan generado y verificado.
+MIT). `configs/entornos/cartpole.yaml` fija las carpetas congeladas y la huella
+de las partidas.
 
 ## Recorrido experimental
 
@@ -110,6 +114,23 @@ usan `disabled`.
 
 ## Tiempos medidos
 
+- Experto congelado: 41 s para 60 000 pasos, `CartPole-v1`, el 28 de octubre
+  de 2026, CPU en Windows 11 (AMD64 Family 23 Model 160, 8 procesadores
+  lógicos; GPU no usada). El retorno medio de parada fue 500 en 10 episodios.
+- Datos congelados: 4,84 s para 15 partidas y 7500 pasos, en la misma máquina.
+- Barrido completo online con 20 iteraciones de GAIL: 14 min 08 s desde el
+  inicio del flujo hasta acabar los entrenamientos BC/GAIL; 20 min 56 s de
+  pared incluyendo la evaluación final común de 50 episodios. Su resumen W&B
+  registra 293 s de evaluación. Medido el 28 de octubre en la misma CPU, con
+  5 procesos, sin GPU. W&B sincronizó los 20 BC, 20 GAIL y la comparación.
+  Grupo W&B `085dfc3fb185`; comparación `9m0ruxv4`.
+  La evaluación se informa aparte porque no forma parte del entrenamiento de
+  los modelos. El entrenamiento quedó bajo 20 minutos; el flujo con evaluación
+  superó el límite por 56 s.
+- El barrido previo de 80 iteraciones también se completó online: unos 42 min
+  incluyendo la comparación de 50 episodios. Sirvió para medir el presupuesto;
+  el perfil CartPole queda en 20 iteraciones.
+
 - Experto CartPole: 53 s en CPU, WSL2 con 12 núcleos, para 50 000 pasos; medido
   el 16 de octubre.
 - Datos CartPole: 6 s en CPU, WSL2 con 12 núcleos, para 15 partidas, 7401 pasos
@@ -119,15 +140,14 @@ usan `disabled`.
   CPU; la segunda medición fue en el PC de 6 núcleos físicos y 7,9 GB de RAM
   disponible en WSL2.
 - `experimento.procesos` está en 5 para ese PC de 6 núcleos físicos.
-- El tiempo del barrido completo sigue pendiente de medir con las carpetas
-  congeladas y una sesión de W&B Cloud disponible.
 
 ## Reproducibilidad (presupuesto)
 
 Las semillas están en `configs/` y se inicializan en `src/utils/seed.py`; las
 dependencias tienen versiones exactas en `requirements.txt`. El smoke cumple el
-límite de 5 minutos en CPU. El barrido completo está pendiente de medir; TRPO
-usa CPU, así que una T4 no acelera estos entrenamientos.
+límite de 5 minutos en CPU. El entrenamiento BC/GAIL medido cumple el límite de
+20 minutos en CPU; la evaluación final de 50 episodios registró 293 s en W&B. TRPO usa
+CPU, así que una T4 no acelera estos entrenamientos.
 
 ## Decisiones donde el paper no especifica
 
