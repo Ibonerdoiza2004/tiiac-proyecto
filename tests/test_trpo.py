@@ -1110,7 +1110,8 @@ def test_get_data_busca_el_artefacto_del_experto_por_huella(
     monkeypatch.setattr("src.training.flujo.abrir_run",
                         lambda *a, **k: nombres.append(k["nombre"]) or run)
     monkeypatch.setattr("src.training.flujo.registrar_resumen", lambda *a: None)
-    monkeypatch.setattr("src.training.flujo.subir_artefacto", lambda *a: None)
+    subidas = []
+    monkeypatch.setattr("src.training.flujo.subir_artefacto", lambda *a: subidas.append(a))
     monkeypatch.setattr("src.training.flujo.terminar_run", lambda *a: None)
     monkeypatch.setattr("src.training.flujo.avisar_estado_git", lambda *a: None)
     monkeypatch.setattr("src.utils.tracking.comprobar_wandb",
@@ -1126,6 +1127,7 @@ def test_get_data_busca_el_artefacto_del_experto_por_huella(
                                      "--salida", str(salida), "--grupo", "grupo-distinto"])
     assert script.main() == 0
     assert run.usados == [(nombre_esperado, "experto")]
+    assert subidas[0][1:3] == ("demostraciones-aaaaaaaaaaaa", "demostraciones")
     assert nombres == ["tiiac-datos-cartpole"]
 
 

@@ -10,10 +10,14 @@ import numpy as np
 import pytest
 import torch
 
-from src.utils.tracking import (abrir_run, abrir_run_barrido, comprobar_wandb,
-                                crear_grupo, descargar_artefacto, nombre_run, registrar,
-                                registrar_resumen, subir_artefacto, terminar_run,
-                                usar_artefacto)
+from src.utils.configuracion import resolver_configuracion
+from src.utils.tracking import (CARACTERES_HUELLA_ARTEFACTO, abrir_run, abrir_run_barrido,
+                                comprobar_wandb, crear_grupo, descargar_artefacto,
+                                nombre_artefacto, nombre_run, registrar, registrar_resumen,
+                                subir_artefacto, terminar_run, usar_artefacto)
+
+RAIZ = Path(__file__).resolve().parent.parent
+HUELLA = "0123456789abcdef" * 4
 
 
 def _cfg(modo: str = "online") -> dict:
@@ -159,6 +163,46 @@ def test_descargar_artefacto_sin_sesion_da_runtime_error(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "wandb", falso)
     with pytest.raises(RuntimeError, match="wandb login"):
         descargar_artefacto(_cfg("disabled"), "datos", tmp_path / "datos")
+
+
+@pytest.mark.parametrize("argumentos,esperado", [
+    (("experto", HUELLA, "CartPole-v1"), "experto-CartPole-v1-0123456789ab"),
+    (("demostraciones", HUELLA), "demostraciones-0123456789ab"),
+    (("bc", HUELLA, "CartPole-v1", 4, 2), "bc-CartPole-v1-c4-r2-0123456789ab"),
+    (("gail", HUELLA, "CartPole-v1", 10, 0), "gail-CartPole-v1-c10-r0-0123456789ab"),
+    (("gail", HUELLA, "CartPole-v1", np.int64(1), np.int64(3)),
+     "gail-CartPole-v1-c1-r3-0123456789ab"),
+])
+def test_nombre_artefacto_de_cada_tipo(argumentos, esperado):
+    """Los cuatro tipos de artefacto siguen el formato <tipo>[-entorno][-cN-rM]-<huella corta>."""
+    assert nombre_artefacto(*argumentos) == esperado
+    assert esperado.endswith("-" + HUELLA[:CARACTERES_HUELLA_ARTEFACTO])
+
+
+def test_nombre_artefacto_reproduce_los_artefactos_congelados():
+    """Regresión: cambiar el formato o la longitud dejaría sin encontrar los congelados."""
+    cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
+    npz = "ce06866eff929b74d4a377fb9262d7d977a387636542777d14cb6addd9fb204b"  # README
+    assert (nombre_artefacto("experto", cfg["datos"]["huella_experto"], cfg["entorno"]["id"])
+            == cfg["datos"]["artefacto_experto"])
+    assert nombre_artefacto("demostraciones", npz) == cfg["datos"]["artefacto_demostraciones"]
+
+
+@pytest.mark.parametrize("huella", [
+    None, 123, "", HUELLA[:CARACTERES_HUELLA_ARTEFACTO], HUELLA + "0", HUELLA.upper(),
+    "g" * 64,
+])
+def test_nombre_artefacto_rechaza_huellas_que_no_son_sha256(huella):
+    """Una huella recortada, en mayúsculas o que no es hexadecimal no da nombre."""
+    with pytest.raises(ValueError, match="SHA-256"):
+        nombre_artefacto("experto", huella, "CartPole-v1")
+
+
+@pytest.mark.parametrize("cantidad,repeticion", [(4, None), (None, 0)])
+def test_nombre_artefacto_exige_cantidad_y_repeticion_juntas(cantidad, repeticion):
+    """Sin la otra mitad, dos modelos distintos podrían compartir nombre."""
+    with pytest.raises(ValueError, match="juntas"):
+        nombre_artefacto("bc", HUELLA, "CartPole-v1", cantidad, repeticion)
 
 
 def test_registrar_solo_envia_metricas_escalares():

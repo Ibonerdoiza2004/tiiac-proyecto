@@ -28,9 +28,9 @@ from src.utils.archivos import (comprobar_directorio_libre, escribir_archivo_nue
                                 escribir_carpeta_nueva)
 from src.utils.procedencia import (a_json, avisar_estado_git, estado_git, ruta_registrada,
                                    versiones_y_hardware)
-from src.utils.tracking import (abrir_run, comprobar_wandb, descargar_artefacto, nombre_run,
-                                registrar_resumen, subir_artefacto, terminar_run,
-                                usar_artefacto)
+from src.utils.tracking import (abrir_run, comprobar_wandb, descargar_artefacto,
+                                nombre_artefacto, nombre_run, registrar_resumen,
+                                subir_artefacto, terminar_run, usar_artefacto)
 from src.utils.validacion import es_entero_positivo
 
 
@@ -59,7 +59,7 @@ def entrenar_y_guardar_experto(cfg: dict, salida: Path, grupo: str) -> dict[str,
         registrar_resumen(run, resumen)
         if run is not None:
             huella_modelo = huella_archivo(salida / "modelo.zip")
-            subir_artefacto(run, f"experto-{cfg['entorno']['id']}-{huella_modelo[:12]}",
+            subir_artefacto(run, nombre_artefacto("experto", huella_modelo, cfg["entorno"]["id"]),
                             "experto", [salida / "modelo.zip", salida / "experto.json"],
                             {"entorno": cfg["entorno"]["id"], "huella_modelo": huella_modelo})
     except BaseException as error:
@@ -98,8 +98,8 @@ def generar_y_registrar_datos(cfg: dict, experto: Path, salida: Path, grupo: str
     try:
         if run is not None and cfg.get("wandb", {}).get("modo") == "online":
             huella_modelo = metadatos["experto"]["huella_modelo"]
-            usar_artefacto(run, f"experto-{cfg['entorno']['id']}-{huella_modelo[:12]}:latest",
-                           "experto")
+            usar_artefacto(run, nombre_artefacto("experto", huella_modelo, cfg["entorno"]["id"])
+                           + ":latest", "experto")
         inicio = time.perf_counter()
         resultado = generar_dataset(cfg, politica, salida, metadatos)
         resultado["segundos"] = time.perf_counter() - inicio
@@ -115,7 +115,7 @@ def generar_y_registrar_datos(cfg: dict, experto: Path, salida: Path, grupo: str
                                 "huella_dataset": resultado["huella_dataset"],
                                 "huella_splits": resultado["huella_splits"],
                                 "huella_partidas": resultado["huella_partidas"]})
-        subir_artefacto(run, f"demostraciones-{resultado['huella_dataset'][:12]}",
+        subir_artefacto(run, nombre_artefacto("demostraciones", resultado["huella_dataset"]),
                         "demostraciones", [resultado["demostraciones"], resultado["splits"]],
                         {k: resultado[k] for k in
                          ("huella_dataset", "huella_splits", "huella_partidas")})
@@ -194,6 +194,69 @@ def cargar_agentes(cfg: dict, experto: Path | None, bc: Path | None, gail: Path 
     return agentes, next(iter(huellas), None)
 
 
+def _evaluar_en_procesos(cfg: dict, agentes: Sequence[dict[str, Any]],
+                         procesos: int) -> list[dict[str, Any]]:
+    """Evalúa cada agente desde disco en procesos y devuelve sus filas en el orden de entrada.
+
+    Raises:
+        ValueError: Si falla la evaluación de algún agente.
+    """
+    por_indice: dict[int, dict[str, Any]] = {}
+
+    def guardar(resultado: ResultadoTarea) -> None:
+        """Guarda el resultado de cada agente por su índice de entrada."""
+        indice, _, resumen, error = resultado
+        if error is None and resumen is not None:
+            por_indice[indice] = resumen
+
+    tareas = [(indice, 0) for indice in range(len(agentes))]
+    fallidos = ejecutar_barrido(
+        tareas, min(procesos, len(tareas)), evaluar_agente_guardado,
+        lambda indice, _: (cfg, agentes[indice]["metodo"], agentes[indice]["ruta"]),
+        guardar)
+    if fallidos:
+        raise ValueError(f"falló la evaluación de los agentes {[i for i, _ in fallidos]}")
+    return [{"metodo": entrada["metodo"], "cantidad": entrada["cantidad"],
+             "repeticion": entrada["repeticion"],
+             "ruta": None if entrada["ruta"] is None else ruta_registrada(entrada["ruta"]),
+             **por_indice[indice]}
+            for indice, entrada in enumerate(agentes)]
+
+
+def _artefacto_de_agente(cfg: dict, entrada: dict[str, Any]) -> tuple[str, str] | None:
+    """Nombre (última versión) y tipo del artefacto W&B de un agente; None si no tiene."""
+    metodo = entrada["metodo"]
+    if metodo not in ("experto", "bc", "gail"):
+        return None
+    ruta = Path(entrada["ruta"])
+    huella = huella_archivo(ruta if metodo == "bc" else ruta / "modelo.zip")
+    nombre = nombre_artefacto(metodo, huella, cfg["entorno"]["id"], entrada["cantidad"],
+                              entrada["repeticion"])
+    return f"{nombre}:latest", metodo
+
+
+def _registrar_comparacion(run: Any, cfg: dict, agentes: Sequence[dict[str, Any]],
+                           resultados: Sequence[dict[str, Any]]) -> None:
+    """Declara en W&B los modelos evaluados y registra las tablas de comparación y episodios."""
+    wandb = comprobar_wandb(cfg)
+    if cfg.get("wandb", {}).get("modo") == "online":
+        for entrada in agentes:
+            artefacto = _artefacto_de_agente(cfg, entrada)
+            if artefacto is not None:
+                usar_artefacto(run, *artefacto)
+    columnas = ["metodo", "cantidad", "repeticion", "retorno_medio",
+                "retorno_desviacion", "longitud_media"]
+    tabla = wandb.Table(columns=columnas)
+    episodios = wandb.Table(columns=["metodo", "cantidad", "repeticion", "episodio",
+                                     "retorno", "longitud"])
+    for fila in resultados:
+        tabla.add_data(*(fila.get(k) for k in columnas))
+        for indice, (retorno, longitud) in enumerate(zip(fila["retornos"], fila["longitudes"])):
+            episodios.add_data(fila["metodo"], fila["cantidad"], fila["repeticion"],
+                               indice, retorno, longitud)
+    run.log({"comparacion": tabla, "episodios": episodios})
+
+
 def evaluar_y_guardar(cfg: dict, agentes: Sequence[dict[str, Any]], huella: str | None,
                       salida: Path, grupo: str) -> list[dict[str, Any]]:
     """Evalúa agentes en procesos y registra JSON y comparación con el protocolo común.
@@ -228,30 +291,7 @@ def evaluar_y_guardar(cfg: dict, agentes: Sequence[dict[str, Any]], huella: str 
                     nombre=nombre_run(cfg, "comparacion"),
                     etiquetas=[f"entorno:{cfg['entorno']['id']}", "metodo:comparacion"])
     try:
-        por_indice: dict[int, dict[str, Any]] = {}
-
-        def guardar(resultado: ResultadoTarea) -> None:
-            """Guarda el resultado de cada agente por su índice de entrada."""
-            indice, _, resumen, error = resultado
-            if error is None and resumen is not None:
-                por_indice[indice] = resumen
-
-        tareas = [(indice, 0) for indice in range(len(agentes))]
-        fallidos = ejecutar_barrido(
-            tareas, min(int(cfg["experimento"]["procesos"]), len(tareas)),
-            evaluar_agente_guardado,
-            lambda indice, _: (cfg, agentes[indice]["metodo"], agentes[indice]["ruta"]),
-            guardar)
-        if fallidos:
-            raise ValueError(f"falló la evaluación de los agentes {[i for i, _ in fallidos]}")
-
-        resultados: list[dict[str, Any]] = []
-        for indice, entrada in enumerate(agentes):
-            ruta = entrada["ruta"]
-            resultados.append({"metodo": entrada["metodo"], "cantidad": entrada["cantidad"],
-                                "repeticion": entrada["repeticion"],
-                                "ruta": None if ruta is None else ruta_registrada(ruta),
-                                **por_indice[indice]})
+        resultados = _evaluar_en_procesos(cfg, agentes, int(procesos))
         segundos = time.perf_counter() - inicio
         texto = json.dumps({"entorno": cfg["entorno"]["id"], "protocolo": protocolo,
                             "huella_dataset": huella, "segundos": segundos,
@@ -261,34 +301,7 @@ def evaluar_y_guardar(cfg: dict, agentes: Sequence[dict[str, Any]], huella: str 
         escribir_archivo_nuevo(
             salida, lambda temporal: temporal.write_text(texto, encoding="utf-8"))
         if run is not None:
-            wandb = comprobar_wandb(cfg)
-            if cfg.get("wandb", {}).get("modo") == "online":
-                for entrada in agentes:
-                    metodo = entrada["metodo"]
-                    if metodo == "experto":
-                        huella_modelo = huella_archivo(Path(entrada["ruta"]) / "modelo.zip")
-                        usar_artefacto(
-                            run, f"experto-{cfg['entorno']['id']}-{huella_modelo[:12]}:latest",
-                            "experto")
-                    elif metodo in ("bc", "gail"):
-                        ruta_modelo = (Path(entrada["ruta"]) if metodo == "bc"
-                                       else Path(entrada["ruta"]) / "modelo.zip")
-                        huella_modelo = huella_archivo(ruta_modelo)
-                        nombre = (f"{metodo}-{cfg['entorno']['id']}-c{entrada['cantidad']}-"
-                                  f"r{entrada['repeticion']}-{huella_modelo[:12]}:latest")
-                        usar_artefacto(run, nombre, metodo)
-            columnas = ["metodo", "cantidad", "repeticion", "retorno_medio",
-                        "retorno_desviacion", "longitud_media"]
-            tabla = wandb.Table(columns=columnas)
-            episodios = wandb.Table(columns=["metodo", "cantidad", "repeticion", "episodio",
-                                             "retorno", "longitud"])
-            for fila in resultados:
-                tabla.add_data(*(fila.get(k) for k in columnas))
-                for indice, (retorno, longitud) in enumerate(
-                        zip(fila["retornos"], fila["longitudes"])):
-                    episodios.add_data(fila["metodo"], fila["cantidad"], fila["repeticion"],
-                                       indice, retorno, longitud)
-            run.log({"comparacion": tabla, "episodios": episodios})
+            _registrar_comparacion(run, cfg, agentes, resultados)
         registrar_resumen(run, {"entorno": cfg["entorno"]["id"],
                                 "episodios": protocolo["episodios"],
                                 "semilla": protocolo["semilla"], "segundos": segundos,

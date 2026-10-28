@@ -36,7 +36,12 @@ from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
 
 
 def main() -> int:
-    """Ejecuta el experimento (o el smoke, o solo evaluación) y devuelve su código."""
+    """Ejecuta el experimento (o el smoke, o solo evaluación) y devuelve su código.
+
+    Returns:
+        0 si todo va bien; 1 si falla algún entrenamiento; 2 si la configuración, los
+        datos o la salida no son válidos; 130 si se interrumpe con Ctrl+C.
+    """
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
@@ -67,6 +72,8 @@ def main() -> int:
         return 2
     grupo = args.grupo or crear_grupo()
     print(f"grupo W&B: {grupo}")
+    # Un hilo, como cada proceso del barrido: con varios cambia el redondeo y los
+    # modelos saldrían distintos en serie y en paralelo.
     torch.set_num_threads(1)
 
     try:

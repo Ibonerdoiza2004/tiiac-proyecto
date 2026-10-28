@@ -221,7 +221,12 @@ def test_entrenar_y_guardar_bc_sigue_si_falta_artefacto_y_nombra_por_huella(
         pass
 
     class RunConArtefactoAusente(_RunFalso):
+        def __init__(self) -> None:
+            super().__init__()
+            self.usados: list[str] = []
+
         def use_artifact(self, nombre, type):
+            self.usados.append(nombre)
             raise ValueError("artifact not found")
 
     cfg = _cfg()
@@ -241,6 +246,7 @@ def test_entrenar_y_guardar_bc_sigue_si_falta_artefacto_y_nombra_por_huella(
     assert run.codigos == [0]
     assert "se sigue sin registrar el linaje" in capsys.readouterr().err
     assert subidas[0][0][1] == f"bc-CartPole-v1-c1-r0-{huella[:12]}"
+    assert run.usados == [f"demostraciones-{datos['huella_dataset'][:12]}:latest"]
     assert subidas[0][0][4]["huella_modelo"] == huella
 
 

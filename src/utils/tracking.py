@@ -16,9 +16,15 @@ from typing import Any
 
 _ULTIMOS_PASOS: dict[int, tuple[Any, int]] = {}
 
+# Caracteres de la huella SHA-256 que lleva el nombre de un artefacto; los nombres
+# congelados de configs/ (datos.artefacto_*) siguen esta longitud.
+CARACTERES_HUELLA_ARTEFACTO = 12
+# Segundos que espera wandb.login antes de rendirse, para no bloquear el arranque sin red.
+ESPERA_SESION = 10
+
 
 def crear_grupo() -> str:
-    """Crea un identificador corto para agrupar una ejecución completa."""
+    """Crea un identificador de 12 caracteres hexadecimales para agrupar una ejecución."""
     return uuid.uuid4().hex[:12]
 
 
@@ -48,7 +54,7 @@ def comprobar_wandb(cfg: dict, exigir_sesion: bool = False) -> Any | None:
         raise RuntimeError("wandb está activo, pero el paquete wandb no está instalado") from error
     if exigir_sesion and cfg.get("wandb", {}).get("modo", "online") == "online":
         try:
-            sesion = wandb.login(anonymous="never", timeout=10, verify=True)
+            sesion = wandb.login(anonymous="never", timeout=ESPERA_SESION, verify=True)
         except Exception as error:  # noqa: BLE001 - W&B envuelve errores de red y credenciales
             raise RuntimeError(f"no se pudo validar la sesión de W&B: {error}") from error
         if not sesion:
@@ -130,6 +136,34 @@ def registrar_resumen(run: Any | None, resumen: dict[str, Any]) -> None:
 
         summary.update({**resumen, "codigo": estado_git(),
                         "entorno_ejecucion": versiones_y_hardware()})
+
+
+def nombre_artefacto(tipo: str, huella: str, entorno: str | None = None,
+                     cantidad: int | None = None, repeticion: int | None = None) -> str:
+    """Nombre de un artefacto: <tipo>[-<entorno>][-c<cantidad>-r<repeticion>]-<huella corta>.
+
+    Args:
+        tipo: experto, demostraciones, bc o gail.
+        huella: SHA-256 del archivo que identifica el artefacto.
+        entorno: Id del entorno; las demostraciones no lo llevan.
+        cantidad: Subconjunto de BC y GAIL; va siempre con repeticion.
+        repeticion: Repetición de BC y GAIL; va siempre con cantidad.
+
+    Returns:
+        El nombre sin versión, con los primeros CARACTERES_HUELLA_ARTEFACTO de la huella.
+
+    Raises:
+        ValueError: Si la huella no es un SHA-256 o solo se da cantidad o repetición.
+    """
+    from src.data.splits import comprobar_huella
+
+    comprobar_huella(huella)
+    if (cantidad is None) != (repeticion is None):
+        raise ValueError("cantidad y repeticion van juntas en el nombre de un artefacto")
+    partes = [tipo] + ([entorno] if entorno is not None else [])
+    if cantidad is not None:
+        partes += [f"c{cantidad}", f"r{repeticion}"]
+    return "-".join([*partes, huella[:CARACTERES_HUELLA_ARTEFACTO]])
 
 
 def subir_artefacto(run: Any | None, nombre: str, tipo: str,

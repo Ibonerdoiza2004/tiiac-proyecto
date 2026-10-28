@@ -53,8 +53,8 @@ from src.training.trpo import (config_trpo, crear_trpo, estadisticas_normalizaci
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
-from src.utils.tracking import (RegistroProgreso, abrir_run_barrido, registrar,
-                                registrar_resumen, subir_artefacto, terminar_run,
+from src.utils.tracking import (RegistroProgreso, abrir_run_barrido, nombre_artefacto,
+                                registrar, registrar_resumen, subir_artefacto, terminar_run,
                                 usar_artefacto)
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
@@ -973,15 +973,16 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
                                 cfg["trpo"]["pasos_por_iteracion"], cfg["gail"]["iteraciones"])
     try:
         if cfg.get("wandb", {}).get("modo") == "online":
-            usar_artefacto(run, f"demostraciones-{datos['huella_dataset'][:12]}:latest")
+            usar_artefacto(run, nombre_artefacto("demostraciones", datos["huella_dataset"])
+                           + ":latest")
         agente, discriminador, resumen = entrenar_gail(cfg, trayectorias, splits, cantidad,
                                                        repeticion, progreso)
         guardar_gail(destino, agente, discriminador, cfg, resumen, datos)
         registrar_resumen(run, {**resumen, **datos})
         if run is not None:
             huella_modelo = huella_archivo(destino / "modelo.zip")
-            subir_artefacto(run, f"gail-{cfg['entorno']['id']}-c{cantidad}-r{repeticion}-"
-                            f"{huella_modelo[:12]}", "gail",
+            subir_artefacto(run, nombre_artefacto("gail", huella_modelo, cfg["entorno"]["id"],
+                                                  cantidad, repeticion), "gail",
                             [destino / "modelo.zip", destino / "discriminador.pt",
                              destino / "gail.json"],
                             {"cantidad": cantidad, "repeticion": repeticion,

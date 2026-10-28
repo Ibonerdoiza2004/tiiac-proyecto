@@ -2135,6 +2135,36 @@ def test_un_entrenamiento_fallido_se_cierra_como_fallido_en_wandb(fallo, error, 
     assert run.cierres == [codigo]  # se cierra una sola vez
 
 
+def test_entrenar_y_guardar_gail_enlaza_sus_demostraciones_por_huella(monkeypatch, tmp_path):
+    """En online, el run de GAIL declara como entrada el artefacto de su NPZ."""
+    from types import SimpleNamespace
+
+    from src.training.gail import entrenar_y_guardar_gail
+
+    class CommError(Exception):
+        pass
+
+    run = _RunCerrable()
+    usados = []
+    run.use_artifact = lambda nombre, type: usados.append((nombre, type))
+    cfg = _cfg_script()
+    cfg["wandb"]["modo"] = "online"
+    monkeypatch.setattr("src.utils.tracking.abrir_run", lambda cfg, **_: run)
+    monkeypatch.setattr("src.utils.tracking.comprobar_wandb",
+                        lambda cfg: SimpleNamespace(errors=SimpleNamespace(CommError=CommError)))
+    monkeypatch.setattr("src.training.gail.subir_artefacto", lambda *a: None)
+    monkeypatch.setattr("src.training.gail.entrenar_gail", lambda *_: _resumen_falso())
+
+    def guardar(destino, *_):
+        destino.mkdir(parents=True)
+        (destino / "modelo.zip").write_bytes(b"modelo")
+
+    monkeypatch.setattr("src.training.gail.guardar_gail", guardar)
+    entrenar_y_guardar_gail(cfg, [], None, 4, 0, tmp_path / "destino",
+                            {"huella_dataset": "0123456789abcdef" * 4})
+    assert usados == [("demostraciones-0123456789ab:latest", "demostraciones")]
+
+
 @pytest.mark.parametrize("caso,mensaje", [
     ("salida_ocupada", "elige otra --salida"),
     ("sin_datos", "error con los datos"),
