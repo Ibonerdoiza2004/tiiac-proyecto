@@ -384,12 +384,6 @@ def cargar_politica_bc(ruta: Path) -> tuple[PoliticaBC, dict[str, Any]]:
     return politica, metadatos
 
 
-def _describir_bc(resumen: dict[str, Any]) -> str:
-    """Resume la época elegida, los pares usados y el tiempo de entrenamiento."""
-    return (f"mejor época {resumen['mejor_epoca']} de {resumen['epocas']}; "
-            f"{resumen['pares_train']} pares de train en {resumen['segundos']:.0f} s")
-
-
 def comprobar_config_barrido_bc(cfg: dict) -> None:
     """Comprueba la configuración del barrido de BC antes de entrenar nada.
 
@@ -472,13 +466,3 @@ def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
         raise
     terminar_run(run)
     return resumen
-
-
-from src.training.barrido import MetodoBarrido  # noqa: E402
-
-METODO_BC = MetodoBarrido(
-    nombre="bc", comprobar_config=comprobar_config_barrido_bc,
-    tarea=entrenar_y_guardar_bc,
-    destino=lambda salida, c, r: salida / f"cantidad_{c}" / f"repeticion_{r}.pt",
-    describir=_describir_bc,
-)

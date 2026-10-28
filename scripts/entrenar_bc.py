@@ -28,17 +28,30 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
-from src.training.barrido import main_barrido  # noqa: E402
-from src.training.bc import METODO_BC  # noqa: E402
+from src.training.barrido import MetodoBarrido, main_barrido  # noqa: E402
+from src.training.bc import comprobar_config_barrido_bc, entrenar_y_guardar_bc  # noqa: E402
+
+
+def _describir(resumen: dict[str, Any]) -> str:
+    """Mejor época, pares de train y tiempo medido de un entrenamiento."""
+    return (f"mejor época {resumen['mejor_epoca']} de {resumen['epocas']}; "
+            f"{resumen['pares_train']} pares de train en {resumen['segundos']:.0f} s")
+
+
+BC = MetodoBarrido(nombre="bc", comprobar_config=comprobar_config_barrido_bc,
+                   tarea=entrenar_y_guardar_bc,
+                   destino=lambda salida, c, r: salida / f"cantidad_{c}" / f"repeticion_{r}.pt",
+                   describir=_describir)
 
 
 def main() -> int:
     """Entrena y guarda cada BC elegido; devuelve el código de salida (main_barrido)."""
-    return main_barrido(METODO_BC, __doc__)
+    return main_barrido(BC, __doc__)
 
 
 if __name__ == "__main__":

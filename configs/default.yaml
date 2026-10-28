@@ -21,10 +21,9 @@ experimento:
 
 datos:
   raiz: data/
-  # Los fija el perfil de cada entorno con los datos congelados.
-  demostraciones: null
-  experto: null
-  huella_partidas: null
+  subset: 0              # 0 = dataset completo; un entero positivo = N muestras
+  batch_size: 64
+  num_workers: 2
 
 modelo:
   nombre: mi_modelo
@@ -145,6 +144,12 @@ evaluacion:
   episodios: 50  # Código original de GAIL; las semillas se comparten entre agentes.
   semilla: 9000  # Independiente de entrenamiento y demostraciones.
   determinista: true  # Como evalúa el original las políticas aprendidas.
+
+entrenamiento:
+  learning_rate: 0.001
+  epochs: 20
+  max_steps: 0              # 0 = sin límite; el smoke lo reduce
+  optimizador: adam
 
 wandb:
   proyecto: tiiac-proyecto
