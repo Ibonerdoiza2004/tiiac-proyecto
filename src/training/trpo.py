@@ -400,7 +400,6 @@ def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
             archivo.write(texto)
         modelo.save(carpeta / _ARCHIVO_MODELO)
 
-    # Si falla al escribir (disco lleno, Ctrl+C), no queda una carpeta a medias.
     escribir_carpeta_nueva(directorio, escribir)
 
 

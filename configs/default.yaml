@@ -3,7 +3,6 @@
 
 experimento:
   nombre: tiiac  # Prefijo de los nombres de los runs de W&B.
-  seed: 42
   # Repeticiones de BC y GAIL por cada subconjunto, con semillas de modelo
   # distintas (codigo original: runs 7 en los entornos clasicos, 1 en MuJoCo).
   repeticiones: 7
@@ -20,7 +19,6 @@ experimento:
   semilla_repeticiones: 3000
 
 datos:
-  raiz: data/
   # Los fija el perfil de cada entorno con los datos congelados.
   demostraciones: null
   experto: null
@@ -29,9 +27,9 @@ datos:
   artefacto_demostraciones: null
   artefacto_experto: null
 
+# Solo lo usa el esqueleto del aplicativo (src/app/serve.py) hasta la E2.
 modelo:
   nombre: mi_modelo
-  # ... los del paper. Cada valor deberia poder senyalarse en la ficha de replicacion.
 
 entorno:
   id: null

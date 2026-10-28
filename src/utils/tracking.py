@@ -78,7 +78,7 @@ def abrir_run(cfg: dict, grupo: str | None = None, job_type: str | None = None,
     if wandb is None:
         return None
     return wandb.init(
-        project=wcfg.get("proyecto", "tiiac-2026"),
+        project=wcfg["proyecto"],
         entity=wcfg.get("entidad") or None,
         name=nombre or cfg["experimento"]["nombre"],
         config=cfg,

@@ -35,7 +35,7 @@ trpo:
   normalizar_observaciones: false  # Elección propia: en CartPole no hace falta.
   batch_size_valor: 250  # Divide los 5000 pasos de cada iteración.
 experto:
-  pasos_totales: 100000  # Presupuesto inicial elegido para el proyecto; falta medir.
+  pasos_totales: 100000  # Presupuesto máximo elegido; el congelado llegó a 500 en 60 000.
   # Elección propia: máximo de CartPole-v1 (el umbral de Gymnasium es 475), como el
   # experto perfecto del paper (200 ± 0 en CartPole-v0, tabla 1).
   retorno_objetivo: 500
@@ -49,6 +49,6 @@ gail:
   # (cuts_off_on_success: false en im_classic_pipeline.yaml).
   recompensa: menos_log_uno_menos_d
 evaluacion:
-  episodios: 50  # Protocolo común fijado por la rama evaluacion-checkpoints.
+  episodios: 50  # Código original de GAIL.
   semilla: 9000
   determinista: true  # Como evalúa el original las políticas aprendidas.

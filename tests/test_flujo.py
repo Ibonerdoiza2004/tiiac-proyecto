@@ -6,12 +6,10 @@ import copy
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
 import yaml
 
-from src.data.demostraciones import generar_dataset
 from src.data.splits import huella_archivo
 from src.training.flujo import (comprobar_datos_congelados, ejecutar_experimento,
                                 evaluar_carpeta,

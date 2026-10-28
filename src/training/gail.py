@@ -47,7 +47,7 @@ from src.data.loaders import pares_de_subconjunto, tensores_de_pares
 from src.data.splits import SplitsDemostraciones, huella_archivo
 from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, comprobar_arquitectura, construir_discriminador
-from src.training.barrido import comprobar_config_comun
+from src.training.barrido import MetodoBarrido, comprobar_config_comun
 from src.training.trpo import (config_trpo, crear_trpo, estadisticas_normalizacion,
                                evaluar_retorno, iteracion_trpo)
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
@@ -901,7 +901,6 @@ def guardar_gail(directorio: Path, agente: TRPO, discriminador: Discriminador, c
         torch.save(discriminador.state_dict(), carpeta / _ARCHIVO_DISCRIMINADOR)
         agente.save(carpeta / _ARCHIVO_MODELO)
 
-    # Si falla al escribir (disco lleno, Ctrl+C), no queda una carpeta a medias.
     escribir_carpeta_nueva(directorio, escribir)
 
 
@@ -988,7 +987,6 @@ def entrenar_y_guardar_gail(cfg: dict, trayectorias: Sequence[Trayectoria],
                             {"cantidad": cantidad, "repeticion": repeticion,
                              "huella_modelo": huella_modelo, **datos})
     except BaseException as error:
-        # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
         terminar_run(run, error)
         raise
     terminar_run(run)
@@ -1001,8 +999,6 @@ def _describir_gail(resumen: dict[str, Any]) -> str:
     return (f"retorno de validación {ultima['retorno_medio']:.1f} en la iteración "
             f"{ultima['iteracion']}; {resumen['pasos']} pasos en {resumen['segundos']:.0f} s")
 
-
-from src.training.barrido import MetodoBarrido  # noqa: E402
 
 METODO_GAIL = MetodoBarrido(
     nombre="gail", comprobar_config=comprobar_config_barrido,
