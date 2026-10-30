@@ -237,12 +237,13 @@ Con los datos congelados y la configuración actual:
 | Medición | Tiempo | Hardware | Fecha |
 |---|---|---|---|
 | Smoke (`run.py --smoke`, dentro del checker) | 5 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-30 |
-| Experimento completo (`run.py --entorno cartpole`): 20 BC, 20 GAIL de 20 iteraciones y evaluación | Pendiente de medir con `time` | — | — |
+| Experimento completo (`time python run.py --entorno cartpole --grupo entrega-e1 --descargar`, online): 20 BC, 20 GAIL de 20 iteraciones y evaluación | 7 min 13 s, de ellos 67 s de evaluación (resumen de W&B) | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, 5 procesos, sin GPU | 2026-10-30 |
 | Experto congelado (60 000 pasos, parada al llegar a 500) | 14 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-30 |
 | Demostraciones congeladas (15 partidas, 7500 pasos) | 1,7 s | Linux (WSL2), misma máquina | 2026-10-30 |
 
-El *Runtime* que muestra W&B en una fila agrupada resume los runs del grupo y no
-equivale al tiempo de la ejecución.
+La ejecución de 7 min 13 s es el grupo `entrega-e1` de W&B (run de comparación
+`r6oajx1r`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
+del grupo y no equivale al tiempo de la ejecución.
 
 Mediciones anteriores, con otros datos congelados o con otra configuración:
 
@@ -263,8 +264,8 @@ entrenamiento usa un solo hilo de PyTorch, así que en la misma máquina da el
 mismo resultado en serie y en paralelo.
 
 - **Smoke:** 5 s en CPU, muy por debajo de los 5 minutos.
-- **Experimento completo:** pendiente de medir en Linux con los datos actuales;
-  con los anteriores tardó 17 min 32 s en CPU (tabla anterior). TRPO,
+- **Experimento completo:** 7 min 13 s en CPU con los datos actuales (tabla
+  anterior), por debajo de los 20 minutos. TRPO,
   las políticas y el discriminador se ejecutan en CPU (`device="cpu"`), así que
   una GPU no acelera estos entrenamientos.
 - **Pendiente:** medirlo en una T4 de Colab gratuito o dejar aquí la
