@@ -56,8 +56,8 @@ que ser de una cuenta con acceso a la organización
 python run.py --entorno cartpole --descargar --grupo <nombre>
 ```
 
-Descarga de W&B el experto y las demostraciones congelados, comprueba sus
-huellas, entrena 20 BC y 20 GAIL (subconjuntos de 1, 4, 7 y 10 partidas,
+Descarga de W&B el experto y las demostraciones congelados (si no están ya en
+local), comprueba sus huellas, entrena 20 BC y 20 GAIL (subconjuntos de 1, 4, 7 y 10 partidas,
 5 repeticiones), evalúa los 42 agentes (experto, aleatorio, BC y GAIL) con
 50 episodios cada uno e imprime una línea de métricas por agente.
 
@@ -99,7 +99,7 @@ Códigos de salida:
 |---|---|
 | 0 | Todo correcto. |
 | 1 | Falló algún entrenamiento; los demás terminan, pero no se evalúa. |
-| 2 | La configuración, los datos, la salida o la sesión de W&B no son válidos. No se entrena nada. |
+| 2 | La configuración, los datos, la salida o la sesión de W&B no son válidos (se comprueban antes de entrenar), o falló la evaluación. |
 | 130 | Interrumpido con Ctrl+C. |
 
 ## El smoke
@@ -182,7 +182,10 @@ python scripts/get_data.py --entorno cartpole --experto checkpoints/expertos/car
 validación, separadas por trayectoria), guarda `demostraciones.npz` y
 `splits.json` con subconjuntos de train de 1, 4, 7 y 10 partidas e imprime las
 huellas. Con `--huella-esperada` comprueba si las partidas coinciden con las
-congeladas. Las semillas salen de `configs/`, pero en otra plataforma el
+congeladas. Comprobado el 2026-10-30: en la misma máquina, un experto
+reentrenado desde cero graba exactamente las mismas partidas (el NPZ y los
+splits cambian de bytes porque sus metadatos citan el experto, pero no la huella
+de las partidas). Las semillas salen de `configs/`, pero en otra plataforma el
 redondeo puede cambiar las acciones del experto y, con ellas, las partidas: los
 mismos datos generados en Windows con Python 3.13 tenían otra huella. Si las
 huellas no coinciden, `run.py` rechaza esos datos; por eso el experimento parte
@@ -233,7 +236,7 @@ Con los datos congelados y la configuración actual:
 
 | Medición | Tiempo | Hardware | Fecha |
 |---|---|---|---|
-| Smoke (`run.py --smoke`, dentro del checker) | 5 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-28 |
+| Smoke (`run.py --smoke`, dentro del checker) | 5 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-30 |
 | Experimento completo (`run.py --entorno cartpole`): 20 BC, 20 GAIL de 20 iteraciones y evaluación | Pendiente de medir con `time` | — | — |
 | Experto congelado (60 000 pasos, parada al llegar a 500) | 14 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-30 |
 | Demostraciones congeladas (15 partidas, 7500 pasos) | 1,7 s | Linux (WSL2), misma máquina | 2026-10-30 |
