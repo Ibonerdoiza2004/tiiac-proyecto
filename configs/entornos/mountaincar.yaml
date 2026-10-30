@@ -1,0 +1,48 @@
+# Perfil de MountainCar. Tamaños del código original de GAIL (im_classic_pipeline.yaml),
+# repetidos aquí para que no cambien si cambia la base. Pendiente: congelar el experto y
+# las demostraciones y medir la regla 5/20.
+experimento:
+  repeticiones: 7  # Código original (runs).
+datos:
+  # Sin datos congelados todavía: ver «Añadir otro entorno» en el README.
+  demostraciones: pendiente
+  experto: pendiente
+  huella_partidas: pendiente
+  huella_experto: pendiente
+  artefacto_demostraciones: pendiente
+  artefacto_experto: pendiente
+demostraciones:
+  partidas_train: 10  # Código original (full_dataset_num_trajs); igual al subconjunto mayor.
+  partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.
+  subconjuntos: [1, 4, 7, 10]  # Código original (dataset_num_trajs).
+  frecuencia_pares: 5  # Código original (data_subsamp_freq).
+entorno:
+  id: MountainCar-v0  # Gymnasium; la misma versión que el original. 200 pasos por partida.
+trpo:
+  capas_ocultas: [100, 100]  # Paper Ho y Ermon (2016), sección 6.
+  activacion: tanh  # Paper Ho y Ermon (2016), sección 6.
+  gamma: 0.995  # Paper Ho y Ermon (2016), apéndice B.
+  gae_lambda: 0.97  # Paper Ho y Ermon (2016), apéndice B.
+  target_kl: 0.01  # Código original de GAIL (max_kl).
+  cg_damping: 0.1  # Código original de GAIL.
+  pasos_por_iteracion: 5000  # Código original (min_total_sa).
+  # Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración.
+  n_entornos: 10
+  normalizar_observaciones: true  # Como el original.
+  batch_size_valor: 250  # Divide los 5000 pasos de cada iteración.
+experto:
+  # Provisional, por medir: tope del entrenamiento, que para al alcanzar el objetivo.
+  pasos_totales: 1000000
+  retorno_objetivo: -110  # Umbral de Gymnasium (reward_threshold de MountainCar-v0).
+gail:
+  iteraciones: 300  # Paper, tabla 2 (el código original usa max_iter 301).
+  evaluar_cada: 10  # Elección propia, como en CartPole.
+  episodios_evaluacion: 10  # Elección propia; la evaluación final usa 50.
+  evaluacion_determinista: true  # Como evalúa el original las políticas aprendidas.
+  # Código original: log D, porque las partidas terminan al llegar a la meta
+  # (cuts_off_on_success: true en im_classic_pipeline.yaml).
+  recompensa: log_d
+evaluacion:
+  episodios: 50  # Código original de GAIL (eval_num_trajs).
+  semilla: 9000
+  determinista: true  # Como evalúa el original las políticas aprendidas.

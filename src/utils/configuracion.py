@@ -15,6 +15,38 @@ class TipoEntorno(str, Enum):
     """Entornos activos en el proyecto y el nombre de su perfil YAML."""
 
     CARTPOLE = "cartpole"
+    MOUNTAINCAR = "mountaincar"
+    ACROBOT = "acrobot"
+    REACHER = "reacher"
+    HALFCHEETAH = "halfcheetah"
+
+
+# Valor provisional de datos.* en el perfil de un entorno cuyo experto y demostraciones
+# todavía no están congelados: la configuración se resuelve y se pueden generar, pero el
+# experimento completo se niega a empezar hasta que se sustituya por los valores reales.
+DATOS_PENDIENTES = "pendiente"
+
+
+def dato_congelado(cfg: dict, clave: str) -> Any:
+    """Devuelve cfg["datos"][clave] si el perfil ya tiene su valor congelado.
+
+    Args:
+        cfg: Configuración resuelta.
+        clave: Clave de la sección datos (rutas, huellas o artefactos).
+
+    Returns:
+        El valor del perfil.
+
+    Raises:
+        ValueError: Si el valor sigue siendo DATOS_PENDIENTES.
+    """
+    valor = cfg["datos"][clave]
+    if valor == DATOS_PENDIENTES:
+        raise ValueError(
+            f"datos.{clave} sigue «{DATOS_PENDIENTES}» en el perfil de "
+            f"{cfg['entorno']['id']}: genera y congela el experto y las demostraciones "
+            "(ver «Datos» en el README) y pon sus valores en el perfil")
+    return valor
 
 
 def _leer_yaml(ruta: Path) -> dict[str, Any]:

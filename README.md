@@ -2,7 +2,9 @@
 
 Replicación educativa de **Generative Adversarial Imitation Learning** (Ho y
 Ermon, 2016), comparando GAIL y Behavioral Cloning con un experto TRPO y una
-política aleatoria. El primer entorno implementado es CartPole.
+política aleatoria. CartPole es el entorno con experto y datos congelados;
+MountainCar, Acrobot, Reacher y HalfCheetah tienen ya su perfil, a la espera de
+congelar los suyos (ver [Añadir otro entorno](#añadir-otro-entorno)).
 
 - Paper: [Generative Adversarial Imitation Learning](https://arxiv.org/abs/1606.03476)
 - Seguimiento de experimentos: [proyecto W&B `tiiac-proyecto`](https://wandb.ai/a-corral-universidad-de-deusto/tiiac-proyecto)
@@ -72,7 +74,7 @@ local), comprueba sus huellas, entrena 20 BC y 20 GAIL (subconjuntos de 1, 4, 7 
 
 | Argumento | Para qué sirve | Por defecto |
 |---|---|---|
-| `--entorno cartpole` | Perfil de entorno (`configs/entornos/<entorno>.yaml`). De momento solo existe `cartpole`. | `cartpole` |
+| `--entorno <nombre>` | Perfil de entorno (`configs/entornos/<nombre>.yaml`): `cartpole`, `mountaincar`, `acrobot`, `reacher` o `halfcheetah`. Solo `cartpole` tiene ya datos congelados. | `cartpole` |
 | `--config <yaml>` | Configuración base sobre la que se aplica el perfil. | `configs/default.yaml` |
 | `--smoke` | Ejecuta el flujo completo en miniatura (ver [El smoke](#el-smoke)). | — |
 | `--descargar` | Baja de W&B el experto y las demostraciones congelados que falten. Solo descarga en carpetas ausentes o vacías y nunca sobrescribe. | — |
@@ -195,6 +197,31 @@ Procedencia: datos propios generados en `CartPole-v1` de Gymnasium (licencia
 MIT). `configs/entornos/cartpole.yaml` (sección `datos`) fija las carpetas, las
 huellas y los artefactos congelados.
 
+### Añadir otro entorno
+
+1. Añadir su nombre a `TipoEntorno` en `src/utils/configuracion.py`; de ahí salen
+   las opciones de `--entorno`.
+2. Crear `configs/entornos/<nombre>.yaml` con todos los valores que
+   `configs/default.yaml` deja a `null`. Las seis claves de `datos` van con el
+   valor provisional `pendiente`, porque los datos todavía no existen.
+3. Comprobar el pipeline con `python run.py --smoke --entorno <nombre>`.
+4. Generar y congelar el experto y las demostraciones con los dos scripts de
+   arriba (`--entorno <nombre>`, `--salida` en las carpetas `congelado`) y
+   sustituir `pendiente` por sus rutas, huellas y artefactos.
+
+Mientras quede algún `pendiente`, se pueden ejecutar el smoke y los scripts, pero
+`run.py --entorno <nombre>` sale con código 2 y dice qué valor falta.
+
+MountainCar, Acrobot, Reacher y HalfCheetah ya tienen los pasos 1 a 3 hechos: perfil
+con los valores del código original de GAIL (`im_classic_pipeline.yaml` e
+`im_pipeline.yaml`, citados en cada YAML), `pendiente` en `datos` y smoke en verde.
+Reacher y HalfCheetah usan MuJoCo (`gymnasium[mujoco]` y `mujoco`, ya en
+`requirements.txt`). Falta el paso 4. La regla 5/20 se cumple con CartPole; estos
+entornos usan los tamaños del original y tardarán mucho más, sobre todo los de
+MuJoCo (500 iteraciones de 50 000 pasos), así que conviene medir su tiempo con
+`time`. Todos usan 10 entornos por proceso y `experimento.procesos: 5`; en MuJoCo,
+con 1 repetición, el barrido solo tiene 4 entrenamientos a la vez.
+
 ## Etapas por separado
 
 `run.py` encadena todo, pero cada etapa tiene su script. El primero imprime un
@@ -284,6 +311,9 @@ mismo resultado en serie y en paralelo.
 | Normalización de la entrada del discriminador | Fija con los pares expertos de train | El original la actualiza también con pares del agente |
 | Validación de partidas (paper: 70/30 de pares) | 10 partidas de train y 5 de validación, separadas por trayectoria | Evitar fugas entre episodios |
 | Parada de BC | Paciencia de 20 épocas sobre la pérdida de validación | El paper solo dice «hasta que deja de bajar» |
+| Retorno objetivo del experto | El umbral de Gymnasium (`reward_threshold`) de cada entorno | El código original no lo fija; es una fuente citable |
+| Versiones de Acrobot y HalfCheetah (original: v0 y v1) | `Acrobot-v1` y `HalfCheetah-v5` | Las del original ya no existen en Gymnasium |
+| Tamaños de Reacher | Los de los entornos MuJoCo del original | Reacher no aparece en los pipelines del código original |
 
 ## Estructura del repositorio
 

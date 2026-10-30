@@ -15,7 +15,7 @@ from src.training.flujo import (comprobar_datos_congelados, ejecutar_experimento
                                 evaluar_carpeta,
                                 generar_y_registrar_datos, obtener_datos_congelados,
                                 entrenar_y_guardar_experto)
-from src.utils.configuracion import resolver_configuracion
+from src.utils.configuracion import DATOS_PENDIENTES, resolver_configuracion
 
 RAIZ = Path(__file__).resolve().parents[1]
 
@@ -204,3 +204,33 @@ def test_cada_resultado_es_de_su_agente_en_serie_y_en_paralelo(tmp_path):
                                        tmp_path / f"eval-{procesos}.json", "t")
         assert [r["metodo"] for r in resultados] == [a["metodo"] for a in agentes]
         assert [r["retornos"] for r in resultados] == esperados
+
+
+@pytest.mark.parametrize("clave", ["huella_partidas", "huella_experto"])
+def test_comprobar_datos_congelados_avisa_del_perfil_pendiente_antes_que_de_las_carpetas(
+    tmp_path, clave
+):
+    """Sin datos todavía, la causa es el perfil pendiente, no las carpetas que faltan."""
+    cfg = _cfg()
+    cfg["datos"][clave] = DATOS_PENDIENTES
+    with pytest.raises(ValueError, match=rf"datos\.{clave} sigue «pendiente»"):
+        comprobar_datos_congelados(cfg, tmp_path / "no-existe", tmp_path / "tampoco")
+
+
+def test_obtener_datos_congelados_no_descarga_un_artefacto_pendiente(tmp_path, monkeypatch):
+    """Ni llama a W&B ni crea la carpeta; si ya está en local, no hace falta el nombre."""
+    cfg = _cfg()
+    cfg["datos"].update(artefacto_demostraciones=DATOS_PENDIENTES,
+                        artefacto_experto=DATOS_PENDIENTES)
+    llamadas = []
+    monkeypatch.setattr("src.training.flujo.descargar_artefacto",
+                        lambda *a: llamadas.append(a))
+    with pytest.raises(ValueError, match=r"datos\.artefacto_demostraciones sigue"):
+        obtener_datos_congelados(cfg, tmp_path / "datos", tmp_path / "experto")
+    assert llamadas == [] and not any(tmp_path.iterdir())
+
+    for carpeta in ("datos", "experto"):
+        (tmp_path / carpeta).mkdir()
+        (tmp_path / carpeta / "algo.txt").write_text("local", encoding="utf-8")
+    obtener_datos_congelados(cfg, tmp_path / "datos", tmp_path / "experto")
+    assert llamadas == []

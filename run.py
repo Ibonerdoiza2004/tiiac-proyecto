@@ -31,7 +31,11 @@ from src.training.flujo import (  # noqa: E402
     imprimir_resultados,
     obtener_datos_congelados,
 )
-from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
+from src.utils.configuracion import (  # noqa: E402
+    TipoEntorno,
+    dato_congelado,
+    resolver_configuracion,
+)
 from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
 
 
@@ -81,7 +85,7 @@ def main() -> int:
             if args.salida is None:
                 print("error: --solo-evaluar necesita --salida", file=sys.stderr)
                 return 2
-            experto = args.experto or Path(cfg["datos"]["experto"])
+            experto = args.experto or Path(dato_congelado(cfg, "experto"))
             resultado = evaluar_carpeta(cfg, args.salida, experto, grupo)
         elif args.smoke:
             with tempfile.TemporaryDirectory() as temporal:
@@ -92,8 +96,8 @@ def main() -> int:
                 generar_y_registrar_datos(cfg, experto, datos, grupo)
                 resultado = ejecutar_experimento(cfg, datos, experto, carpeta / "run", grupo)
         else:
-            datos = args.datos or Path(cfg["datos"]["demostraciones"])
-            experto = args.experto or Path(cfg["datos"]["experto"])
+            datos = args.datos or Path(dato_congelado(cfg, "demostraciones"))
+            experto = args.experto or Path(dato_congelado(cfg, "experto"))
             if args.descargar:
                 obtener_datos_congelados(cfg, datos, experto)
             comprobar_datos_congelados(cfg, datos, experto)

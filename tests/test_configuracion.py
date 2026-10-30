@@ -16,7 +16,8 @@ from src.data.loaders import construir_loaders_bc
 from src.data.splits import crear_splits
 from src.data.tipos import Trayectoria
 from src.models.factory import construir_politica_bc
-from src.utils.configuracion import TipoEntorno, resolver_configuracion
+from src.utils.configuracion import (DATOS_PENDIENTES, TipoEntorno, dato_congelado,
+                                     resolver_configuracion)
 from src.utils.seed import crear_generador
 
 RAIZ = Path(__file__).resolve().parents[1]
@@ -245,3 +246,57 @@ def test_la_semilla_de_las_repeticiones_esta_en_la_config():
     for repeticion in range(cfg["experimento"]["repeticiones"]):
         semillas_repeticion(semilla, repeticion)
 
+
+
+CLAVES_DATOS = ("demostraciones", "experto", "huella_partidas", "huella_experto",
+          "artefacto_demostraciones", "artefacto_experto")
+
+
+def test_un_perfil_con_datos_pendientes_se_resuelve():
+    """Con el marcador, un entorno nuevo puede entrenar su experto y grabar sus datos."""
+    cfg = resolver_configuracion(BASE, "cartpole",
+                                 {"datos": {c: DATOS_PENDIENTES for c in CLAVES_DATOS}})
+    assert all(cfg["datos"][clave] == DATOS_PENDIENTES for clave in CLAVES_DATOS)
+
+
+@pytest.mark.parametrize("clave", CLAVES_DATOS)
+def test_dato_congelado_devuelve_el_valor_real_y_rechaza_el_pendiente(clave):
+    cfg = resolver_configuracion(BASE, "cartpole")
+    assert dato_congelado(cfg, clave) == cfg["datos"][clave]
+    cfg["datos"][clave] = DATOS_PENDIENTES
+    with pytest.raises(ValueError, match=rf"datos\.{clave} sigue «pendiente».*CartPole-v1"):
+        dato_congelado(cfg, clave)
+
+
+@pytest.mark.parametrize("valor", ["Pendiente", "PENDIENTE", "pendiente ", "", None, 0])
+def test_dato_congelado_solo_reconoce_el_marcador_exacto(valor):
+    """Cualquier otro valor se devuelve tal cual: lo rechazarán las huellas o las rutas."""
+    cfg = resolver_configuracion(BASE, "cartpole")
+    cfg["datos"]["huella_experto"] = valor
+    assert dato_congelado(cfg, "huella_experto") == valor
+
+
+@pytest.mark.parametrize("entorno,gym_id,frecuencia,recompensa,subconjuntos,repeticiones,"
+                         "iteraciones,pasos", [
+    ("mountaincar", "MountainCar-v0", 5, "log_d", [1, 4, 7, 10], 7, 300, 5000),
+    ("acrobot", "Acrobot-v1", 5, "log_d", [1, 4, 7, 10], 7, 300, 5000),
+    ("reacher", "Reacher-v5", 20, "menos_log_uno_menos_d", [4, 11, 18, 25], 1, 500, 50000),
+    ("halfcheetah", "HalfCheetah-v5", 20, "menos_log_uno_menos_d", [4, 11, 18, 25], 1, 500,
+     50000),
+])
+def test_perfiles_nuevos_siguen_al_codigo_original_y_esperan_sus_datos(
+    entorno, gym_id, frecuencia, recompensa, subconjuntos, repeticiones, iteraciones, pasos
+):
+    """Valores de im_classic_pipeline.yaml / im_pipeline.yaml; objetivo, el umbral de Gymnasium."""
+    cfg = resolver_configuracion(BASE, entorno)
+    assert cfg["entorno"]["id"] == gym_id
+    assert cfg["experto"]["retorno_objetivo"] == gym.spec(gym_id).reward_threshold
+    assert cfg["demostraciones"]["frecuencia_pares"] == frecuencia
+    assert cfg["demostraciones"]["subconjuntos"] == subconjuntos
+    assert cfg["demostraciones"]["partidas_train"] == subconjuntos[-1]
+    assert cfg["gail"]["recompensa"] == recompensa
+    assert cfg["experimento"]["repeticiones"] == repeticiones
+    assert cfg["gail"]["iteraciones"] == iteraciones
+    assert cfg["trpo"]["pasos_por_iteracion"] == pasos
+    assert cfg["experto"]["pasos_totales"] % pasos == 0
+    assert all(valor == DATOS_PENDIENTES for valor in cfg["datos"].values())

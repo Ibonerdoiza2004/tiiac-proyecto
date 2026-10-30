@@ -19,7 +19,9 @@ experimento:
   semilla_repeticiones: 3000
 
 datos:
-  # Los fija el perfil de cada entorno con los datos congelados.
+  # Los fija el perfil de cada entorno con los datos congelados. Mientras no los
+  # tenga, el perfil pone `pendiente` en las seis: así se pueden entrenar el experto
+  # y grabar los datos, pero el experimento completo no empieza hasta sustituirlas.
   demostraciones: null
   experto: null
   huella_partidas: null

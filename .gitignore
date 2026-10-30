@@ -27,6 +27,8 @@ env/
 wandb/
 mlruns/
 runs/
+# Avisos que MuJoCo escribe al cargar los modelos de Gymnasium (Reacher, HalfCheetah).
+MUJOCO_LOG.TXT
 
 # ---- secretos: si subes uno, hay que ROTARLO, no basta con borrarlo ----
 .env

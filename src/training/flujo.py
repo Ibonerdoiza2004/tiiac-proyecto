@@ -26,6 +26,7 @@ from src.training.trpo import (cargar_experto, cargar_politica_experto, entrenar
                                guardar_experto)
 from src.utils.archivos import (comprobar_directorio_libre, escribir_archivo_nuevo,
                                 escribir_carpeta_nueva)
+from src.utils.configuracion import dato_congelado
 from src.utils.procedencia import (a_json, avisar_estado_git, estado_git, ruta_registrada,
                                    versiones_y_hardware)
 from src.utils.tracking import (abrir_run, comprobar_wandb, descargar_artefacto,
@@ -325,13 +326,17 @@ def comprobar_datos_congelados(cfg: dict, datos: Path, experto: Path) -> None:
         experto: Carpeta del experto.
 
     Raises:
-        ValueError: Si faltan los datos o experto, los splits no citan ese NPZ,
-            o las huellas de partidas o experto no coinciden con las declaradas.
+        ValueError: Si el perfil aún tiene las huellas pendientes (DATOS_PENDIENTES),
+            faltan los datos o experto, los splits no citan ese NPZ, o las huellas
+            de partidas o experto no coinciden con las declaradas.
 
     Returns:
         None si ambas carpetas corresponden al congelado.
     """
     datos, experto = Path(datos), Path(experto)
+    # Antes que los archivos: con el perfil pendiente, la causa es esa, no su ausencia.
+    huella_esperada_partidas = dato_congelado(cfg, "huella_partidas")
+    huella_esperada_experto = dato_congelado(cfg, "huella_experto")
     if not (experto / "modelo.zip").is_file() or not (experto / "experto.json").is_file():
         raise ValueError(f"no está el experto congelado en {experto}; ver «Datos» en el README")
     try:
@@ -342,10 +347,10 @@ def comprobar_datos_congelados(cfg: dict, datos: Path, experto: Path) -> None:
     except OSError as error:
         raise ValueError(
             f"no están los datos congelados en {datos}; ver «Datos» en el README") from error
-    if huella_partidas(trayectorias) != cfg["datos"]["huella_partidas"]:
+    if huella_partidas(trayectorias) != huella_esperada_partidas:
         raise ValueError(f"{datos} no son las demostraciones congeladas: la huella de las "
                          "partidas no coincide con datos.huella_partidas")
-    if huella_archivo(experto / "modelo.zip") != cfg["datos"]["huella_experto"]:
+    if huella_archivo(experto / "modelo.zip") != huella_esperada_experto:
         raise ValueError(f"{experto} no es el experto congelado: la huella de modelo.zip "
                          "no coincide con datos.huella_experto")
 
@@ -364,6 +369,8 @@ def obtener_datos_congelados(cfg: dict, datos: Path, experto: Path) -> None:
     Raises:
         FileExistsError: Si una carpeta existe con otro contenido.
         RuntimeError: Si no se puede descargar algún artefacto.
+        ValueError: Si hay que descargar un artefacto que el perfil aún tiene
+            pendiente (DATOS_PENDIENTES).
 
     La descarga va a una carpeta temporal que se renombra al final; si falla, no queda nada.
     """
@@ -373,7 +380,7 @@ def obtener_datos_congelados(cfg: dict, datos: Path, experto: Path) -> None:
             continue
         # Se descarga en una temporal que solo se renombra si termina bien: una
         # descarga cortada no deja una carpeta a medias que luego se saltaría.
-        escribir_carpeta_nueva(carpeta, lambda temporal, nombre=cfg["datos"][clave]:
+        escribir_carpeta_nueva(carpeta, lambda temporal, nombre=dato_congelado(cfg, clave):
                                descargar_artefacto(cfg, nombre, temporal))
 
 
