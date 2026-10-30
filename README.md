@@ -7,77 +7,192 @@ política aleatoria. El primer entorno implementado es CartPole.
 - Paper: [Generative Adversarial Imitation Learning](https://arxiv.org/abs/1606.03476)
 - Seguimiento de experimentos: [proyecto W&B `tiiac-proyecto`](https://wandb.ai/a-corral-universidad-de-deusto/tiiac-proyecto)
 - Autores: Asier Corral e Ibon Erdoiza.
+- Probado en Linux con Python 3.12.
 
 ## Resultado
 
 Pendiente de completar por el equipo.
 
-## Instalación
+## Ejecutar desde cero
 
-Se usa Python 3.12 y las versiones fijadas en `requirements.txt`:
+### 1. Descargar el proyecto y crear el entorno
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
+git clone https://github.com/Ibonerdoiza2004/tiiac-proyecto.git
+cd tiiac-proyecto
+python3.12 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
+Si `python3.12 -m venv` falla por `ensurepip`, falta el paquete del sistema:
+`sudo apt install python3.12-venv`, y se repite el comando.
+
+### 2. Comprobar que todo funciona
+
+No necesita W&B ni datos:
+
+```bash
+python -m pytest tests/ -q
+python tools/tiiac_check.py .
+python run.py --smoke
+```
+
+El checker ya ejecuta el smoke; el último comando sirve para verlo por separado.
+
+### 3. Iniciar sesión en W&B
+
+```bash
+wandb login --relogin --host https://api.wandb.ai
+```
+
+La clave se obtiene en [wandb.ai/authorize](https://wandb.ai/authorize) y tiene
+que ser de una cuenta con acceso a la organización
+`a-corral-universidad-de-deusto` (ver [Seguimiento W&B](#seguimiento-wb)).
+
+### 4. Ejecutar el experimento
+
+```bash
+python run.py --entorno cartpole --descargar --grupo <nombre>
+```
+
+Descarga de W&B el experto y las demostraciones congelados, comprueba sus
+huellas, entrena 20 BC y 20 GAIL (subconjuntos de 1, 4, 7 y 10 partidas,
+5 repeticiones), evalúa los 42 agentes (experto, aleatorio, BC y GAIL) con
+50 episodios cada uno e imprime una línea de métricas por agente.
+
+### Comandos estándar
+
+| Para qué | Comando |
+|---|---|
+| Smoke | `python run.py --smoke` |
+| Experimento completo | `python run.py --entorno cartpole --descargar --grupo <nombre>` |
+
+## Argumentos de `run.py`
+
+| Argumento | Para qué sirve | Por defecto |
+|---|---|---|
+| `--entorno cartpole` | Perfil de entorno (`configs/entornos/<entorno>.yaml`). De momento solo existe `cartpole`. | `cartpole` |
+| `--config <yaml>` | Configuración base sobre la que se aplica el perfil. | `configs/default.yaml` |
+| `--smoke` | Ejecuta el flujo completo en miniatura (ver [El smoke](#el-smoke)). | — |
+| `--descargar` | Baja de W&B el experto y las demostraciones congelados que falten. Solo descarga en carpetas ausentes o vacías y nunca sobrescribe. | — |
+| `--datos <carpeta>` | Usa otra carpeta de demostraciones en lugar de `datos.demostraciones`. Se comprueba que su huella sea la de las congeladas. | la del perfil |
+| `--experto <carpeta>` | Usa otra carpeta del experto en lugar de `datos.experto`, con la misma comprobación. | la del perfil |
+| `--salida <carpeta>` | Carpeta nueva del experimento. Con `--solo-evaluar`, la carpeta de la ejecución que se vuelve a evaluar. | `checkpoints/run/<entorno>/<fecha>` |
+| `--solo-evaluar` | No entrena: vuelve a evaluar los BC y GAIL de `--salida` y guarda un `evaluacion-<fecha>.json` nuevo. Necesita `--salida`. | — |
+| `--sin-wandb` | No registra nada en W&B. `--descargar` sigue necesitando la sesión. | — |
+| `--grupo <nombre>` | Grupo de W&B que reúne los runs de la ejecución. | uno aleatorio |
+
+`--smoke` ignora `--datos`, `--experto`, `--descargar` y `--salida`, porque
+crea todo en una carpeta temporal.
+
+**`--grupo`** acepta cualquier texto. En W&B un grupo no se crea de antemano:
+si nadie lo ha usado, aparece uno nuevo; si ya existe, los runs se suman a él
+sin sobrescribir nada. Sin `--grupo`, `run.py` crea un identificador aleatorio
+de 12 caracteres hexadecimales y lo imprime al empezar (`grupo W&B: …`).
+Conviene un nombre distinto para cada ejecución que no se quiera mezclar con
+otras.
+
+Códigos de salida:
+
+| Código | Significado |
+|---|---|
+| 0 | Todo correcto. |
+| 1 | Falló algún entrenamiento; los demás terminan, pero no se evalúa. |
+| 2 | La configuración, los datos, la salida o la sesión de W&B no son válidos. No se entrena nada. |
+| 130 | Interrumpido con Ctrl+C. |
+
+## El smoke
+
+```bash
+python run.py --smoke
+```
+
+Ejecuta el flujo real en miniatura para comprobar que el pipeline llega al final.
+Aplica la capa `configs/smoke.yaml`, desactiva W&B (no pide sesión) y no usa los
+datos congelados. Todo se crea en una carpeta temporal que se borra al terminar:
+
+1. Entrena un experto de 1000 pasos.
+2. Graba 3 partidas: 2 de train y 1 de validación.
+3. Entrena 2 BC y 2 GAIL (subconjuntos de 1 y 2 partidas, 1 repetición,
+   2 iteraciones de GAIL).
+4. Evalúa los 6 agentes con 3 episodios cada uno.
+
+Ha ido bien si termina con `=== métricas ===`, una línea por agente y código 0
+(`echo $?`). Los números no significan nada. Tarda unos 5 s (ver
+[Tiempos medidos](#tiempos-medidos)); para medirlo, `time python run.py --smoke`.
+
+## Qué produce un experimento
+
+En disco, en `checkpoints/run/cartpole/<fecha>/` (o en `--salida`), que no se
+versiona:
+
+```text
+bc/cantidad_<c>/repeticion_<r>.pt          política de BC con sus metadatos
+gail/cantidad_<c>/repeticion_<r>/
+    modelo.zip                             agente TRPO de GAIL
+    discriminador.pt                       pesos y normalización del discriminador
+    gail.json                              configuración, resumen, procedencia y hardware
+evaluacion.json                            protocolo y retornos de los 42 agentes
+```
+
+En W&B, cada ejecución forma un grupo de 41 runs: 20
+`tiiac-bc-cartpole-c<c>-r<r>`, 20 `tiiac-gail-cartpole-c<c>-r<r>` y
+`tiiac-comparacion-cartpole`, que aparece al terminar la evaluación con las
+tablas `comparacion` y `episodios`. Las métricas se agrupan en secciones por
+prefijo: `bc/`, `trpo/`, `discriminador/`, `reajuste/` y `validacion/`.
+
+Para ver una ejecución: en *Runs*, **Filter** → `Group` = `<nombre>`. Para
+comparar curvas, **Group** por `barrido.metodo` o `barrido.cantidad`, que cada
+run de BC y GAIL lleva en su configuración.
+
 ## Datos
 
-Las demostraciones y el experto no se versionan. Están congelados en
-`checkpoints/expertos/cartpole/congelado/` y
-`data/demostraciones/cartpole/congelado/`, el 2026-10-28 con el commit
-`2a9be76305d0ac83009261f3abf8de3a9718a189`. Las huellas SHA-256 son:
+Las demostraciones y el experto no se versionan. Están congelados desde el
+2026-10-28 (commit `2a9be76305d0ac83009261f3abf8de3a9718a189`) en
+`data/demostraciones/cartpole/congelado/` y
+`checkpoints/expertos/cartpole/congelado/`. Sus huellas SHA-256 son:
 
 - `demostraciones.npz`: `ce06866eff929b74d4a377fb9262d7d977a387636542777d14cb6addd9fb204b`
 - `splits.json`: `f6ae1c547e7d08e69d4622cacc069027349b41ec435c7529706e28b46933f910`
 - contenido de las partidas: `84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73`
 - `modelo.zip` del experto: `4c5f7ad00efdbf97bba1b79d934b572df40ddee48d0f732b23a9d78ad4582195`
 
-Los runs W&B del grupo `f24995f3d703` son `tiiac-experto-cartpole` y
-`tiiac-datos-cartpole`; los artefactos son `experto-CartPole-v1-4c5f7ad00efd`
-y `demostraciones-ce06866eff92`. En otra máquina se pueden descargar con:
+Se publicaron en W&B (grupo `f24995f3d703`, runs `tiiac-experto-cartpole` y
+`tiiac-datos-cartpole`) como los artefactos `experto-CartPole-v1-4c5f7ad00efd`
+y `demostraciones-ce06866eff92`. `run.py --descargar` los baja y comprueba.
+Para descargarlos sin ejecutar nada más (sin comprobar las huellas, que
+comprobará `run.py` después):
 
 ```bash
-python run.py --entorno cartpole --descargar
-# También se pueden descargar individualmente:
 wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-ce06866eff92:latest --root data/demostraciones/cartpole/congelado
 wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-4c5f7ad00efd:latest --root checkpoints/expertos/cartpole/congelado
 ```
 
-`--descargar` baja solo las carpetas ausentes o vacías, usando la sesión W&B de
-la organización configurada, y comprueba las huellas antes de entrenar. Nunca
-sobrescribe una carpeta que ya contiene archivos.
-
-Para regenerarlos o contrastarlos con una sesión de W&B activa:
+Para regenerarlos, el procedimiento reproducible es:
 
 ```bash
 python scripts/entrenar_experto.py --entorno cartpole
-python scripts/get_data.py --entorno cartpole \
-  --experto checkpoints/expertos/cartpole/<fecha> --grupo <grupo>
-python scripts/get_data.py --entorno cartpole \
-  --experto checkpoints/expertos/cartpole/<fecha> --grupo <grupo> \
-  --huella-esperada <huella-de-las-partidas>
+python scripts/get_data.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> \
+  --grupo <grupo> --huella-esperada 84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73
 ```
 
-`get_data.py` graba 15 partidas con el experto estocástico: 10 para train y 5
-para validación. Guarda `demostraciones.npz` y `splits.json` en la carpeta
-nueva, con subconjuntos train de 1, 4, 7 y 10 partidas, e imprime las huellas
-SHA-256 del NPZ, de los splits y del contenido de las partidas. La semilla se
-lee de `configs/`. Con `--huella-esperada <huella-de-las-partidas>` comprueba
-que la regeneración produce las mismas partidas y muestra las huellas obtenidas
-aunque no coincidan.
+`get_data.py` graba 15 partidas con el experto estocástico (10 de train y 5 de
+validación, separadas por trayectoria), guarda `demostraciones.npz` y
+`splits.json` con subconjuntos de train de 1, 4, 7 y 10 partidas e imprime las
+huellas. Con `--huella-esperada` comprueba si las partidas coinciden con las
+congeladas. Las semillas salen de `configs/`, pero en otra máquina el redondeo
+puede cambiar el experto y las partidas: si las huellas no coinciden, `run.py`
+rechaza esos datos. Por eso el experimento parte de los congelados.
 
 Procedencia: datos propios generados en `CartPole-v1` de Gymnasium (licencia
-MIT). `configs/entornos/cartpole.yaml` fija las carpetas congeladas y la huella
-de las partidas.
+MIT). `configs/entornos/cartpole.yaml` (sección `datos`) fija las carpetas, las
+huellas y los artefactos congelados.
 
-## Recorrido experimental
+## Etapas por separado
 
-El experto, las demostraciones y los modelos se guardan localmente y no se
-versionan. El experto imprime un identificador de grupo W&B; pásalo a los pasos
-siguientes para reunir los runs:
+`run.py` encadena todo, pero cada etapa tiene su script. El primero imprime un
+grupo de W&B que se pasa a los siguientes para reunir los runs:
 
 ```bash
 python scripts/entrenar_experto.py --entorno cartpole
@@ -87,73 +202,67 @@ python scripts/entrenar_gail.py --entorno cartpole --datos data/demostraciones/c
 python scripts/evaluar.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> --bc checkpoints/bc/cartpole/<fecha> --gail checkpoints/gail/cartpole/<fecha> --grupo <grupo>
 ```
 
-El punto de entrada completo es `python run.py --entorno cartpole`; requiere
-las carpetas congeladas anteriores. `python run.py --smoke` ejecuta el flujo
-real en miniatura con un experto y datos temporales, sin escribir checkpoints
-ni datos en el repositorio. El smoke terminó en 10 s dentro del checker local
-de Python 3.13 en Windows, usando CPU; el modelo de CPU no estuvo disponible
-para identificarlo en esta sesión. Los scripts individuales siguen disponibles
-para ejecutar etapas por separado.
-
-Los barridos aceptan `--cantidades` y `--repeticiones` para repartirlos entre
-sesiones. `experimento.procesos` limita cuántos entrenamientos se ejecutan a la
-vez. El seguimiento guarda runs, configuración, procedencia, resúmenes y
-artefactos; la evaluación registra las tablas de comparación y de episodios.
+Los barridos (`entrenar_bc.py`, `entrenar_gail.py` y `evaluar.py`) aceptan
+`--cantidades` y `--repeticiones` para repartirlos entre sesiones. Todos
+aceptan `--sin-wandb` y `--salida`.
 
 ## Seguimiento W&B
 
-El proyecto se ha elegido privado y usará la entidad compartida
-`a-corral-universidad-de-deusto`. Inicia sesión en W&B Cloud con una clave de
-[wandb.ai/authorize](https://wandb.ai/authorize):
+El proyecto es privado y pertenece a la organización
+`a-corral-universidad-de-deusto`. Para ver los runs o descargar los artefactos
+hace falta una cuenta con acceso: pedidlo a los autores. Con una clave de otra
+organización, W&B responde con un error 403.
 
-```bash
-wandb login --relogin --host https://api.wandb.ai
-```
-
-La clave tiene que ser de una cuenta con acceso a la organización
-`a-corral-universidad-de-deusto`; con una clave de otra organización, W&B
-responde con un error 403 al abrir el run.
-
-La credencial se guarda fuera del repositorio. Para trabajar sin conexión,
-cambia `wandb.modo` a `offline` en la configuración y sincroniza luego con
-`wandb sync`. Para no registrar un experimento, usa `--sin-wandb`. Tests y smoke
-usan `disabled`.
+La credencial se guarda fuera del repositorio (`wandb login`). Para trabajar
+sin conexión, cambia `wandb.modo` a `offline` en la configuración y sincroniza
+luego con `wandb sync`. Para no registrar un experimento, usa `--sin-wandb`.
+Los tests y el smoke usan `disabled`.
 
 ## Tiempos medidos
 
-- Experto congelado: 41 s para 60 000 pasos, `CartPole-v1`, el 28 de octubre
-  de 2026, CPU en Windows 11 (AMD64 Family 23 Model 160, 8 procesadores
-  lógicos; GPU no usada). El retorno medio de parada fue 500 en 10 episodios.
-- Datos congelados: 4,84 s para 15 partidas y 7500 pasos, en la misma máquina.
-- Flujo completo online con 20 iteraciones de GAIL: 1051,8 s (17 min 32 s),
-  medidos con `run.py --entorno cartpole` el 28 de octubre de 2026. BC/GAIL y
-  carga de los agentes ocuparon 11 min 39 s hasta iniciar la evaluación; la
-  fase final paralela, con 50 episodios por agente, tomó 5 min 53 s de pared.
-  El resumen W&B registra 244,8 s dentro de la evaluación. CPU Windows 11,
-  AMD64 Family 23 Model 160, 8 procesadores lógicos, 5 procesos, sin GPU.
-  W&B sincronizó los 20 BC, 20 GAIL y la comparación; grupo `4a2683ef47f9`,
-  run de comparación `pevcn0t1`.
-- El barrido previo de 80 iteraciones también se completó online: unos 42 min
-  incluyendo la comparación de 50 episodios. Sirvió para medir el presupuesto;
-  el perfil CartPole queda en 20 iteraciones.
+`experimento.procesos` (en `configs/default.yaml`) fija cuántos entrenamientos
+se ejecutan a la vez. Está en 5, elegido para un PC de 6 núcleos físicos. En
+otra máquina conviene ponerlo como mucho en su número de núcleos físicos,
+contando unos 830 MB de RAM por proceso. No cambia los resultados, solo el
+tiempo.
 
-- Experto CartPole: 53 s en CPU, WSL2 con 12 núcleos, para 50 000 pasos; medido
-  el 16 de octubre.
-- Datos CartPole: 6 s en CPU, WSL2 con 12 núcleos, para 15 partidas, 7401 pasos
-  y 244 KB; medido el 19 de octubre.
-- GAIL CartPole con 10 entornos: 2,1–2,6 s por iteración con un entrenamiento
-  a la vez; con 4 entrenamientos simultáneos, 4,2 s por iteración. Medido en
-  CPU; la segunda medición fue en el PC de 6 núcleos físicos y 7,9 GB de RAM
-  disponible en WSL2.
-- `experimento.procesos` está en 5 para ese PC de 6 núcleos físicos.
+Con los datos congelados y la configuración actual:
 
-## Reproducibilidad (presupuesto)
+| Medición | Tiempo | Hardware | Fecha |
+|---|---|---|---|
+| Smoke (`run.py --smoke`, dentro del checker) | 5 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-28 |
+| Experimento completo (`run.py --entorno cartpole`, online): 20 BC, 20 GAIL de 20 iteraciones y evaluación | 17 min 32 s (1051,8 s), de ellos 5 min 53 s de evaluación | Windows 11, AMD64 Family 23 Model 160, 8 procesadores lógicos, 5 procesos, sin GPU | 2026-10-28 |
+| Experimento completo en Linux | Pendiente de medir con `time` | — | — |
+| Experto congelado (60 000 pasos, parada al llegar a 500) | 41 s | Windows 11, misma máquina | 2026-10-28 |
+| Demostraciones congeladas (15 partidas, 7500 pasos) | 4,84 s | Windows 11, misma máquina | 2026-10-28 |
 
-Las semillas están en `configs/` y se inicializan en `src/utils/seed.py`; las
-dependencias tienen versiones exactas en `requirements.txt`. El smoke cumple el
-límite de 5 minutos en CPU. El flujo completo de CartPole, incluida la evaluación
-paralela de 50 episodios, tardó 17 min 32 s en esta CPU, dentro de la regla 5/20.
-TRPO usa CPU, así que una T4 no acelera estos entrenamientos.
+La ejecución de 17 min 32 s es el grupo `4a2683ef47f9` (run de comparación
+`pevcn0t1`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
+del grupo y no equivale al tiempo de la ejecución.
+
+Mediciones anteriores a la congelación, con otra configuración:
+
+| Medición | Tiempo | Hardware | Fecha |
+|---|---|---|---|
+| Barrido con 80 iteraciones de GAIL y evaluación | unos 42 min | Windows 11, 8 procesadores lógicos | 2026-10-28 |
+| Experto (50 000 pasos, 1 entorno) | 53 s | Linux (WSL2), 12 núcleos | 2026-10-16 |
+| Demostraciones (15 partidas, 7401 pasos, 244 KB) | 6 s | Linux (WSL2), 12 núcleos | 2026-10-19 |
+| Iteración de GAIL con 10 entornos, un entrenamiento a la vez | 2,1–2,6 s | Linux (WSL2) | 2026-10-21/22 |
+| Iteración de GAIL con 10 entornos, 4 entrenamientos a la vez | 4,2 s | Linux (WSL2), 6 núcleos físicos, 7,9 GB | 2026-10-22 |
+
+## Reproducibilidad y regla 5/20
+
+Las semillas están en `configs/` y solo se inicializan en `src/utils/seed.py`;
+las dependencias tienen versiones exactas en `requirements.txt`. Cada
+entrenamiento usa un solo hilo de PyTorch, así que en la misma máquina da el
+mismo resultado en serie y en paralelo.
+
+- **Smoke:** 5 s en CPU, muy por debajo de los 5 minutos.
+- **Experimento completo:** 17 min 32 s medidos en CPU (tabla anterior). TRPO,
+  las políticas y el discriminador se ejecutan en CPU (`device="cpu"`), así que
+  una GPU no acelera estos entrenamientos.
+- **Pendiente:** medirlo en una T4 de Colab gratuito o dejar aquí la
+  justificación de por qué no se mide.
 
 ## Decisiones donde el paper no especifica
 
@@ -169,16 +278,21 @@ TRPO usa CPU, así que una T4 no acelera estos entrenamientos.
 | Validación de partidas (paper: 70/30 de pares) | 10 partidas de train y 5 de validación, separadas por trayectoria | Evitar fugas entre episodios |
 | Parada de BC | Paciencia de 20 épocas sobre la pérdida de validación | El paper solo dice «hasta que deja de bajar» |
 
-## Comprobaciones
+## Estructura del repositorio
 
-```bash
-python run.py --smoke --entorno cartpole
-python -m pytest tests/ -q
-python tools/tiiac_check.py .
+```text
+run.py                  punto de entrada: smoke, experimento y reevaluación
+configs/                toda la configuración: default.yaml, perfil de cada entorno y smoke.yaml
+src/data/               entornos, demostraciones, splits por trayectoria y loaders
+src/models/factory.py   política de BC y discriminador
+src/training/           TRPO y experto, BC, GAIL, barridos, evaluación y flujo de run.py
+src/utils/              configuración, semillas, seguimiento W&B, archivos y validación
+src/app/                esqueleto del aplicativo (E2)
+scripts/                cada etapa por separado
+tests/                  tests (pytest)
+tools/tiiac_check.py    comprobador de la asignatura
+docs/                   propuesta y presentación
 ```
-
-El smoke usa W&B desactivado. El entrenamiento completo no forma parte de las
-comprobaciones rutinarias.
 
 ## Uso de IA
 
