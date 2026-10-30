@@ -201,7 +201,7 @@ def test_nombre_artefacto_de_cada_tipo(argumentos, esperado):
 def test_nombre_artefacto_reproduce_los_artefactos_congelados():
     """Regresión: cambiar el formato o la longitud dejaría sin encontrar los congelados."""
     cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
-    npz = "ce06866eff929b74d4a377fb9262d7d977a387636542777d14cb6addd9fb204b"  # README
+    npz = "5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9"  # README
     assert (nombre_artefacto("experto", cfg["datos"]["huella_experto"], cfg["entorno"]["id"])
             == cfg["datos"]["artefacto_experto"])
     assert nombre_artefacto("demostraciones", npz) == cfg["datos"]["artefacto_demostraciones"]

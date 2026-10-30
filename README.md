@@ -149,24 +149,25 @@ run de BC y GAIL lleva en su configuración.
 ## Datos
 
 Las demostraciones y el experto no se versionan. Están congelados desde el
-2026-10-28 (commit `2a9be76305d0ac83009261f3abf8de3a9718a189`) en
+2026-10-30 (commit `15416db8bdec494f55bba3e2ff527907bdc6fafc`) en
 `data/demostraciones/cartpole/congelado/` y
-`checkpoints/expertos/cartpole/congelado/`. Sus huellas SHA-256 son:
+`checkpoints/expertos/cartpole/congelado/`. Se generaron en Linux (WSL2) con
+Python 3.12.3 y las versiones de `requirements.txt`. Sus huellas SHA-256 son:
 
-- `demostraciones.npz`: `ce06866eff929b74d4a377fb9262d7d977a387636542777d14cb6addd9fb204b`
-- `splits.json`: `f6ae1c547e7d08e69d4622cacc069027349b41ec435c7529706e28b46933f910`
-- contenido de las partidas: `84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73`
-- `modelo.zip` del experto: `4c5f7ad00efdbf97bba1b79d934b572df40ddee48d0f732b23a9d78ad4582195`
+- `demostraciones.npz`: `5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9`
+- `splits.json`: `804bb82f4c5b16ce4a49e97bde07911d1af1687a83a33cafabe7e9442f52a9d3`
+- contenido de las partidas: `b31d19eda39c1167b67330995e26659d0782b43ae83cfde7b773e8b1df221f58`
+- `modelo.zip` del experto: `92c44313863ebe30c616be30664b2742650ee80cd833f2b799550fe742d517ac`
 
-Se publicaron en W&B (grupo `f24995f3d703`, runs `tiiac-experto-cartpole` y
-`tiiac-datos-cartpole`) como los artefactos `experto-CartPole-v1-4c5f7ad00efd`
-y `demostraciones-ce06866eff92`. `run.py --descargar` los baja y comprueba.
+Se publicaron en W&B (grupo `congelado`, runs `tiiac-experto-cartpole` y
+`tiiac-datos-cartpole`) como los artefactos `experto-CartPole-v1-92c44313863e`
+y `demostraciones-5c5168e7f5f8`. `run.py --descargar` los baja y comprueba.
 Para descargarlos sin ejecutar nada más (sin comprobar las huellas, que
 comprobará `run.py` después):
 
 ```bash
-wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-ce06866eff92:latest --root data/demostraciones/cartpole/congelado
-wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-4c5f7ad00efd:latest --root checkpoints/expertos/cartpole/congelado
+wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-5c5168e7f5f8:latest --root data/demostraciones/cartpole/congelado
+wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-92c44313863e:latest --root checkpoints/expertos/cartpole/congelado
 ```
 
 Para regenerarlos, el procedimiento reproducible es:
@@ -174,16 +175,18 @@ Para regenerarlos, el procedimiento reproducible es:
 ```bash
 python scripts/entrenar_experto.py --entorno cartpole
 python scripts/get_data.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> \
-  --grupo <grupo> --huella-esperada 84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73
+  --grupo <grupo> --huella-esperada b31d19eda39c1167b67330995e26659d0782b43ae83cfde7b773e8b1df221f58
 ```
 
 `get_data.py` graba 15 partidas con el experto estocástico (10 de train y 5 de
 validación, separadas por trayectoria), guarda `demostraciones.npz` y
 `splits.json` con subconjuntos de train de 1, 4, 7 y 10 partidas e imprime las
 huellas. Con `--huella-esperada` comprueba si las partidas coinciden con las
-congeladas. Las semillas salen de `configs/`, pero en otra máquina el redondeo
-puede cambiar el experto y las partidas: si las huellas no coinciden, `run.py`
-rechaza esos datos. Por eso el experimento parte de los congelados.
+congeladas. Las semillas salen de `configs/`, pero en otra plataforma el
+redondeo puede cambiar las acciones del experto y, con ellas, las partidas: los
+mismos datos generados en Windows con Python 3.13 tenían otra huella. Si las
+huellas no coinciden, `run.py` rechaza esos datos; por eso el experimento parte
+de los congelados.
 
 Procedencia: datos propios generados en `CartPole-v1` de Gymnasium (licencia
 MIT). `configs/entornos/cartpole.yaml` (sección `datos`) fija las carpetas, las
@@ -231,19 +234,18 @@ Con los datos congelados y la configuración actual:
 | Medición | Tiempo | Hardware | Fecha |
 |---|---|---|---|
 | Smoke (`run.py --smoke`, dentro del checker) | 5 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-28 |
-| Experimento completo (`run.py --entorno cartpole`, online): 20 BC, 20 GAIL de 20 iteraciones y evaluación | 17 min 32 s (1051,8 s), de ellos 5 min 53 s de evaluación | Windows 11, AMD64 Family 23 Model 160, 8 procesadores lógicos, 5 procesos, sin GPU | 2026-10-28 |
-| Experimento completo en Linux | Pendiente de medir con `time` | — | — |
-| Experto congelado (60 000 pasos, parada al llegar a 500) | 41 s | Windows 11, misma máquina | 2026-10-28 |
-| Demostraciones congeladas (15 partidas, 7500 pasos) | 4,84 s | Windows 11, misma máquina | 2026-10-28 |
+| Experimento completo (`run.py --entorno cartpole`): 20 BC, 20 GAIL de 20 iteraciones y evaluación | Pendiente de medir con `time` | — | — |
+| Experto congelado (60 000 pasos, parada al llegar a 500) | 14 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-30 |
+| Demostraciones congeladas (15 partidas, 7500 pasos) | 1,7 s | Linux (WSL2), misma máquina | 2026-10-30 |
 
-La ejecución de 17 min 32 s es el grupo `4a2683ef47f9` (run de comparación
-`pevcn0t1`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
-del grupo y no equivale al tiempo de la ejecución.
+El *Runtime* que muestra W&B en una fila agrupada resume los runs del grupo y no
+equivale al tiempo de la ejecución.
 
-Mediciones anteriores a la congelación, con otra configuración:
+Mediciones anteriores, con otros datos congelados o con otra configuración:
 
 | Medición | Tiempo | Hardware | Fecha |
 |---|---|---|---|
+| Experimento completo con los datos congelados en Windows, ya sustituidos (grupo `4a2683ef47f9`) | 17 min 32 s (1051,8 s), de ellos 5 min 53 s de evaluación | Windows 11, AMD64 Family 23 Model 160, 8 procesadores lógicos, 5 procesos, sin GPU | 2026-10-28 |
 | Barrido con 80 iteraciones de GAIL y evaluación | unos 42 min | Windows 11, 8 procesadores lógicos | 2026-10-28 |
 | Experto (50 000 pasos, 1 entorno) | 53 s | Linux (WSL2), 12 núcleos | 2026-10-16 |
 | Demostraciones (15 partidas, 7401 pasos, 244 KB) | 6 s | Linux (WSL2), 12 núcleos | 2026-10-19 |
@@ -258,7 +260,8 @@ entrenamiento usa un solo hilo de PyTorch, así que en la misma máquina da el
 mismo resultado en serie y en paralelo.
 
 - **Smoke:** 5 s en CPU, muy por debajo de los 5 minutos.
-- **Experimento completo:** 17 min 32 s medidos en CPU (tabla anterior). TRPO,
+- **Experimento completo:** pendiente de medir en Linux con los datos actuales;
+  con los anteriores tardó 17 min 32 s en CPU (tabla anterior). TRPO,
   las políticas y el discriminador se ejecutan en CPU (`device="cpu"`), así que
   una GPU no acelera estos entrenamientos.
 - **Pendiente:** medirlo en una T4 de Colab gratuito o dejar aquí la

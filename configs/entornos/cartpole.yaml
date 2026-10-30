@@ -5,13 +5,14 @@ experimento:
   # repartir el barrido en 5 procesos sin que compartan núcleo (presupuesto, regla 5/20).
   repeticiones: 5
 datos:
-  # Congelado el 2026-10-28, commit 2a9be76305d0ac83009261f3abf8de3a9718a189.
+  # Congelado el 2026-10-30 en Linux (WSL2, Python 3.12.3), commit
+  # 15416db8bdec494f55bba3e2ff527907bdc6fafc. Sustituye al de Windows del 2026-10-28.
   demostraciones: data/demostraciones/cartpole/congelado
   experto: checkpoints/expertos/cartpole/congelado
-  huella_partidas: 84dd2815e125ac677e764fef55e8cfb2ed1bddbf68b8c5e773b75bbb0f22fd73
-  huella_experto: 4c5f7ad00efdbf97bba1b79d934b572df40ddee48d0f732b23a9d78ad4582195  # SHA-256 de modelo.zip
-  artefacto_demostraciones: demostraciones-ce06866eff92  # Artefacto W&B congelado.
-  artefacto_experto: experto-CartPole-v1-4c5f7ad00efd
+  huella_partidas: b31d19eda39c1167b67330995e26659d0782b43ae83cfde7b773e8b1df221f58
+  huella_experto: 92c44313863ebe30c616be30664b2742650ee80cd833f2b799550fe742d517ac  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-5c5168e7f5f8  # Artefacto W&B congelado.
+  artefacto_experto: experto-CartPole-v1-92c44313863e
 demostraciones:
   partidas_train: 10  # Igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia; el paper separa 70/30 los pares.
