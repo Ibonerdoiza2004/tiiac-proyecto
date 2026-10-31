@@ -3,14 +3,14 @@
 experimento:
   repeticiones: 1  # Código original (runs).
 datos:
-  # Congelado el 2026-10-31 en Linux (WSL2, Python 3.12.3), commit
-  # 6ba7aae45d70054b40df64d0010a4d6a549bf22c.
-  demostraciones: data/demostraciones/halfcheetah/congelado
-  experto: checkpoints/expertos/halfcheetah/congelado
-  huella_partidas: cd6495976babac749d34ac3f8592ff26aa87796a5a13a12d39f1e907c66193ef
-  huella_experto: bc5f26bc090c52fd48c9001a6d2e97745e18ee5ffed552a879601fe748cc1ee4  # SHA-256 de modelo.zip
-  artefacto_demostraciones: demostraciones-2cd935110cd2  # Artefacto W&B congelado.
-  artefacto_experto: experto-HalfCheetah-v5-bc5f26bc090c
+  # Pendiente de volver a congelar con la configuración nueva del experto (los
+  # congelados el 2026-10-31 se retiraron): ver «Otros entornos» en el README.
+  demostraciones: pendiente
+  experto: pendiente
+  huella_partidas: pendiente
+  huella_experto: pendiente
+  artefacto_demostraciones: pendiente
+  artefacto_experto: pendiente
 demostraciones:
   # Igual al subconjunto mayor. El original graba 50 (full_dataset_num_trajs) y usa
   # hasta 25; aquí la validación va aparte, por trayectoria.
@@ -33,11 +33,33 @@ trpo:
   normalizar_observaciones: true  # Como el original; en MuJoCo hace falta.
   batch_size_valor: 250  # Divide los 50 000 pasos de cada iteración.
 experto:
-  # 500 iteraciones, como el snapshot del experto original (iter0000500); el
-  # entrenamiento para antes si alcanza el objetivo. El congelado no lo alcanzó:
-  # guarda la mejor evaluación, en 5312 s.
+  # 25 M pasos, el presupuesto de antes (500 iteraciones de 50 000, como el snapshot del
+  # experto original, iter0000500). Con iteraciones de 2048 no es múltiplo: para en la
+  # primera que lo supera (12 208 iteraciones, 25 001 472 pasos).
   pasos_totales: 25000000
-  retorno_objetivo: 4800  # Umbral de Gymnasium (reward_threshold de HalfCheetah-v5).
+  # Cada 50 iteraciones, unos 100 000 pasos, como antes (2 iteraciones de 50 000).
+  evaluar_cada: 50
+  # Elección propia: por encima del experto del paper (tabla 1: 4463,46 ± 105,83, en
+  # HalfCheetah-v1) y del umbral de Gymnasium (4800).
+  retorno_objetivo: 5000
+  # Hiperparámetros del experto (GAIL sigue con la sección trpo): los de TRPO de RL Zoo
+  # para HalfCheetah-v4 (hyperparams/trpo.yml) sin normalizar la recompensa (RL Zoo la
+  # normaliza). Elegidos por el equipo en el ajuste del 2026-10-31 (grupo W&B
+  # ajuste-experto-halfcheetah), por ser la variante de mejor retorno.
+  trpo:
+    capas_ocultas: [64, 64]  # MlpPolicy por defecto de sb3 (RL Zoo no da policy_kwargs).
+    activacion: tanh
+    gamma: 0.99
+    gae_lambda: 0.95
+    target_kl: 0.04  # La única clave propia de HalfCheetah-v4 en RL Zoo.
+    cg_damping: 0.1
+    pasos_por_iteracion: 2048  # n_steps 1024 × n_envs 2.
+    n_entornos: 2
+    normalizar_observaciones: true
+    pasos_gradiente_conjugado: 25  # cg_max_steps.
+    pasos_valor: 20  # n_critic_updates.
+    learning_rate_valor: 0.001  # learning_rate (el del crítico en sb3-contrib).
+    batch_size_valor: 128  # batch_size.
 gail:
   iteraciones: 500  # Código original (max_iter 501).
   evaluar_cada: 10  # Elección propia, como en CartPole.

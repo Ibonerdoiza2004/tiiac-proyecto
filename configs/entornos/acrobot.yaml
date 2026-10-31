@@ -5,14 +5,14 @@ experimento:
   # el barrido en 5 procesos sin que compartan núcleo.
   repeticiones: 5
 datos:
-  # Congelado el 2026-10-31 en Linux (WSL2, Python 3.12.3), commit
-  # 6ba7aae45d70054b40df64d0010a4d6a549bf22c.
-  demostraciones: data/demostraciones/acrobot/congelado
-  experto: checkpoints/expertos/acrobot/congelado
-  huella_partidas: a2792764ba2db2f276b1e046547b75017254bb3030b8b75d0238599dfb0e821b
-  huella_experto: ffb1831ca3ae87e5c6fdaa4bac182fb5fd62213e4c089df67ecd4dbd100eacad  # SHA-256 de modelo.zip
-  artefacto_demostraciones: demostraciones-157085d036d0  # Artefacto W&B congelado.
-  artefacto_experto: experto-Acrobot-v1-ffb1831ca3ae
+  # Pendiente de volver a congelar con la configuración nueva del experto (los
+  # congelados el 2026-10-31 se retiraron): ver «Otros entornos» en el README.
+  demostraciones: pendiente
+  experto: pendiente
+  huella_partidas: pendiente
+  huella_experto: pendiente
+  artefacto_demostraciones: pendiente
+  artefacto_experto: pendiente
 demostraciones:
   partidas_train: 10  # Código original (full_dataset_num_trajs); igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.
@@ -34,10 +34,16 @@ trpo:
   normalizar_observaciones: true  # Como el original.
   batch_size_valor: 250  # Divide los 5000 pasos de cada iteración.
 experto:
-  # Elección propia: tope del entrenamiento, que para al alcanzar el objetivo. El
-  # congelado lo alcanzó en 100 000 pasos y 34 s.
+  # Elección propia: tope del entrenamiento, que para al alcanzar el objetivo. Con el
+  # umbral de Gymnasium como objetivo, el experto lo alcanzaba en 100 000 pasos y 34 s.
   pasos_totales: 1000000
-  retorno_objetivo: -100  # Umbral de Gymnasium (reward_threshold de Acrobot-v1).
+  # Elección propia: algo por encima del experto del paper (tabla 1: −75,25 ± 10,94, en
+  # Acrobot-v0) y más exigente que el umbral de Gymnasium (−100), con el que el experto
+  # paraba justo al cruzarlo.
+  retorno_objetivo: -70
+  # 50 partidas por evaluación, como las estadísticas del paper: con 10, la mejor de
+  # muchas evaluaciones es optimista y el experto paraba antes de tiempo.
+  episodios_evaluacion: 50
 gail:
   iteraciones: 300  # Paper, tabla 2 (el código original usa max_iter 301).
   evaluar_cada: 10  # Elección propia, como en CartPole.

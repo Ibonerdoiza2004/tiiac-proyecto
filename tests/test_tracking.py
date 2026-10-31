@@ -202,10 +202,6 @@ def test_nombre_artefacto_de_cada_tipo(argumentos, esperado):
 # datos en W&B (el perfil no las guarda; las de CartPole están también en el README).
 @pytest.mark.parametrize("entorno,npz", [
     ("cartpole", "5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9"),
-    ("mountaincar", "25619a7be0418471efee7fe854b3f7c666418eb1577bf0a0c8f0c4b2a771ad74"),
-    ("acrobot", "157085d036d084d347bfab65738e04fc95e4c8dc95226217012f4c500e42e6dd"),
-    ("reacher", "2690a6ba62cfebc08a04662384197b43d196f14fa55dabc8d8b252bc3b339086"),
-    ("halfcheetah", "2cd935110cd23345debde10bdc43a317e6113a65cd92f2fc591706eac0e27800"),
 ])
 def test_nombre_artefacto_reproduce_los_artefactos_congelados(entorno, npz):
     """Regresión: cambiar el formato o la longitud dejaría sin encontrar los congelados."""

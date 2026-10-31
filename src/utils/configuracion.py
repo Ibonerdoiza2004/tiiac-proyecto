@@ -61,17 +61,39 @@ def _leer_yaml(ruta: Path) -> dict[str, Any]:
     return contenido
 
 
-def _combinar(base: dict[str, Any], capa: Mapping[str, Any], ruta: str = "") -> None:
-    """Combina una capa en base y rechaza claves que no declare la base."""
+# Secciones que cambian claves de otra solo para una parte del flujo: admiten las claves
+# de la sección de referencia (experto.trpo, las de trpo, solo al entrenar el experto).
+SOBRESCRITURAS = {"experto.trpo": "trpo"}
+
+
+def _combinar(base: dict[str, Any], capa: Mapping[str, Any], ruta: str = "",
+              raiz: dict[str, Any] | None = None) -> None:
+    """Combina una capa en base y rechaza claves que no declare la base.
+
+    En las secciones de SOBRESCRITURAS, las claves válidas son las de su sección de
+    referencia en raiz (por defecto, base).
+    """
+    raiz = base if raiz is None else raiz
     for clave, valor in capa.items():
-        if clave not in base:
-            nombre = f"{ruta}.{clave}" if ruta else str(clave)
-            raise ValueError(f"Clave de configuración desconocida: {nombre}")
         nombre = f"{ruta}.{clave}" if ruta else str(clave)
+        if clave not in base:
+            raise ValueError(f"Clave de configuración desconocida: {nombre}")
+        if nombre in SOBRESCRITURAS:
+            if not isinstance(valor, Mapping):
+                raise ValueError(f"Se esperaba un diccionario en {nombre}")
+            referencia = raiz[SOBRESCRITURAS[nombre]]
+            for subclave, subvalor in valor.items():
+                if subclave not in referencia:
+                    raise ValueError(f"Clave de configuración desconocida: {nombre}.{subclave}")
+                if isinstance(subvalor, Mapping):
+                    raise ValueError("Se esperaba un valor escalar o lista en "
+                                     f"{nombre}.{subclave}")
+                base[clave][subclave] = deepcopy(subvalor)
+            continue
         if isinstance(base[clave], dict):
             if not isinstance(valor, Mapping):
                 raise ValueError(f"Se esperaba un diccionario en {nombre}")
-            _combinar(base[clave], valor, nombre)
+            _combinar(base[clave], valor, nombre, raiz)
         elif isinstance(valor, Mapping):
             raise ValueError(f"Se esperaba un valor escalar o lista en {nombre}")
         else:

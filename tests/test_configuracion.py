@@ -276,6 +276,28 @@ def test_dato_congelado_solo_reconoce_el_marcador_exacto(valor):
     assert dato_congelado(cfg, "huella_experto") == valor
 
 
+# Perfiles cuyo experto cambió de configuración y esperan sus datos nuevos.
+PENDIENTES_DE_CONGELAR = {"mountaincar", "acrobot", "reacher", "halfcheetah"}
+# Objetivo propio del experto (elección propia) y media del experto del paper (tabla 1).
+OBJETIVOS_PROPIOS = {"mountaincar": -90, "acrobot": -70, "reacher": -3.5, "halfcheetah": 5000}
+EXPERTO_PAPER = {"mountaincar": -98.75, "acrobot": -75.25, "reacher": -4.09,
+                 "halfcheetah": 4463.46}
+
+
+@pytest.mark.parametrize("entorno", sorted(OBJETIVOS_PROPIOS))
+def test_los_objetivos_propios_piden_mas_que_el_paper_y_que_gymnasium(entorno):
+    """Objetivo por encima del experto del paper y del umbral de Gymnasium."""
+    cfg = resolver_configuracion(BASE, entorno)
+    objetivo = cfg["experto"]["retorno_objetivo"]
+    assert objetivo > EXPERTO_PAPER[entorno]
+    assert objetivo > gym.spec(cfg["entorno"]["id"]).reward_threshold
+
+
+@pytest.mark.parametrize("entorno", ["mountaincar", "acrobot"])
+def test_mountaincar_y_acrobot_evaluan_con_50_partidas(entorno):
+    assert resolver_configuracion(BASE, entorno)["experto"]["episodios_evaluacion"] == 50
+
+
 @pytest.mark.parametrize("entorno,gym_id,frecuencia,recompensa,subconjuntos,repeticiones,"
                          "iteraciones,pasos", [
     ("mountaincar", "MountainCar-v0", 5, "log_d", [1, 4, 7, 10], 5, 300, 5000),
@@ -284,16 +306,17 @@ def test_dato_congelado_solo_reconoce_el_marcador_exacto(valor):
     ("halfcheetah", "HalfCheetah-v5", 20, "menos_log_uno_menos_d", [4, 11, 18, 25], 1, 500,
      50000),
 ])
-def test_perfiles_nuevos_siguen_al_codigo_original_y_citan_sus_datos_congelados(
+def test_perfiles_nuevos_siguen_al_codigo_original_y_citan_sus_datos(
     entorno, gym_id, frecuencia, recompensa, subconjuntos, repeticiones, iteraciones, pasos
 ):
-    """Valores de im_classic_pipeline.yaml / im_pipeline.yaml; objetivo, el umbral de Gymnasium.
+    """Valores de im_classic_pipeline.yaml / im_pipeline.yaml.
 
     Las repeticiones de MountainCar y Acrobot son 5, como en CartPole (elección propia).
+    El objetivo del experto es propio en todos (OBJETIVOS_PROPIOS).
     """
     cfg = resolver_configuracion(BASE, entorno)
     assert cfg["entorno"]["id"] == gym_id
-    assert cfg["experto"]["retorno_objetivo"] == gym.spec(gym_id).reward_threshold
+    assert cfg["experto"]["retorno_objetivo"] == OBJETIVOS_PROPIOS[entorno]
     assert cfg["demostraciones"]["frecuencia_pares"] == frecuencia
     assert cfg["demostraciones"]["subconjuntos"] == subconjuntos
     assert cfg["demostraciones"]["partidas_train"] == subconjuntos[-1]
@@ -301,7 +324,75 @@ def test_perfiles_nuevos_siguen_al_codigo_original_y_citan_sus_datos_congelados(
     assert cfg["experimento"]["repeticiones"] == repeticiones
     assert cfg["gail"]["iteraciones"] == iteraciones
     assert cfg["trpo"]["pasos_por_iteracion"] == pasos
-    assert cfg["experto"]["pasos_totales"] % pasos == 0
-    assert DATOS_PENDIENTES not in cfg["datos"].values()
-    assert cfg["datos"]["demostraciones"] == f"data/demostraciones/{entorno}/congelado"
-    assert cfg["datos"]["experto"] == f"checkpoints/expertos/{entorno}/congelado"
+    from src.training.trpo import config_trpo_experto
+    pasos_experto = config_trpo_experto(cfg)["trpo"]["pasos_por_iteracion"]
+    assert cfg["experto"]["pasos_totales"] >= pasos_experto
+    if entorno in PENDIENTES_DE_CONGELAR:
+        assert all(valor == DATOS_PENDIENTES for valor in cfg["datos"].values())
+    else:
+        assert DATOS_PENDIENTES not in cfg["datos"].values()
+        assert cfg["datos"]["demostraciones"] == f"data/demostraciones/{entorno}/congelado"
+        assert cfg["datos"]["experto"] == f"checkpoints/expertos/{entorno}/congelado"
+
+
+# --- experto.trpo: claves de trpo solo para el experto -------------------------------
+
+def test_experto_trpo_esta_vacio_por_defecto():
+    assert resolver_configuracion(BASE, "cartpole")["experto"]["trpo"] == {}
+
+
+def test_experto_trpo_admite_claves_de_trpo_y_las_combina_por_capas():
+    cfg = resolver_configuracion(BASE, "cartpole", {"experto": {"trpo": {"target_kl": 0.04}}})
+    assert cfg["experto"]["trpo"] == {"target_kl": 0.04}
+    assert cfg["trpo"]["target_kl"] == 0.01
+
+
+def test_experto_trpo_de_varias_capas_se_combina_clave_a_clave(tmp_path):
+    configs = tmp_path / "configs"
+    (configs / "entornos").mkdir(parents=True)
+    (configs / "default.yaml").write_bytes(BASE.read_bytes())
+    perfil = yaml.safe_load((BASE.parent / "entornos" / "cartpole.yaml").read_text(
+        encoding="utf-8"))
+    perfil["experto"]["trpo"] = {"target_kl": 0.04, "n_entornos": 2}
+    (configs / "entornos" / "cartpole.yaml").write_text(yaml.safe_dump(perfil),
+                                                         encoding="utf-8")
+    cfg = resolver_configuracion(configs / "default.yaml", "cartpole",
+                                 {"experto": {"trpo": {"n_entornos": 5}}})
+    assert cfg["experto"]["trpo"] == {"target_kl": 0.04, "n_entornos": 5}
+
+
+@pytest.mark.parametrize("capa,mensaje", [
+    ({"experto": {"trpo": {"inventada": 1}}}, "desconocida: experto.trpo.inventada"),
+    ({"experto": {"trpo": {"gamma": {"a": 1}}}}, "escalar o lista en experto.trpo.gamma"),
+    ({"experto": {"trpo": [1]}}, "diccionario en experto.trpo"),
+    ({"experto": {"trpo": {"gamma": None}}}, "experto.trpo.gamma"),
+])
+def test_experto_trpo_rechaza_lo_que_no_es_de_trpo(capa, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        resolver_configuracion(BASE, "cartpole", capa)
+
+
+def test_el_experto_de_halfcheetah_usa_los_valores_de_rl_zoo_sin_cambiar_gail():
+    """experto.trpo: TRPO de RL Zoo para HalfCheetah-v4, sin normalizar la recompensa."""
+    cfg = resolver_configuracion(BASE, "halfcheetah")
+    assert cfg["experto"]["trpo"] == {
+        "capas_ocultas": [64, 64], "activacion": "tanh", "gamma": 0.99, "gae_lambda": 0.95,
+        "target_kl": 0.04, "cg_damping": 0.1, "pasos_por_iteracion": 2048, "n_entornos": 2,
+        "normalizar_observaciones": True, "pasos_gradiente_conjugado": 25, "pasos_valor": 20,
+        "learning_rate_valor": 0.001, "batch_size_valor": 128}
+    assert cfg["experto"]["evaluar_cada"] == 50
+    assert cfg["trpo"]["pasos_por_iteracion"] == 50000
+
+
+def test_el_experto_de_reacher_usa_los_valores_de_rl_zoo_sin_cambiar_gail():
+    """experto.trpo: TRPO de RL Zoo para ReacherBulletEnv-v0 sin normalizar la recompensa."""
+    cfg = resolver_configuracion(BASE, "reacher")
+    assert cfg["experto"]["trpo"] == {
+        "capas_ocultas": [256, 256], "activacion": "relu", "log_std_inicial": -1.0,
+        "inicializacion_ortogonal": False, "gamma": 0.99, "gae_lambda": 0.95,
+        "target_kl": 0.01, "cg_damping": 0.1, "pasos_por_iteracion": 2048, "n_entornos": 2,
+        "normalizar_observaciones": True, "pasos_gradiente_conjugado": 25, "pasos_valor": 20,
+        "learning_rate_valor": 0.001, "batch_size_valor": 128}
+    assert cfg["experto"]["evaluar_cada"] == 50
+    assert cfg["trpo"]["capas_ocultas"] == [100, 100]
+    assert cfg["trpo"]["pasos_por_iteracion"] == 50000
