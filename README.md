@@ -2,9 +2,9 @@
 
 Replicación educativa de **Generative Adversarial Imitation Learning** (Ho y
 Ermon, 2016), comparando GAIL y Behavioral Cloning con un experto TRPO y una
-política aleatoria. CartPole es el entorno con experto y datos congelados;
-MountainCar, Acrobot, Reacher y HalfCheetah tienen ya su perfil, a la espera de
-congelar los suyos (ver [Añadir otro entorno](#añadir-otro-entorno)).
+política aleatoria. CartPole es el entorno principal y el que cumple la regla
+5/20; MountainCar, Acrobot, Reacher y HalfCheetah tienen también su perfil y su
+experto y datos congelados (ver [Otros entornos](#otros-entornos)).
 
 - Paper: [Generative Adversarial Imitation Learning](https://arxiv.org/abs/1606.03476)
 - Seguimiento de experimentos: [proyecto W&B `tiiac-proyecto`](https://wandb.ai/a-corral-universidad-de-deusto/tiiac-proyecto)
@@ -63,18 +63,32 @@ local), comprueba sus huellas, entrena 20 BC y 20 GAIL (subconjuntos de 1, 4, 7 
 5 repeticiones), evalúa los 42 agentes (experto, aleatorio, BC y GAIL) con
 50 episodios cada uno e imprime una línea de métricas por agente.
 
+Los otros entornos se ejecutan igual, cambiando `--entorno` (`mountaincar`,
+`acrobot`, `reacher` o `halfcheetah`). Usan los tamaños del código original, así
+que tardan horas en lugar de minutos (ver [Tiempos medidos](#tiempos-medidos)):
+
+| Entorno | BC + GAIL | Agentes evaluados | Iteraciones de GAIL |
+|---|---|---|---|
+| CartPole | 20 + 20 (4 cantidades × 5 repeticiones) | 42 | 20 de 5000 pasos |
+| MountainCar, Acrobot | 20 + 20 (4 × 5) | 42 | 300 de 5000 pasos |
+| Reacher, HalfCheetah | 4 + 4 (4 × 1) | 10 | 500 de 50 000 pasos |
+
+Conviene lanzarlos de uno en uno: cada experimento ya reparte sus
+entrenamientos en `experimento.procesos` procesos.
+
 ### Comandos estándar
 
 | Para qué | Comando |
 |---|---|
 | Smoke | `python run.py --smoke` |
 | Experimento completo | `python run.py --entorno cartpole --descargar --grupo <nombre>` |
+| Otro entorno | `python run.py --entorno <entorno> --descargar --grupo <nombre>` |
 
 ## Argumentos de `run.py`
 
 | Argumento | Para qué sirve | Por defecto |
 |---|---|---|
-| `--entorno <nombre>` | Perfil de entorno (`configs/entornos/<nombre>.yaml`): `cartpole`, `mountaincar`, `acrobot`, `reacher` o `halfcheetah`. Solo `cartpole` tiene ya datos congelados. | `cartpole` |
+| `--entorno <nombre>` | Perfil de entorno (`configs/entornos/<nombre>.yaml`): `cartpole`, `mountaincar`, `acrobot`, `reacher` o `halfcheetah`. Todos tienen experto y datos congelados. | `cartpole` |
 | `--config <yaml>` | Configuración base sobre la que se aplica el perfil. | `configs/default.yaml` |
 | `--smoke` | Ejecuta el flujo completo en miniatura (ver [El smoke](#el-smoke)). | — |
 | `--descargar` | Baja de W&B el experto y las demostraciones congelados que falten. Solo descarga en carpetas ausentes o vacías y nunca sobrescribe. | — |
@@ -126,7 +140,7 @@ Ha ido bien si termina con `=== métricas ===`, una línea por agente y código 
 
 ## Qué produce un experimento
 
-En disco, en `checkpoints/run/cartpole/<fecha>/` (o en `--salida`), que no se
+En disco, en `checkpoints/run/<entorno>/<fecha>/` (o en `--salida`), que no se
 versiona:
 
 ```text
@@ -135,13 +149,13 @@ gail/cantidad_<c>/repeticion_<r>/
     modelo.zip                             agente TRPO de GAIL
     discriminador.pt                       pesos y normalización del discriminador
     gail.json                              configuración, resumen, procedencia y hardware
-evaluacion.json                            protocolo y retornos de los 42 agentes
+evaluacion.json                            protocolo y retornos de todos los agentes
 ```
 
-En W&B, cada ejecución forma un grupo de 41 runs: 20
-`tiiac-bc-cartpole-c<c>-r<r>`, 20 `tiiac-gail-cartpole-c<c>-r<r>` y
-`tiiac-comparacion-cartpole`, que aparece al terminar la evaluación con las
-tablas `comparacion` y `episodios`. Las métricas se agrupan en secciones por
+En W&B, cada ejecución forma un grupo con un run por entrenamiento,
+`tiiac-bc-<entorno>-c<c>-r<r>` y `tiiac-gail-<entorno>-c<c>-r<r>` (41 runs en
+total en CartPole), y `tiiac-comparacion-<entorno>`, que aparece al terminar la
+evaluación con las tablas `comparacion` y `episodios`. Las métricas se agrupan en secciones por
 prefijo: `bc/`, `trpo/`, `discriminador/`, `reajuste/` y `validacion/`.
 
 Para ver una ejecución: en *Runs*, **Filter** → `Group` = `<nombre>`. Para
@@ -172,6 +186,9 @@ wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-
 wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-92c44313863e:latest --root checkpoints/expertos/cartpole/congelado
 ```
 
+Para otro entorno, lo mismo con sus artefactos (ver [Otros entornos](#otros-entornos))
+y sus carpetas `congelado`.
+
 Para regenerarlos, el procedimiento reproducible es:
 
 ```bash
@@ -197,6 +214,34 @@ Procedencia: datos propios generados en `CartPole-v1` de Gymnasium (licencia
 MIT). `configs/entornos/cartpole.yaml` (sección `datos`) fija las carpetas, las
 huellas y los artefactos congelados.
 
+### Otros entornos
+
+Congelados el 2026-10-31 en Linux (WSL2, Intel Core i7-11800H) con Python 3.12.3,
+desde el commit `6ba7aae45d70054b40df64d0010a4d6a549bf22c`. Están en
+`checkpoints/expertos/<entorno>/congelado/` y
+`data/demostraciones/<entorno>/congelado/`, y en W&B en el grupo `congelado`
+(runs `tiiac-experto-<entorno>` y `tiiac-datos-<entorno>`). Cada perfil de
+`configs/entornos/` (sección `datos`) cita sus carpetas, la huella de las
+partidas, la de `modelo.zip` y los artefactos, así que
+`run.py --entorno <entorno> --descargar` funciona igual que con CartPole. Las
+huellas de `demostraciones.npz` y `splits.json` están en el resumen del run de
+datos en W&B.
+
+| Entorno | Experto (artefacto) | Demostraciones (artefacto) | Partidas | Objetivo del experto |
+|---|---|---|---|---|
+| `MountainCar-v0` | `experto-MountainCar-v0-c54d77584ee7` | `demostraciones-25619a7be041` | 15 (10 + 5), 1782 pasos | −110, alcanzado |
+| `Acrobot-v1` | `experto-Acrobot-v1-ffb1831ca3ae` | `demostraciones-157085d036d0` | 15 (10 + 5), 1585 pasos | −100, alcanzado |
+| `Reacher-v5` | `experto-Reacher-v5-228921524755` | `demostraciones-2690a6ba62cf` | 30 (25 + 5), 1500 pasos | −3,75, no alcanzado |
+| `HalfCheetah-v5` | `experto-HalfCheetah-v5-bc5f26bc090c` | `demostraciones-2cd935110cd2` | 30 (25 + 5), 30 000 pasos | 4800, no alcanzado |
+
+Si el experto no alcanza el objetivo agota sus pasos y guarda su mejor evaluación;
+con ese experto se grabaron las demostraciones. Se regeneran con los dos scripts
+de CartPole, cambiando `--entorno` y con `--salida` en las carpetas `congelado`.
+
+Procedencia: datos propios generados en los entornos de Gymnasium (licencia MIT);
+Reacher y HalfCheetah usan además MuJoCo (licencia Apache 2.0; `gymnasium[mujoco]`
+y `mujoco` ya están en `requirements.txt`).
+
 ### Añadir otro entorno
 
 1. Añadir su nombre a `TipoEntorno` en `src/utils/configuracion.py`; de ahí salen
@@ -211,16 +256,6 @@ huellas y los artefactos congelados.
 
 Mientras quede algún `pendiente`, se pueden ejecutar el smoke y los scripts, pero
 `run.py --entorno <nombre>` sale con código 2 y dice qué valor falta.
-
-MountainCar, Acrobot, Reacher y HalfCheetah ya tienen los pasos 1 a 3 hechos: perfil
-con los valores del código original de GAIL (`im_classic_pipeline.yaml` e
-`im_pipeline.yaml`, citados en cada YAML), `pendiente` en `datos` y smoke en verde.
-Reacher y HalfCheetah usan MuJoCo (`gymnasium[mujoco]` y `mujoco`, ya en
-`requirements.txt`). Falta el paso 4. La regla 5/20 se cumple con CartPole; estos
-entornos usan los tamaños del original y tardarán mucho más, sobre todo los de
-MuJoCo (500 iteraciones de 50 000 pasos), así que conviene medir su tiempo con
-`time`. Todos usan 10 entornos por proceso y `experimento.procesos: 5`; en MuJoCo,
-con 1 repetición, el barrido solo tiene 4 entrenamientos a la vez.
 
 ## Etapas por separado
 
@@ -267,6 +302,7 @@ Con los datos congelados y la configuración actual:
 | Experimento completo (`time python run.py --entorno cartpole --grupo entrega-e1 --descargar`, online): 20 BC, 20 GAIL de 20 iteraciones y evaluación | 7 min 13 s, de ellos 67 s de evaluación (resumen de W&B) | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, 5 procesos, sin GPU | 2026-10-30 |
 | Experto congelado (60 000 pasos, parada al llegar a 500) | 14 s | Linux (WSL2), Intel Core i7-11800H, 16 procesadores lógicos, sin GPU | 2026-10-30 |
 | Demostraciones congeladas (15 partidas, 7500 pasos) | 1,7 s | Linux (WSL2), misma máquina | 2026-10-30 |
+| Expertos congelados de los otros entornos: MountainCar (150 000 pasos, parada al llegar al objetivo), Acrobot (100 000, ídem), Reacher y HalfCheetah (25 000 000 cada uno, sin parada) | 40 s, 34 s, 4503 s (75 min) y 5312 s (89 min) | Linux (WSL2), misma máquina, un experto a la vez | 2026-10-30/31 |
 
 La ejecución de 7 min 13 s es el grupo `entrega-e1` de W&B (run de comparación
 `r6oajx1r`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
@@ -276,6 +312,7 @@ Mediciones anteriores, con otros datos congelados o con otra configuración:
 
 | Medición | Tiempo | Hardware | Fecha |
 |---|---|---|---|
+| Barrido GAIL de Reacher con datos de prueba, antes de congelar (4 entrenamientos a la vez, 500 iteraciones de 50 000 pasos, sin W&B) | 9393 s (2 h 37 min), unos 18,7 s por iteración | Linux (WSL2), Intel Core i7-11800H, 4 procesos | 2026-10-30 |
 | Experimento completo con los datos congelados en Windows, ya sustituidos (grupo `4a2683ef47f9`) | 17 min 32 s (1051,8 s), de ellos 5 min 53 s de evaluación | Windows 11, AMD64 Family 23 Model 160, 8 procesadores lógicos, 5 procesos, sin GPU | 2026-10-28 |
 | Barrido con 80 iteraciones de GAIL y evaluación | unos 42 min | Windows 11, 8 procesadores lógicos | 2026-10-28 |
 | Experto (50 000 pasos, 1 entorno) | 53 s | Linux (WSL2), 12 núcleos | 2026-10-16 |
@@ -295,6 +332,9 @@ mismo resultado en serie y en paralelo.
   anterior), por debajo de los 20 minutos. TRPO,
   las políticas y el discriminador se ejecutan en CPU (`device="cpu"`), así que
   una GPU no acelera estos entrenamientos.
+- **Otros entornos:** la regla se aplica al experimento de CartPole. MountainCar,
+  Acrobot, Reacher y HalfCheetah usan los tamaños del código original y no la
+  cumplen: el único barrido medido, el de GAIL en Reacher, tardó 2 h 37 min.
 - **Pendiente:** medirlo en una T4 de Colab gratuito o dejar aquí la
   justificación de por qué no se mide.
 
@@ -303,13 +343,15 @@ mismo resultado en serie y en paralelo.
 | Ambigüedad o diferencia | Qué decidimos | Por qué |
 |---|---|---|
 | Iteraciones de GAIL (paper: 300) | 20 en CartPole | Presupuesto de la regla 5/20 |
-| Repeticiones (código original: 7) | 5 | Repartir el barrido en 5 procesos sin compartir núcleo |
-| Entornos por iteración de TRPO | 10 entornos de 500 pasos (mismos 5000 pasos) | Unas 2,7 veces más rápido, medido |
+| Repeticiones (código original: 7 en los clásicos, 1 en MuJoCo) | 5 en CartPole, MountainCar y Acrobot; 1 en Reacher y HalfCheetah, como el original | Repartir el barrido en 5 procesos sin compartir núcleo |
+| Entornos por iteración de TRPO | 10 entornos en paralelo con los mismos pasos por iteración (5000 en CartPole) | Unas 2,7 veces más rápido en CartPole, medido |
+| Normalización de observaciones de TRPO | Desactivada en CartPole; activada en los demás, como el original | En CartPole no hace falta (elección propia); en MuJoCo sí |
 | Objetivos de la red de valor tras actualizar D | Retornos GAE, no Monte Carlo | Coherente con el resto de TRPO en sb3 |
 | Ajuste del crítico | Adam por minibatches, no región de confianza | Implementación de sb3-contrib |
-| Elección del experto | El mejor por evaluación, parando al llegar a 500 | El original usa un snapshot fijo |
+| Elección del experto | El mejor por evaluación, parando al alcanzar el retorno objetivo (500 en CartPole) | El original usa un snapshot fijo |
+| Pasos máximos del experto | 100 000 en CartPole, 1 000 000 en MountainCar y Acrobot, 25 000 000 (500 iteraciones) en Reacher y HalfCheetah | Los MuJoCo, como el snapshot `iter0000500` del original; el resto, tope propio |
 | Normalización de la entrada del discriminador | Fija con los pares expertos de train | El original la actualiza también con pares del agente |
-| Validación de partidas (paper: 70/30 de pares) | 10 partidas de train y 5 de validación, separadas por trayectoria | Evitar fugas entre episodios |
+| Validación de partidas (paper: 70/30 de pares) | 5 partidas de validación, separadas por trayectoria, además de las de train (10, o 25 en Reacher y HalfCheetah) | Evitar fugas entre episodios |
 | Parada de BC | Paciencia de 20 épocas sobre la pérdida de validación | El paper solo dice «hasta que deja de bajar» |
 | Retorno objetivo del experto | El umbral de Gymnasium (`reward_threshold`) de cada entorno | El código original no lo fija; es una fuente citable |
 | Versiones de Acrobot y HalfCheetah (original: v0 y v1) | `Acrobot-v1` y `HalfCheetah-v5` | Las del original ya no existen en Gymnasium |

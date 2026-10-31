@@ -1,16 +1,18 @@
 # Perfil de MountainCar. Tamaños del código original de GAIL (im_classic_pipeline.yaml),
-# repetidos aquí para que no cambien si cambia la base. Pendiente: congelar el experto y
-# las demostraciones y medir la regla 5/20.
+# repetidos aquí para que no cambien si cambia la base.
 experimento:
-  repeticiones: 7  # Código original (runs).
+  # Elección propia, como en CartPole: el código original usa 7 (runs); 5 para repartir
+  # el barrido en 5 procesos sin que compartan núcleo.
+  repeticiones: 5
 datos:
-  # Sin datos congelados todavía: ver «Añadir otro entorno» en el README.
-  demostraciones: pendiente
-  experto: pendiente
-  huella_partidas: pendiente
-  huella_experto: pendiente
-  artefacto_demostraciones: pendiente
-  artefacto_experto: pendiente
+  # Congelado el 2026-10-31 en Linux (WSL2, Python 3.12.3), commit
+  # 6ba7aae45d70054b40df64d0010a4d6a549bf22c.
+  demostraciones: data/demostraciones/mountaincar/congelado
+  experto: checkpoints/expertos/mountaincar/congelado
+  huella_partidas: 15fafa98627cadfcd8d6eecf262c8f2eb0ebbc0d0644fe1643f4f463c00c554f
+  huella_experto: c54d77584ee78e8b92d1a174cbde4310f4cb2d2659f2c73d91d6930fca412960  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-25619a7be041  # Artefacto W&B congelado.
+  artefacto_experto: experto-MountainCar-v0-c54d77584ee7
 demostraciones:
   partidas_train: 10  # Código original (full_dataset_num_trajs); igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.
@@ -31,7 +33,8 @@ trpo:
   normalizar_observaciones: true  # Como el original.
   batch_size_valor: 250  # Divide los 5000 pasos de cada iteración.
 experto:
-  # Provisional, por medir: tope del entrenamiento, que para al alcanzar el objetivo.
+  # Elección propia: tope del entrenamiento, que para al alcanzar el objetivo. El
+  # congelado lo alcanzó en 150 000 pasos y 40 s.
   pasos_totales: 1000000
   retorno_objetivo: -110  # Umbral de Gymnasium (reward_threshold de MountainCar-v0).
 gail:

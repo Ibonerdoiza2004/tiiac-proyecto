@@ -1,16 +1,18 @@
 # Perfil de Acrobot. Tamaños del código original de GAIL (im_classic_pipeline.yaml),
-# repetidos aquí para que no cambien si cambia la base. Pendiente: congelar el experto y
-# las demostraciones y medir la regla 5/20.
+# repetidos aquí para que no cambien si cambia la base.
 experimento:
-  repeticiones: 7  # Código original (runs).
+  # Elección propia, como en CartPole: el código original usa 7 (runs); 5 para repartir
+  # el barrido en 5 procesos sin que compartan núcleo.
+  repeticiones: 5
 datos:
-  # Sin datos congelados todavía: ver «Añadir otro entorno» en el README.
-  demostraciones: pendiente
-  experto: pendiente
-  huella_partidas: pendiente
-  huella_experto: pendiente
-  artefacto_demostraciones: pendiente
-  artefacto_experto: pendiente
+  # Congelado el 2026-10-31 en Linux (WSL2, Python 3.12.3), commit
+  # 6ba7aae45d70054b40df64d0010a4d6a549bf22c.
+  demostraciones: data/demostraciones/acrobot/congelado
+  experto: checkpoints/expertos/acrobot/congelado
+  huella_partidas: a2792764ba2db2f276b1e046547b75017254bb3030b8b75d0238599dfb0e821b
+  huella_experto: ffb1831ca3ae87e5c6fdaa4bac182fb5fd62213e4c089df67ecd4dbd100eacad  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-157085d036d0  # Artefacto W&B congelado.
+  artefacto_experto: experto-Acrobot-v1-ffb1831ca3ae
 demostraciones:
   partidas_train: 10  # Código original (full_dataset_num_trajs); igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.
@@ -32,7 +34,8 @@ trpo:
   normalizar_observaciones: true  # Como el original.
   batch_size_valor: 250  # Divide los 5000 pasos de cada iteración.
 experto:
-  # Provisional, por medir: tope del entrenamiento, que para al alcanzar el objetivo.
+  # Elección propia: tope del entrenamiento, que para al alcanzar el objetivo. El
+  # congelado lo alcanzó en 100 000 pasos y 34 s.
   pasos_totales: 1000000
   retorno_objetivo: -100  # Umbral de Gymnasium (reward_threshold de Acrobot-v1).
 gail:

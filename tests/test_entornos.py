@@ -1,5 +1,7 @@
 """Pruebas de creación, siembra y monitorización de entornos."""
 
+import sys
+
 import gymnasium as gym
 import numpy as np
 import pytest
@@ -273,3 +275,73 @@ def test_semillas_repeticion_rechaza_argumentos_no_validos(semilla, repeticion, 
     with pytest.raises(ValueError, match=mensaje):
         semillas_repeticion(semilla, repeticion)
 
+
+
+# --- Filtro del aviso settotalmass de MuJoCo ---------------------------------------------
+
+AVISO_SETTOTALMASS = ("compiler attribute 'settotalmass' is deprecated and will be removed in a "
+                      "future release: scale the masses and densities in the model, or call "
+                      "mj_setTotalmass and mj_setConst on the compiled model")
+
+
+@pytest.fixture
+def mujoco_sin_gestor():
+    """Deja MuJoCo sin gestor de avisos, como un proceso nuevo, y restaura el anterior."""
+    mujoco = pytest.importorskip("mujoco")
+    anterior = mujoco.get_mju_user_warning()
+    mujoco.set_mju_user_warning(None)
+    yield mujoco
+    mujoco.set_mju_user_warning(anterior)
+
+
+def test_filtrar_aviso_mujoco_calla_settotalmass_y_reenvia_los_demas(capsys):
+    from src.data.entornos import filtrar_aviso_mujoco
+    filtrar_aviso_mujoco(AVISO_SETTOTALMASS)
+    assert capsys.readouterr() == ("", "")
+    filtrar_aviso_mujoco("Nan, Inf or huge value in QACC at DOF 0")
+    salida = capsys.readouterr()
+    assert salida.out == ""
+    assert salida.err == "WARNING: Nan, Inf or huge value in QACC at DOF 0\n"
+
+
+def test_sin_filtro_mujoco_avisa_de_settotalmass(mujoco_sin_gestor, capfd, tmp_path,
+                                                 monkeypatch):
+    """Control del test siguiente: el modelo de HalfCheetah sí da el aviso sin el filtro."""
+    monkeypatch.chdir(tmp_path)
+    env = gym.make("HalfCheetah-v5")
+    env.close()
+    salida = capfd.readouterr()
+    assert "settotalmass" in salida.out + salida.err
+
+
+@pytest.mark.parametrize("entorno_id", ["HalfCheetah-v5", "Reacher-v5"])
+def test_crear_entorno_mujoco_no_avisa_de_settotalmass_ni_deja_registro(
+    entorno_id, mujoco_sin_gestor, capfd, tmp_path, monkeypatch
+):
+    from src.data.entornos import filtrar_aviso_mujoco
+    monkeypatch.chdir(tmp_path)
+    env = crear_entorno({"entorno": {"id": entorno_id}}, 3)
+    env.close()
+    salida = capfd.readouterr()
+    assert "settotalmass" not in salida.out + salida.err
+    assert not (tmp_path / "MUJOCO_LOG.TXT").exists()
+    assert mujoco_sin_gestor.get_mju_user_warning() is filtrar_aviso_mujoco
+
+
+def test_crear_entorno_respeta_un_gestor_de_avisos_ya_puesto(mujoco_sin_gestor):
+    avisos = []
+    gestor = avisos.append
+    mujoco_sin_gestor.set_mju_user_warning(gestor)
+    crear_entorno({"entorno": {"id": "HalfCheetah-v5"}}, None).close()
+    assert mujoco_sin_gestor.get_mju_user_warning() is gestor
+    assert any("settotalmass" in aviso for aviso in avisos)
+
+
+def test_crear_entorno_funciona_sin_mujoco_instalado(monkeypatch):
+    """Sin MuJoCo, los entornos clásicos se crean igual."""
+    monkeypatch.setitem(sys.modules, "mujoco", None)
+    env = crear_entorno(CFG, 5)
+    try:
+        assert env.observation_space.shape == (4,)
+    finally:
+        env.close()

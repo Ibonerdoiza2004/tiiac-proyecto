@@ -278,16 +278,19 @@ def test_dato_congelado_solo_reconoce_el_marcador_exacto(valor):
 
 @pytest.mark.parametrize("entorno,gym_id,frecuencia,recompensa,subconjuntos,repeticiones,"
                          "iteraciones,pasos", [
-    ("mountaincar", "MountainCar-v0", 5, "log_d", [1, 4, 7, 10], 7, 300, 5000),
-    ("acrobot", "Acrobot-v1", 5, "log_d", [1, 4, 7, 10], 7, 300, 5000),
+    ("mountaincar", "MountainCar-v0", 5, "log_d", [1, 4, 7, 10], 5, 300, 5000),
+    ("acrobot", "Acrobot-v1", 5, "log_d", [1, 4, 7, 10], 5, 300, 5000),
     ("reacher", "Reacher-v5", 20, "menos_log_uno_menos_d", [4, 11, 18, 25], 1, 500, 50000),
     ("halfcheetah", "HalfCheetah-v5", 20, "menos_log_uno_menos_d", [4, 11, 18, 25], 1, 500,
      50000),
 ])
-def test_perfiles_nuevos_siguen_al_codigo_original_y_esperan_sus_datos(
+def test_perfiles_nuevos_siguen_al_codigo_original_y_citan_sus_datos_congelados(
     entorno, gym_id, frecuencia, recompensa, subconjuntos, repeticiones, iteraciones, pasos
 ):
-    """Valores de im_classic_pipeline.yaml / im_pipeline.yaml; objetivo, el umbral de Gymnasium."""
+    """Valores de im_classic_pipeline.yaml / im_pipeline.yaml; objetivo, el umbral de Gymnasium.
+
+    Las repeticiones de MountainCar y Acrobot son 5, como en CartPole (elección propia).
+    """
     cfg = resolver_configuracion(BASE, entorno)
     assert cfg["entorno"]["id"] == gym_id
     assert cfg["experto"]["retorno_objetivo"] == gym.spec(gym_id).reward_threshold
@@ -299,4 +302,6 @@ def test_perfiles_nuevos_siguen_al_codigo_original_y_esperan_sus_datos(
     assert cfg["gail"]["iteraciones"] == iteraciones
     assert cfg["trpo"]["pasos_por_iteracion"] == pasos
     assert cfg["experto"]["pasos_totales"] % pasos == 0
-    assert all(valor == DATOS_PENDIENTES for valor in cfg["datos"].values())
+    assert DATOS_PENDIENTES not in cfg["datos"].values()
+    assert cfg["datos"]["demostraciones"] == f"data/demostraciones/{entorno}/congelado"
+    assert cfg["datos"]["experto"] == f"checkpoints/expertos/{entorno}/congelado"

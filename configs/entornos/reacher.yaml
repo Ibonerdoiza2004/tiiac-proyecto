@@ -1,17 +1,17 @@
 # Perfil de Reacher (MuJoCo). Reacher no aparece en los pipelines del código original de
 # GAIL: elección propia, los tamaños de sus entornos MuJoCo (im_pipeline.yaml), repetidos
 # aquí para que no cambien si cambia la base. Necesita gymnasium[mujoco].
-# Pendiente: congelar el experto y las demostraciones y medir la regla 5/20.
 experimento:
   repeticiones: 1  # Como los MuJoCo del código original (runs).
 datos:
-  # Sin datos congelados todavía: ver «Añadir otro entorno» en el README.
-  demostraciones: pendiente
-  experto: pendiente
-  huella_partidas: pendiente
-  huella_experto: pendiente
-  artefacto_demostraciones: pendiente
-  artefacto_experto: pendiente
+  # Congelado el 2026-10-31 en Linux (WSL2, Python 3.12.3), commit
+  # 6ba7aae45d70054b40df64d0010a4d6a549bf22c.
+  demostraciones: data/demostraciones/reacher/congelado
+  experto: checkpoints/expertos/reacher/congelado
+  huella_partidas: 0dfd727a06356b319a56cbcfeb8118822a0fd6c5033a17559bc063cbb7c7a63b
+  huella_experto: 228921524755b714be36c7dde02c8e6d8e29c1efd6ed05fc864ba778d0a5accd  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-2690a6ba62cf  # Artefacto W&B congelado.
+  artefacto_experto: experto-Reacher-v5-228921524755
 demostraciones:
   # Igual al subconjunto mayor. El original graba 50 (full_dataset_num_trajs) y usa
   # hasta 25; aquí la validación va aparte, por trayectoria.
@@ -34,8 +34,9 @@ trpo:
   normalizar_observaciones: true  # Como el original; en MuJoCo hace falta.
   batch_size_valor: 250  # Divide los 50 000 pasos de cada iteración.
 experto:
-  # Provisional, por medir: 500 iteraciones, como los snapshots de los expertos MuJoCo
-  # originales (iter0000500); el entrenamiento para antes si alcanza el objetivo.
+  # 500 iteraciones, como los snapshots de los expertos MuJoCo originales
+  # (iter0000500); el entrenamiento para antes si alcanza el objetivo. El congelado
+  # no lo alcanzó: guarda la mejor evaluación, en 4503 s.
   pasos_totales: 25000000
   retorno_objetivo: -3.75  # Umbral de Gymnasium (reward_threshold de Reacher-v5).
 gail:

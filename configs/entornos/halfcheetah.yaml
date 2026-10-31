@@ -1,16 +1,16 @@
 # Perfil de HalfCheetah (MuJoCo). Tamaños del código original de GAIL (im_pipeline.yaml),
 # repetidos aquí para que no cambien si cambia la base. Necesita gymnasium[mujoco].
-# Pendiente: congelar el experto y las demostraciones y medir la regla 5/20.
 experimento:
   repeticiones: 1  # Código original (runs).
 datos:
-  # Sin datos congelados todavía: ver «Añadir otro entorno» en el README.
-  demostraciones: pendiente
-  experto: pendiente
-  huella_partidas: pendiente
-  huella_experto: pendiente
-  artefacto_demostraciones: pendiente
-  artefacto_experto: pendiente
+  # Congelado el 2026-10-31 en Linux (WSL2, Python 3.12.3), commit
+  # 6ba7aae45d70054b40df64d0010a4d6a549bf22c.
+  demostraciones: data/demostraciones/halfcheetah/congelado
+  experto: checkpoints/expertos/halfcheetah/congelado
+  huella_partidas: cd6495976babac749d34ac3f8592ff26aa87796a5a13a12d39f1e907c66193ef
+  huella_experto: bc5f26bc090c52fd48c9001a6d2e97745e18ee5ffed552a879601fe748cc1ee4  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-2cd935110cd2  # Artefacto W&B congelado.
+  artefacto_experto: experto-HalfCheetah-v5-bc5f26bc090c
 demostraciones:
   # Igual al subconjunto mayor. El original graba 50 (full_dataset_num_trajs) y usa
   # hasta 25; aquí la validación va aparte, por trayectoria.
@@ -33,8 +33,9 @@ trpo:
   normalizar_observaciones: true  # Como el original; en MuJoCo hace falta.
   batch_size_valor: 250  # Divide los 50 000 pasos de cada iteración.
 experto:
-  # Provisional, por medir: 500 iteraciones, como el snapshot del experto original
-  # (iter0000500); el entrenamiento para antes si alcanza el objetivo.
+  # 500 iteraciones, como el snapshot del experto original (iter0000500); el
+  # entrenamiento para antes si alcanza el objetivo. El congelado no lo alcanzó:
+  # guarda la mejor evaluación, en 5312 s.
   pasos_totales: 25000000
   retorno_objetivo: 4800  # Umbral de Gymnasium (reward_threshold de HalfCheetah-v5).
 gail:

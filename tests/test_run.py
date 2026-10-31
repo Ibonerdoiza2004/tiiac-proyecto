@@ -29,6 +29,19 @@ def _archivos(ruta: Path) -> set[Path]:
             if ruta.exists() else set())
 
 
+def _configs_con_datos(tmp_path: Path, entorno: str, datos: dict[str, str]) -> str:
+    """Copia la config base y el perfil del entorno cambiando claves de datos; da la base."""
+    configs = tmp_path / "configs"
+    (configs / "entornos").mkdir(parents=True)
+    (configs / "default.yaml").write_bytes((RAIZ / "configs" / "default.yaml").read_bytes())
+    perfil = yaml.safe_load((RAIZ / "configs" / "entornos" / f"{entorno}.yaml").read_text(
+        encoding="utf-8"))
+    perfil["datos"].update(datos)
+    (configs / "entornos" / f"{entorno}.yaml").write_text(yaml.safe_dump(perfil),
+                                                          encoding="utf-8")
+    return str(configs / "default.yaml")
+
+
 def test_smoke_llega_a_metricas_y_no_deja_datos_del_experimento(tmp_path):
     antes = {nombre: _archivos(RAIZ / nombre) for nombre in ("checkpoints", "data")}
     inicio = time.perf_counter()
@@ -78,15 +91,9 @@ def test_error_al_descargar_datos_sale_con_2(monkeypatch, capsys):
 
 def test_un_perfil_con_datos_pendientes_hace_el_smoke_pero_no_el_experimento(tmp_path):
     """El marcador deja generar (el smoke recorre experto y datos) y para el experimento."""
-    configs = tmp_path / "configs"
-    (configs / "entornos").mkdir(parents=True)
-    (configs / "default.yaml").write_bytes((RAIZ / "configs" / "default.yaml").read_bytes())
-    perfil = yaml.safe_load((RAIZ / "configs" / "entornos" / "cartpole.yaml").read_text(
-        encoding="utf-8"))
-    perfil["datos"] = {clave: "pendiente" for clave in perfil["datos"]}
-    (configs / "entornos" / "cartpole.yaml").write_text(yaml.safe_dump(perfil),
-                                                         encoding="utf-8")
-    base = str(configs / "default.yaml")
+    cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", "cartpole")
+    base = _configs_con_datos(tmp_path, "cartpole",
+                              {clave: "pendiente" for clave in cfg["datos"]})
 
     smoke = _ejecutar("--config", base, "--smoke", "--sin-wandb")
     experimento = _ejecutar("--config", base, "--sin-wandb")
@@ -100,15 +107,8 @@ def test_un_perfil_con_datos_pendientes_hace_el_smoke_pero_no_el_experimento(tmp
 
 def test_una_carpeta_pendiente_se_nombra_aunque_las_huellas_esten(tmp_path):
     """Con solo la ruta pendiente, el error dice cuál y no busca una carpeta «pendiente»."""
-    configs = tmp_path / "configs"
-    (configs / "entornos").mkdir(parents=True)
-    (configs / "default.yaml").write_bytes((RAIZ / "configs" / "default.yaml").read_bytes())
-    perfil = yaml.safe_load((RAIZ / "configs" / "entornos" / "cartpole.yaml").read_text(
-        encoding="utf-8"))
-    perfil["datos"]["demostraciones"] = "pendiente"
-    (configs / "entornos" / "cartpole.yaml").write_text(yaml.safe_dump(perfil),
-                                                         encoding="utf-8")
-    resultado = _ejecutar("--config", str(configs / "default.yaml"), "--sin-wandb")
+    base = _configs_con_datos(tmp_path, "cartpole", {"demostraciones": "pendiente"})
+    resultado = _ejecutar("--config", base, "--sin-wandb")
     assert resultado.returncode == 2
     assert "datos.demostraciones sigue «pendiente»" in resultado.stderr
 
@@ -116,13 +116,14 @@ def test_una_carpeta_pendiente_se_nombra_aunque_las_huellas_esten(tmp_path):
 
 @pytest.mark.parametrize("entorno", ["mountaincar", "acrobot", "reacher", "halfcheetah"])
 def test_los_entornos_nuevos_pasan_el_smoke(entorno):
-    """El flujo real en miniatura funciona aunque sus datos sigan pendientes."""
+    """El flujo real en miniatura de cada entorno nuevo llega a las métricas."""
     resultado = _ejecutar("--smoke", "--entorno", entorno, "--sin-wandb")
     assert resultado.returncode == 0, resultado.stderr
     assert resultado.stdout.count("retorno_medio ") == 6
 
 
-def test_el_experimento_de_un_entorno_pendiente_nombra_su_entorno():
-    resultado = _ejecutar("--entorno", "mountaincar", "--sin-wandb")
+def test_el_experimento_de_un_entorno_pendiente_nombra_su_entorno(tmp_path):
+    base = _configs_con_datos(tmp_path, "mountaincar", {"huella_partidas": "pendiente"})
+    resultado = _ejecutar("--config", base, "--entorno", "mountaincar", "--sin-wandb")
     assert resultado.returncode == 2
     assert "sigue «pendiente» en el perfil de MountainCar-v0" in resultado.stderr
