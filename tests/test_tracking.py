@@ -199,9 +199,13 @@ def test_nombre_artefacto_de_cada_tipo(argumentos, esperado):
 
 
 # Huellas de demostraciones.npz congeladas: las imprime get_data.py y las guarda el run de
-# datos en W&B (el perfil no las guarda; las de CartPole están también en el README).
+# datos en W&B (el perfil no las guarda; están también en el README).
 @pytest.mark.parametrize("entorno,npz", [
     ("cartpole", "5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9"),
+    ("mountaincar", "86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364"),
+    ("acrobot", "45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a"),
+    ("reacher", "1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0"),
+    ("halfcheetah", "9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9"),
 ])
 def test_nombre_artefacto_reproduce_los_artefactos_congelados(entorno, npz):
     """Regresión: cambiar el formato o la longitud dejaría sin encontrar los congelados."""

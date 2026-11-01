@@ -3,14 +3,14 @@
 experimento:
   repeticiones: 1  # Código original (runs).
 datos:
-  # Pendiente de volver a congelar con la configuración nueva del experto (los
-  # congelados el 2026-10-31 se retiraron): ver «Otros entornos» en el README.
-  demostraciones: pendiente
-  experto: pendiente
-  huella_partidas: pendiente
-  huella_experto: pendiente
-  artefacto_demostraciones: pendiente
-  artefacto_experto: pendiente
+  # Congelado el 2026-11-01 en Linux (WSL2, Python 3.12.3, OMP_NUM_THREADS=1), commit
+  # a6b8bdb2bbfce379554813c477bfaf33ef82e412. Sustituye al del commit 6ba7aae.
+  demostraciones: data/demostraciones/halfcheetah/congelado
+  experto: checkpoints/expertos/halfcheetah/congelado
+  huella_partidas: 8d9ba527575966f027a93cde2e6f287ebfd2f07f7832cb0315dfc165b5f1d123
+  huella_experto: 3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-9a81e93f08fa  # Artefacto W&B congelado.
+  artefacto_experto: experto-HalfCheetah-v5-331994138466
 demostraciones:
   # Igual al subconjunto mayor. El original graba 50 (full_dataset_num_trajs) y usa
   # hasta 25; aquí la validación va aparte, por trayectoria.
@@ -35,7 +35,7 @@ trpo:
 experto:
   # 25 M pasos, el presupuesto de antes (500 iteraciones de 50 000, como el snapshot del
   # experto original, iter0000500). Con iteraciones de 2048 no es múltiplo: para en la
-  # primera que lo supera (12 208 iteraciones, 25 001 472 pasos).
+  # primera que lo supera (12 208 iteraciones, 25 001 984 pasos).
   pasos_totales: 25000000
   # Cada 50 iteraciones, unos 100 000 pasos, como antes (2 iteraciones de 50 000).
   evaluar_cada: 50

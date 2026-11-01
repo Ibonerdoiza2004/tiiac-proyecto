@@ -5,14 +5,14 @@ experimento:
   # el barrido en 5 procesos sin que compartan núcleo.
   repeticiones: 5
 datos:
-  # Pendiente de volver a congelar con la configuración nueva del experto (los
-  # congelados el 2026-10-31 se retiraron): ver «Otros entornos» en el README.
-  demostraciones: pendiente
-  experto: pendiente
-  huella_partidas: pendiente
-  huella_experto: pendiente
-  artefacto_demostraciones: pendiente
-  artefacto_experto: pendiente
+  # Congelado el 2026-11-01 en Linux (WSL2, Python 3.12.3, OMP_NUM_THREADS=1), commit
+  # a6b8bdb2bbfce379554813c477bfaf33ef82e412. Sustituye al del commit 6ba7aae.
+  demostraciones: data/demostraciones/mountaincar/congelado
+  experto: checkpoints/expertos/mountaincar/congelado
+  huella_partidas: 746797832e766391fcf0baec91211c82eb0817852cdfe0d074148febf700c1cc
+  huella_experto: d492bda5bd8fa7ca9b6eb949153cbf395ef835c6c1853077b430f5e2d42e0dd4  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-86c31ceb8ace  # Artefacto W&B congelado.
+  artefacto_experto: experto-MountainCar-v0-d492bda5bd8f
 demostraciones:
   partidas_train: 10  # Código original (full_dataset_num_trajs); igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.

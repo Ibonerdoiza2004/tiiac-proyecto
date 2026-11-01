@@ -65,9 +65,8 @@ local) y comprueba sus huellas. Después entrena 20 BC y 20 GAIL (subconjuntos d
 aleatorio, BC y GAIL) con 50 episodios cada uno e imprime una línea de métricas
 por agente.
 
-Los otros entornos se ejecutan igual, cambiando `--entorno`, cuando tienen datos
-congelados. Usan los tamaños del código original, así que tardan horas en lugar
-de minutos (ver [Tiempos medidos](#tiempos-medidos)):
+Los otros entornos se ejecutan igual, cambiando `--entorno`. Usan los tamaños del
+código original, así que tardan horas en lugar de minutos (ver [Tiempos medidos](#tiempos-medidos)):
 
 | Entorno | BC + GAIL | Agentes evaluados | Iteraciones de GAIL |
 |---|---|---|---|
@@ -198,22 +197,37 @@ wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPol
 
 ### Otros entornos
 
-| Entorno | Objetivo del experto | Hiperparámetros del experto | Datos congelados |
-|---|---|---|---|
-| MountainCar-v0 | −90, evaluado con 50 partidas | Sección `trpo` (paper y código original) | Pendientes |
-| Acrobot-v1 | −70, evaluado con 50 partidas | Sección `trpo` (paper y código original) | Pendientes |
-| Reacher-v5 | −3,5 | RL Zoo para ReacherBulletEnv-v0, sin normalizar la recompensa (`experto.trpo`) | Pendientes |
-| HalfCheetah-v5 | 5000 | RL Zoo para HalfCheetah-v4, sin normalizar la recompensa (`experto.trpo`) | Pendientes |
+MountainCar, Acrobot, Reacher y HalfCheetah están congelados desde el 2026-11-01
+(commit `a6b8bdb2bbfce379554813c477bfaf33ef82e412`, sin cambios sin commit) en
+`data/demostraciones/<entorno>/congelado/` y `checkpoints/expertos/<entorno>/congelado/`.
+Se generaron en Linux (WSL2) con Python 3.12.3, `OMP_NUM_THREADS=1`, los cuatro a la
+vez y `--grupo congelado`. Sustituyen a los congelados el 2026-10-31 desde el commit
+`6ba7aae`, que se retiraron al cambiar la configuración de su experto.
+
+| Entorno | Objetivo del experto | Hiperparámetros del experto | Experto congelado | Partidas |
+|---|---|---|---|---|
+| MountainCar-v0 | −90, evaluado con 50 partidas | Sección `trpo` (paper y código original) | 1 000 000 pasos, sin alcanzar el objetivo | 15 (10 + 5), 1471 pasos |
+| Acrobot-v1 | −70, evaluado con 50 partidas | Sección `trpo` (paper y código original) | 980 000 pasos, objetivo alcanzado | 15 (10 + 5), 1088 pasos |
+| Reacher-v5 | −3,5 | RL Zoo para ReacherBulletEnv-v0, sin normalizar la recompensa (`experto.trpo`) | 25 001 984 pasos, sin alcanzar el objetivo | 30 (25 + 5), 1500 pasos |
+| HalfCheetah-v5 | 5000 | RL Zoo para HalfCheetah-v4, sin normalizar la recompensa (`experto.trpo`) | 7 168 000 pasos, objetivo alcanzado | 30 (25 + 5), 30 000 pasos |
 
 Los objetivos son elección propia, por encima del experto del paper (tabla 1) y
 del umbral de Gymnasium (ver
-[Decisiones](#decisiones-donde-el-paper-no-especifica)). Mientras los datos de un
-entorno estén pendientes (`pendiente` en la sección `datos` de su perfil), se
-pueden ejecutar el smoke y los scripts, pero `run.py --entorno <nombre>` sale con
-código 2 y dice qué valor falta.
+[Decisiones](#decisiones-donde-el-paper-no-especifica)). Si no se alcanza, se
+guarda el experto de la mejor evaluación.
 
-Los primeros datos de estos entornos, congelados el 2026-10-31 desde el commit
-`6ba7aae`, se retiraron al cambiar la configuración de su experto.
+Artefactos de W&B y huellas SHA-256 (`modelo.zip`, `demostraciones.npz`,
+`splits.json` y contenido de las partidas):
+
+| Entorno | Artefactos | Huellas |
+|---|---|---|
+| MountainCar-v0 | `experto-MountainCar-v0-d492bda5bd8f`, `demostraciones-86c31ceb8ace` | modelo `d492bda5bd8fa7ca9b6eb949153cbf395ef835c6c1853077b430f5e2d42e0dd4`; NPZ `86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364`; splits `dbda14e1a433358e71903f4fd071e80f6bd8184c18066c17619efcfd25be2828`; partidas `746797832e766391fcf0baec91211c82eb0817852cdfe0d074148febf700c1cc` |
+| Acrobot-v1 | `experto-Acrobot-v1-fad2206a39f6`, `demostraciones-45531794f3b9` | modelo `fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4`; NPZ `45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a`; splits `b81107d4f3450c6ba8710229ef1ab7ca2b9cde3126ea1d2de3a3c84a4e077dbb`; partidas `efad26895751d70b6104815b7ff2f1b418abf26a0a5fe9353725622494a27c80` |
+| Reacher-v5 | `experto-Reacher-v5-a69d425ddb0f`, `demostraciones-1b16407e4fd8` | modelo `a69d425ddb0f4dad6c0d8fd42e96a9295f982dc43e9cad8674cf3ff73f5c22b2`; NPZ `1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0`; splits `d886173eea50dc03614944ce06bb355157f7998abe0bac7edf42da6403126f31`; partidas `b2f098f94c7962c2c758eaf57647349dd84fb8b85a497426238986c5a98f384f` |
+| HalfCheetah-v5 | `experto-HalfCheetah-v5-331994138466`, `demostraciones-9a81e93f08fa` | modelo `3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762`; NPZ `9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9`; splits `2e943144b0c5647d6794cc2c3c1b409a2162ea8499b025688fe9d2bd3c220c61`; partidas `8d9ba527575966f027a93cde2e6f287ebfd2f07f7832cb0315dfc165b5f1d123` |
+
+Se descargan como los de CartPole, cambiando los nombres de los artefactos y las
+carpetas, o con `run.py --entorno <entorno> --descargar`.
 
 ### Regenerar o congelar los datos
 
@@ -273,6 +287,9 @@ aceptan `--sin-wandb` y `--salida`.
    [Regenerar o congelar los datos](#regenerar-o-congelar-los-datos)) y sustituir
    `pendiente` por sus rutas, huellas y artefactos.
 
+Mientras quede algún `pendiente`, se pueden ejecutar el smoke y los scripts, pero
+`run.py --entorno <nombre>` sale con código 2 y dice qué valor falta.
+
 ## Seguimiento W&B
 
 El proyecto es privado y pertenece a la organización
@@ -328,6 +345,8 @@ Con los datos congelados y la configuración actual:
 | Demostraciones congeladas de CartPole (15 partidas, 7500 pasos) | 1,7 s | Linux (WSL2), misma máquina | 2026-10-30 |
 | Ajuste del experto de HalfCheetah (cinco variantes a la vez, un hilo cada una, hasta unos 5 M pasos o el objetivo) | 1803–3390 s por variante | Linux (WSL2), Intel Core i7-11800H | 2026-10-31 |
 | Ajuste del experto de Reacher (ídem) | 1641–6028 s por variante | Linux (WSL2), Intel Core i7-11800H | 2026-10-31 |
+| Expertos congelados de MountainCar (1 000 000 pasos), Acrobot (980 000), Reacher (25 001 984) y HalfCheetah (7 168 000) | 428 s, 506 s, 23 532 s (6 h 32 min) y 3390 s (57 min) | Linux (WSL2), Intel Core i7-11800H, los cuatro a la vez, un hilo cada uno | 2026-11-01 |
+| Demostraciones congeladas de MountainCar, Acrobot, Reacher y HalfCheetah | 0,7 s, 0,6 s, 0,6 s y 9,0 s | Linux (WSL2), misma máquina | 2026-11-01 |
 
 La ejecución de 7 min 13 s es el grupo `entrega-e1` de W&B (run de comparación
 `r6oajx1r`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
@@ -358,7 +377,7 @@ Mediciones anteriores, con otros datos congelados o con otra configuración:
 | Ajuste del crítico | Adam por minibatches, no región de confianza | Implementación de sb3-contrib |
 | Elección del experto | El mejor por evaluación, parando al alcanzar el retorno objetivo | El original usa un snapshot fijo |
 | Retorno objetivo del experto | 500 en CartPole (el máximo; el umbral de Gymnasium es 475), −90 en MountainCar, −70 en Acrobot, −3,5 en Reacher y 5000 en HalfCheetah, por encima del experto del paper (tabla 1) y del umbral de Gymnasium. MountainCar y Acrobot se evalúan con 50 partidas | El código original no lo fija. Con el umbral de Gymnasium, MountainCar y Acrobot paraban justo al cruzarlo, por debajo del experto del paper |
-| Pasos máximos del experto | 100 000 en CartPole, 1 000 000 en MountainCar y Acrobot y 25 000 000 en Reacher y HalfCheetah; si no es múltiplo de los pasos por iteración, para en la primera que lo supera (Reacher y HalfCheetah: 25 001 472) | En MuJoCo, el presupuesto del snapshot `iter0000500` del original (500 × 50 000); en el resto, tope propio |
+| Pasos máximos del experto | 100 000 en CartPole, 1 000 000 en MountainCar y Acrobot y 25 000 000 en Reacher y HalfCheetah; si no es múltiplo de los pasos por iteración, para en la primera que lo supera (Reacher y HalfCheetah: 25 001 984) | En MuJoCo, el presupuesto del snapshot `iter0000500` del original (500 × 50 000); en el resto, tope propio |
 | Hiperparámetros del experto | Los de `trpo` (paper y código original), salvo en Reacher y HalfCheetah, que usan los de RL Zoo sin normalizar la recompensa (`experto.trpo`; ver [Ajuste del experto](#ajuste-del-experto)) | El paper no dice cómo se entrenaron sus expertos más allá de TRPO; GAIL conserva los suyos |
 | Normalización de la entrada del discriminador | Fija con los pares expertos de train | El original la actualiza también con pares del agente |
 | Validación de partidas (paper: 70/30 de pares) | 5 partidas de validación, separadas por trayectoria, además de las de train (10, o 25 en Reacher y HalfCheetah) | Evitar fugas entre episodios |
@@ -379,7 +398,9 @@ HalfCheetah-v4 (red 64 × 64, 2048 pasos por iteración, `target_kl` 0,04,
 recompensa normalizada), tres variaciones suyas (red del paper, `target_kl` 0,01
 y sin normalizar la recompensa) y la sección `trpo` del perfil con la recompensa
 normalizada. El equipo eligió la de mejor retorno, RL Zoo sin normalizar la
-recompensa, que paró al alcanzar 4800 a los 2,87 M pasos.
+recompensa, que paró al alcanzar 4800 a los 2,87 M pasos. Después se entrenó esa
+configuración con su red de 64 × 64 y con la del paper, 100 × 100 (runs del mismo
+grupo, objetivo 5000, unos 5 M pasos cada uno), y el equipo se quedó con 64 × 64.
 
 **Reacher** (2026-10-31, grupo `ajuste-experto-reacher`, con el objetivo de
 entonces, −3,75). RL Zoo solo tiene TRPO para `ReacherBulletEnv-v0` (PyBullet, no

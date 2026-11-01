@@ -276,8 +276,6 @@ def test_dato_congelado_solo_reconoce_el_marcador_exacto(valor):
     assert dato_congelado(cfg, "huella_experto") == valor
 
 
-# Perfiles cuyo experto cambió de configuración y esperan sus datos nuevos.
-PENDIENTES_DE_CONGELAR = {"mountaincar", "acrobot", "reacher", "halfcheetah"}
 # Objetivo propio del experto (elección propia) y media del experto del paper (tabla 1).
 OBJETIVOS_PROPIOS = {"mountaincar": -90, "acrobot": -70, "reacher": -3.5, "halfcheetah": 5000}
 EXPERTO_PAPER = {"mountaincar": -98.75, "acrobot": -75.25, "reacher": -4.09,
@@ -327,12 +325,9 @@ def test_perfiles_nuevos_siguen_al_codigo_original_y_citan_sus_datos(
     from src.training.trpo import config_trpo_experto
     pasos_experto = config_trpo_experto(cfg)["trpo"]["pasos_por_iteracion"]
     assert cfg["experto"]["pasos_totales"] >= pasos_experto
-    if entorno in PENDIENTES_DE_CONGELAR:
-        assert all(valor == DATOS_PENDIENTES for valor in cfg["datos"].values())
-    else:
-        assert DATOS_PENDIENTES not in cfg["datos"].values()
-        assert cfg["datos"]["demostraciones"] == f"data/demostraciones/{entorno}/congelado"
-        assert cfg["datos"]["experto"] == f"checkpoints/expertos/{entorno}/congelado"
+    assert DATOS_PENDIENTES not in cfg["datos"].values()
+    assert cfg["datos"]["demostraciones"] == f"data/demostraciones/{entorno}/congelado"
+    assert cfg["datos"]["experto"] == f"checkpoints/expertos/{entorno}/congelado"
 
 
 # --- experto.trpo: claves de trpo solo para el experto -------------------------------

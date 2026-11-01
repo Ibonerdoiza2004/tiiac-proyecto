@@ -5,14 +5,14 @@ experimento:
   # el barrido en 5 procesos sin que compartan núcleo.
   repeticiones: 5
 datos:
-  # Pendiente de volver a congelar con la configuración nueva del experto (los
-  # congelados el 2026-10-31 se retiraron): ver «Otros entornos» en el README.
-  demostraciones: pendiente
-  experto: pendiente
-  huella_partidas: pendiente
-  huella_experto: pendiente
-  artefacto_demostraciones: pendiente
-  artefacto_experto: pendiente
+  # Congelado el 2026-11-01 en Linux (WSL2, Python 3.12.3, OMP_NUM_THREADS=1), commit
+  # a6b8bdb2bbfce379554813c477bfaf33ef82e412. Sustituye al del commit 6ba7aae.
+  demostraciones: data/demostraciones/acrobot/congelado
+  experto: checkpoints/expertos/acrobot/congelado
+  huella_partidas: efad26895751d70b6104815b7ff2f1b418abf26a0a5fe9353725622494a27c80
+  huella_experto: fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-45531794f3b9  # Artefacto W&B congelado.
+  artefacto_experto: experto-Acrobot-v1-fad2206a39f6
 demostraciones:
   partidas_train: 10  # Código original (full_dataset_num_trajs); igual al subconjunto mayor.
   partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.
