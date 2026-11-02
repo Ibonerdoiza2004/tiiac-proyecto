@@ -234,3 +234,16 @@ def test_obtener_datos_congelados_no_descarga_un_artefacto_pendiente(tmp_path, m
         (tmp_path / carpeta / "algo.txt").write_text("local", encoding="utf-8")
     obtener_datos_congelados(cfg, tmp_path / "datos", tmp_path / "experto")
     assert llamadas == []
+
+
+def test_marca_de_tiempo_es_la_fecha_y_hora_actuales_ordenables():
+    """AAAAMMDD-HHMMSS: las salidas por defecto se ordenan por fecha al listarlas."""
+    from datetime import datetime
+
+    from src.utils.archivos import marca_de_tiempo
+    antes = datetime.now().replace(microsecond=0)
+    marca = marca_de_tiempo()
+    despues = datetime.now()
+    assert antes <= datetime.strptime(marca, "%Y%m%d-%H%M%S") <= despues
+    assert len(marca) == 15 and marca[8] == "-"
+

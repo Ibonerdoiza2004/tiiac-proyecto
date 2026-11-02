@@ -21,11 +21,16 @@ _ULTIMOS_PASOS: dict[int, tuple[Any, int]] = {}
 CARACTERES_HUELLA_ARTEFACTO = 12
 # Segundos que espera wandb.login antes de rendirse, para no bloquear el arranque sin red.
 ESPERA_SESION = 10
+# Caracteres hexadecimales del identificador aleatorio de un grupo (crear_grupo).
+CARACTERES_GRUPO = 12
+# Código de salida de los scripts y de los runs interrumpidos con Ctrl+C: 128 + SIGINT (2),
+# el que usa la shell.
+CODIGO_INTERRUMPIDO = 130
 
 
 def crear_grupo() -> str:
-    """Crea un identificador de 12 caracteres hexadecimales para agrupar una ejecución."""
-    return uuid.uuid4().hex[:12]
+    """Crea un identificador de CARACTERES_GRUPO caracteres hexadecimales para una ejecución."""
+    return uuid.uuid4().hex[:CARACTERES_GRUPO]
 
 
 def _wandb_activo(cfg: dict) -> bool:
@@ -240,10 +245,10 @@ def descargar_artefacto(cfg: dict, nombre: str, destino: Path) -> Path:
 
 
 def terminar_run(run: Any | None, error: BaseException | None = None) -> None:
-    """Cierra el run con código 0, 1 por fallo o 130 por Ctrl+C."""
+    """Cierra el run con código 0, 1 por fallo o CODIGO_INTERRUMPIDO por Ctrl+C."""
     if run is not None:
-        run.finish(exit_code=(0 if error is None else
-                              130 if isinstance(error, KeyboardInterrupt) else 1))
+        run.finish(exit_code=(0 if error is None else CODIGO_INTERRUMPIDO
+                              if isinstance(error, KeyboardInterrupt) else 1))
         _ULTIMOS_PASOS.pop(id(run), None)
 
 

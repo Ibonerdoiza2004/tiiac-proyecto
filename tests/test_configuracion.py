@@ -391,3 +391,30 @@ def test_el_experto_de_reacher_usa_los_valores_de_rl_zoo_sin_cambiar_gail():
     assert cfg["experto"]["evaluar_cada"] == 50
     assert cfg["trpo"]["capas_ocultas"] == [100, 100]
     assert cfg["trpo"]["pasos_por_iteracion"] == 50000
+
+
+# --- crear_parser: opciones comunes de los scripts -----------------------------------
+
+def test_crear_parser_da_las_opciones_comunes_con_sus_valores_por_defecto():
+    from src.utils.configuracion import crear_parser
+    args = crear_parser("ayuda").parse_args([])
+    assert (args.config, args.entorno, args.sin_wandb, args.grupo) == (
+        Path("configs/default.yaml"), "cartpole", False, None)
+
+
+@pytest.mark.parametrize("entorno", [e.value for e in TipoEntorno])
+def test_crear_parser_admite_cada_entorno_y_las_demas_opciones(entorno):
+    from src.utils.configuracion import crear_parser
+    args = crear_parser(None).parse_args(["--entorno", entorno, "--config", "otra.yaml",
+                                          "--sin-wandb", "--grupo", "g"])
+    assert (args.entorno, args.config, args.sin_wandb, args.grupo) == (
+        entorno, Path("otra.yaml"), True, "g")
+
+
+@pytest.mark.parametrize("argv", [["--entorno", "pong"], ["--entorno"], ["--desconocida"]])
+def test_crear_parser_rechaza_entornos_y_opciones_desconocidos(argv, capsys):
+    from src.utils.configuracion import crear_parser
+    with pytest.raises(SystemExit) as salida:
+        crear_parser(None).parse_args(argv)
+    assert salida.value.code == 2
+

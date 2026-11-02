@@ -16,16 +16,15 @@ lo desactiva con la capa de ajustes, por ejemplo para medir tiempos sin cuenta.
 
 from __future__ import annotations
 
-import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from src.training.flujo import entrenar_y_guardar_experto  # noqa: E402
-from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
+from src.utils.archivos import marca_de_tiempo  # noqa: E402
+from src.utils.configuracion import crear_parser, resolver_configuracion  # noqa: E402
 from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
 
 
@@ -38,17 +37,10 @@ def main() -> int:
     Raises:
         Ninguna: los errores esperados se presentan al usuario como códigos de salida.
     """
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"),
-                    help="configuración base")
-    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
-                    default=TipoEntorno.CARTPOLE.value, help="perfil de entorno")
+    ap = crear_parser(__doc__)
     ap.add_argument("--salida", type=Path, default=None,
                     help="directorio nuevo donde guardar el experto "
                          "(por defecto checkpoints/expertos/<entorno>/<fecha>)")
-    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
-    ap.add_argument("--grupo", default=None, help="grupo W&B compartido con el resto del flujo")
     args = ap.parse_args()
 
     ajustes = {"wandb": {"modo": "disabled"}} if args.sin_wandb else None
@@ -57,8 +49,7 @@ def main() -> int:
     except (OSError, ValueError) as error:
         print(f"error de configuración: {error}", file=sys.stderr)
         return 2
-    salida = args.salida or (Path("checkpoints") / "expertos" / args.entorno
-                             / datetime.now().strftime("%Y%m%d-%H%M%S"))
+    salida = args.salida or Path("checkpoints") / "expertos" / args.entorno / marca_de_tiempo()
     try:
         comprobar_wandb(cfg, exigir_sesion=True)
     except RuntimeError as error:

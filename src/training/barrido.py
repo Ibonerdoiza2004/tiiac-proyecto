@@ -26,7 +26,6 @@ import time
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from multiprocessing.connection import Connection, wait
 from pathlib import Path
 from typing import Any
@@ -37,11 +36,11 @@ from src.data.demostraciones import cargar_demostraciones, config_demostraciones
 from src.data.entornos import espacios_entorno
 from src.data.splits import SplitsDemostraciones, cargar_splits, huella_archivo
 from src.data.tipos import Trayectoria
-from src.utils.archivos import comprobar_directorio_libre
-from src.utils.configuracion import TipoEntorno, resolver_configuracion
+from src.utils.archivos import comprobar_directorio_libre, marca_de_tiempo
+from src.utils.configuracion import crear_parser, resolver_configuracion
 from src.utils.procedencia import avisar_estado_git, estado_git, ruta_registrada
 from src.utils.seed import validar_semilla
-from src.utils.tracking import comprobar_wandb, crear_grupo
+from src.utils.tracking import CODIGO_INTERRUMPIDO, comprobar_wandb, crear_grupo
 from src.utils.validacion import es_entero_positivo
 
 ARCHIVO_DEMOSTRACIONES = "demostraciones.npz"
@@ -341,30 +340,10 @@ def barrer(metodo: MetodoBarrido, cfg: dict, datos: Path, salida: Path, grupo: s
                       procedencia, grupo), reportar)
 
 
-def main_barrido(metodo: MetodoBarrido, descripcion: str,
-                 argv: Sequence[str] | None = None) -> int:
-    """Flujo de línea de comandos de un barrido; devuelve el código de salida.
-
-    Resuelve y comprueba la configuración, comprueba que la salida está libre,
-    carga los datos, elige las tareas, las ejecuta (ejecutar_barrido, con
-    experimento.procesos a la vez) e informa de cada una y del total.
-
-    Códigos: 0 si todo va bien; 1 si algún entrenamiento falló (los demás se
-    guardan); 2 si la configuración, los datos, las cantidades, las
-    repeticiones o la carpeta de salida no son válidos, sin entrenar nada; 130
-    si se interrumpe con Ctrl+C.
-
-    Args:
-        metodo: Qué se entrena.
-        descripcion: Ayuda del script (su docstring).
-        argv: Argumentos; None para los de la línea de comandos.
-    """
-    ap = argparse.ArgumentParser(description=descripcion,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"),
-                    help="configuración base")
-    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
-                    default=TipoEntorno.CARTPOLE.value, help="perfil de entorno")
+def _argumentos_barrido(metodo: MetodoBarrido, descripcion: str,
+                        argv: Sequence[str] | None) -> argparse.Namespace:
+    """Lee los argumentos de un script de barrido (los comunes y los del barrido)."""
+    ap = crear_parser(descripcion)
     ap.add_argument("--datos", type=Path, required=True,
                     help=f"carpeta de get_data.py ({ARCHIVO_DEMOSTRACIONES} y {ARCHIVO_SPLITS})")
     ap.add_argument("--cantidades", type=int, nargs="+", default=None,
@@ -375,9 +354,28 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
     ap.add_argument("--salida", type=Path, default=None,
                     help=f"carpeta nueva para los modelos (por defecto "
                          f"checkpoints/{metodo.nombre}/<entorno>/<fecha>)")
-    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
-    ap.add_argument("--grupo", default=None, help="grupo W&B compartido con otros scripts")
-    args = ap.parse_args(argv)
+    return ap.parse_args(argv)
+
+
+def main_barrido(metodo: MetodoBarrido, descripcion: str,
+                 argv: Sequence[str] | None = None) -> int:
+    """Flujo de línea de comandos de un barrido; devuelve el código de salida.
+
+    Resuelve y comprueba la configuración, comprueba que la salida está libre,
+    carga los datos, elige las tareas, las ejecuta (ejecutar_barrido, con
+    experimento.procesos a la vez) e informa de cada una y del total.
+
+    Códigos: 0 si todo va bien; 1 si algún entrenamiento falló (los demás se
+    guardan); 2 si la configuración, los datos, las cantidades, las
+    repeticiones o la carpeta de salida no son válidos, sin entrenar nada;
+    CODIGO_INTERRUMPIDO (130) si se interrumpe con Ctrl+C.
+
+    Args:
+        metodo: Qué se entrena.
+        descripcion: Ayuda del script (su docstring).
+        argv: Argumentos; None para los de la línea de comandos.
+    """
+    args = _argumentos_barrido(metodo, descripcion, argv)
 
     ajustes = {"wandb": {"modo": "disabled"}} if args.sin_wandb else None
     try:
@@ -388,8 +386,7 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
     except (OSError, ValueError) as error:
         print(f"error de configuración: {error}", file=sys.stderr)
         return 2
-    salida = args.salida or (Path("checkpoints") / metodo.nombre / args.entorno
-                             / datetime.now().strftime("%Y%m%d-%H%M%S"))
+    salida = args.salida or Path("checkpoints") / metodo.nombre / args.entorno / marca_de_tiempo()
     try:
         comprobar_wandb(cfg, exigir_sesion=True)
     except RuntimeError as error:
@@ -424,7 +421,7 @@ def main_barrido(metodo: MetodoBarrido, descripcion: str,
         print(f"interrumpido: los entrenamientos que terminaron están en {salida}, completos; "
               "si alguno se estaba guardando, puede quedar un temporal oculto (.*.tmp) que "
               "se puede borrar", file=sys.stderr)
-        return 130
+        return CODIGO_INTERRUMPIDO
     total = len(args.cantidades or cfg["demostraciones"]["subconjuntos"]) * len(
         args.repeticiones if args.repeticiones is not None
         else range(cfg["experimento"]["repeticiones"]))

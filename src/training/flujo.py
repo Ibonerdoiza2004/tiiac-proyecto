@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Sequence
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +24,7 @@ from src.training.gail import METODO_GAIL, cargar_gail
 from src.training.trpo import (cargar_experto, cargar_politica_experto, entrenar_experto,
                                guardar_experto)
 from src.utils.archivos import (comprobar_directorio_libre, escribir_archivo_nuevo,
-                                escribir_carpeta_nueva)
+                                escribir_carpeta_nueva, marca_de_tiempo)
 from src.utils.configuracion import dato_congelado
 from src.utils.procedencia import (a_json, avisar_estado_git, estado_git, ruta_registrada,
                                    versiones_y_hardware)
@@ -478,5 +477,5 @@ def evaluar_carpeta(cfg: dict, carpeta: Path, experto: Path, grupo: str) -> dict
     """
     carpeta = Path(carpeta)
     agentes, huella = cargar_agentes(cfg, experto, carpeta / "bc", carpeta / "gail")
-    salida = carpeta / f"evaluacion-{datetime.now():%Y%m%d-%H%M%S}.json"
+    salida = carpeta / f"evaluacion-{marca_de_tiempo()}.json"
     return {"resultados": evaluar_y_guardar(cfg, agentes, huella, salida, grupo), "fallos": []}

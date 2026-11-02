@@ -14,6 +14,9 @@ import sb3_contrib
 import stable_baselines3
 import torch
 
+# Segundos que se espera a cada orden de git, para no bloquear el guardado si se cuelga.
+ESPERA_GIT = 10
+
 
 def estado_git() -> dict[str, Any]:
     """Devuelve el commit del repositorio y si había cambios sin commit.
@@ -24,10 +27,10 @@ def estado_git() -> dict[str, Any]:
     raiz = Path(__file__).resolve().parents[2]
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=raiz, capture_output=True,
-                                text=True, check=True, timeout=10).stdout.strip()
+                                text=True, check=True, timeout=ESPERA_GIT).stdout.strip()
         cambios = subprocess.run(["git", "status", "--porcelain"], cwd=raiz,
                                  capture_output=True, text=True, check=True,
-                                 timeout=10).stdout.strip()
+                                 timeout=ESPERA_GIT).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return {"commit": None, "cambios_sin_commit": None}
     return {"commit": commit, "cambios_sin_commit": bool(cambios)}

@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -31,26 +30,18 @@ from src.training.flujo import (  # noqa: E402
     imprimir_resultados,
     obtener_datos_congelados,
 )
+from src.utils.archivos import marca_de_tiempo  # noqa: E402
 from src.utils.configuracion import (  # noqa: E402
-    TipoEntorno,
+    crear_parser,
     dato_congelado,
     resolver_configuracion,
 )
-from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
+from src.utils.tracking import CODIGO_INTERRUMPIDO, comprobar_wandb, crear_grupo  # noqa: E402
 
 
-def main() -> int:
-    """Ejecuta el experimento (o el smoke, o solo evaluación) y devuelve su código.
-
-    Returns:
-        0 si todo va bien; 1 si falla algún entrenamiento; 2 si la configuración, los
-        datos o la salida no son válidos; 130 si se interrumpe con Ctrl+C.
-    """
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
-    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
-                    default=TipoEntorno.CARTPOLE.value)
+def _argumentos() -> argparse.Namespace:
+    """Lee los argumentos de la línea de comandos (ver «Argumentos de run.py» en el README)."""
+    ap = crear_parser(__doc__)
     ap.add_argument("--smoke", action="store_true", help="flujo real en miniatura")
     ap.add_argument("--solo-evaluar", action="store_true",
                     help="evalúa una ejecución anterior (--salida), sin entrenar")
@@ -60,10 +51,47 @@ def main() -> int:
     ap.add_argument("--experto", type=Path, default=None, help="sustituye datos.experto")
     ap.add_argument("--descargar", action="store_true",
                     help="baja de W&B los datos y el experto congelados que falten")
-    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
-    ap.add_argument("--grupo", default=None, help="grupo W&B compartido con otros scripts")
-    args = ap.parse_args()
+    return ap.parse_args()
 
+
+def _ejecutar(args: argparse.Namespace, cfg: dict, grupo: str) -> dict:
+    """Ejecuta el modo pedido (solo evaluar, smoke o experimento) y devuelve su resultado.
+
+    Raises:
+        ValueError: Si --solo-evaluar no trae --salida, o si la configuración, los
+            datos o la salida no son válidos.
+        OSError, RuntimeError: Si falla la lectura, la escritura o la descarga.
+    """
+    if args.solo_evaluar:
+        if args.salida is None:
+            raise ValueError("--solo-evaluar necesita --salida")
+        experto = args.experto or Path(dato_congelado(cfg, "experto"))
+        return evaluar_carpeta(cfg, args.salida, experto, grupo)
+    if args.smoke:
+        with tempfile.TemporaryDirectory() as temporal:
+            carpeta = Path(temporal)
+            experto = carpeta / "experto"
+            datos = carpeta / "datos"
+            entrenar_y_guardar_experto(cfg, experto, grupo)
+            generar_y_registrar_datos(cfg, experto, datos, grupo)
+            return ejecutar_experimento(cfg, datos, experto, carpeta / "run", grupo)
+    datos = args.datos or Path(dato_congelado(cfg, "demostraciones"))
+    experto = args.experto or Path(dato_congelado(cfg, "experto"))
+    if args.descargar:
+        obtener_datos_congelados(cfg, datos, experto)
+    comprobar_datos_congelados(cfg, datos, experto)
+    salida = args.salida or Path("checkpoints") / "run" / args.entorno / marca_de_tiempo()
+    return ejecutar_experimento(cfg, datos, experto, salida, grupo)
+
+
+def main() -> int:
+    """Ejecuta el experimento (o el smoke, o solo evaluación) y devuelve su código.
+
+    Returns:
+        0 si todo va bien; 1 si falla algún entrenamiento; 2 si la configuración, los
+        datos o la salida no son válidos; CODIGO_INTERRUMPIDO (130) con Ctrl+C.
+    """
+    args = _argumentos()
     try:
         ajustes = (yaml.safe_load(Path("configs/smoke.yaml").read_text(encoding="utf-8"))
                    if args.smoke else {})
@@ -81,35 +109,13 @@ def main() -> int:
     torch.set_num_threads(1)
 
     try:
-        if args.solo_evaluar:
-            if args.salida is None:
-                print("error: --solo-evaluar necesita --salida", file=sys.stderr)
-                return 2
-            experto = args.experto or Path(dato_congelado(cfg, "experto"))
-            resultado = evaluar_carpeta(cfg, args.salida, experto, grupo)
-        elif args.smoke:
-            with tempfile.TemporaryDirectory() as temporal:
-                carpeta = Path(temporal)
-                experto = carpeta / "experto"
-                datos = carpeta / "datos"
-                entrenar_y_guardar_experto(cfg, experto, grupo)
-                generar_y_registrar_datos(cfg, experto, datos, grupo)
-                resultado = ejecutar_experimento(cfg, datos, experto, carpeta / "run", grupo)
-        else:
-            datos = args.datos or Path(dato_congelado(cfg, "demostraciones"))
-            experto = args.experto or Path(dato_congelado(cfg, "experto"))
-            if args.descargar:
-                obtener_datos_congelados(cfg, datos, experto)
-            comprobar_datos_congelados(cfg, datos, experto)
-            salida = args.salida or (Path("checkpoints") / "run" / args.entorno
-                                     / datetime.now().strftime("%Y%m%d-%H%M%S"))
-            resultado = ejecutar_experimento(cfg, datos, experto, salida, grupo)
+        resultado = _ejecutar(args, cfg, grupo)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         print("interrumpido", file=sys.stderr)
-        return 130
+        return CODIGO_INTERRUMPIDO
     imprimir_resultados(resultado["resultados"])
     for fallo in resultado["fallos"]:
         print(f"falló {fallo}", file=sys.stderr)

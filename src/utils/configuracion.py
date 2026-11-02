@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
@@ -47,6 +48,27 @@ def dato_congelado(cfg: dict, clave: str) -> Any:
             f"{cfg['entorno']['id']}: genera y congela el experto y las demostraciones "
             "(ver «Datos» en el README) y pon sus valores en el perfil")
     return valor
+
+
+def crear_parser(descripcion: str | None) -> argparse.ArgumentParser:
+    """Crea el parser de un script con las opciones comunes a todos.
+
+    Son --config (YAML base), --entorno (un perfil de TipoEntorno), --sin-wandb y
+    --grupo (el grupo de W&B que comparten los scripts de una ejecución).
+
+    Args:
+        descripcion: Ayuda del script, normalmente su docstring.
+    """
+    ap = argparse.ArgumentParser(description=descripcion,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"),
+                    help="configuración base")
+    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
+                    default=TipoEntorno.CARTPOLE.value, help="perfil de entorno")
+    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
+    ap.add_argument("--grupo", default=None,
+                    help="grupo W&B compartido con los demás scripts de la ejecución")
+    return ap
 
 
 def _leer_yaml(ruta: Path) -> dict[str, Any]:

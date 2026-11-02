@@ -11,7 +11,8 @@ import pytest
 import torch
 
 from src.utils.configuracion import resolver_configuracion
-from src.utils.tracking import (CARACTERES_HUELLA_ARTEFACTO, abrir_run, abrir_run_barrido,
+from src.utils.tracking import (CARACTERES_GRUPO, CARACTERES_HUELLA_ARTEFACTO, CODIGO_INTERRUMPIDO,
+                                abrir_run, abrir_run_barrido,
                                 comprobar_wandb, con_seccion, crear_grupo, descargar_artefacto,
                                 nombre_artefacto, nombre_run, registrar, registrar_resumen,
                                 subir_artefacto, terminar_run, usar_artefacto)
@@ -316,3 +317,10 @@ def test_crear_grupo_devuelve_identificadores_no_vacios_y_distintos():
     """Cada ejecución puede crear un grupo nuevo y breve."""
     primero, segundo = crear_grupo(), crear_grupo()
     assert primero and segundo and primero != segundo
+    assert all(len(g) == CARACTERES_GRUPO and int(g, 16) >= 0 for g in (primero, segundo))
+
+
+def test_codigo_interrumpido_es_el_de_ctrl_c_en_la_shell():
+    """128 + SIGINT: el que da bash a un proceso interrumpido con Ctrl+C."""
+    import signal
+    assert CODIGO_INTERRUMPIDO == 128 + signal.SIGINT
