@@ -66,7 +66,8 @@ aleatorio, BC y GAIL) con 50 episodios cada uno e imprime una línea de métrica
 por agente.
 
 Los otros entornos se ejecutan igual, cambiando `--entorno`. Usan los tamaños del
-código original, así que tardan horas en lugar de minutos (ver [Tiempos medidos](#tiempos-medidos)):
+código original, así que tardan más: 37 y 50 min MountainCar y Acrobot (medido), y
+varias horas Reacher y HalfCheetah (estimación) (ver [Tiempos medidos](#tiempos-medidos)):
 
 | Entorno | BC + GAIL | Agentes evaluados | Iteraciones de GAIL |
 |---|---|---|---|
@@ -306,6 +307,7 @@ Los tests y el smoke usan `disabled`.
 |---|---|
 | `congelado` | Los expertos y las demostraciones congelados |
 | `entrega-e1` | El experimento completo de CartPole medido para la entrega |
+| `entrega-e1-mountaincar`, `entrega-e1-acrobot` | El experimento completo de MountainCar y de Acrobot |
 | `ajuste-experto-halfcheetah`, `ajuste-experto-reacher` | La comparación de hiperparámetros del experto (ver [Ajuste del experto](#ajuste-del-experto)) |
 
 ## Reproducibilidad y regla 5/20
@@ -322,8 +324,9 @@ máquina da el mismo resultado en serie y en paralelo.
   GPU no acelera estos entrenamientos.
 - **Otros entornos:** la regla se aplica al experimento de CartPole. MountainCar,
   Acrobot, Reacher y HalfCheetah usan los tamaños del código original y no la
-  cumplen: el único barrido medido, el de GAIL en Reacher con datos de prueba,
-  tardó 2 h 37 min.
+  cumplen: el experimento completo tardó 37 min en MountainCar y 50 min en Acrobot.
+  El de Reacher y HalfCheetah no se ha ejecutado todavía; el barrido GAIL de
+  Reacher con datos de prueba tardó 2 h 37 min.
 - **Pendiente:** medirlo en una T4 de Colab gratuito o dejar aquí la
   justificación de por qué no se mide.
 
@@ -347,6 +350,9 @@ Con los datos congelados y la configuración actual:
 | Ajuste del experto de Reacher (ídem) | 1641–6028 s por variante | Linux (WSL2), Intel Core i7-11800H | 2026-10-31 |
 | Expertos congelados de MountainCar (1 000 000 pasos), Acrobot (980 000), Reacher (25 001 984) y HalfCheetah (7 168 000) | 428 s, 506 s, 23 532 s (6 h 32 min) y 3390 s (57 min) | Linux (WSL2), Intel Core i7-11800H, los cuatro a la vez, un hilo cada uno | 2026-11-01 |
 | Demostraciones congeladas de MountainCar, Acrobot, Reacher y HalfCheetah | 0,7 s, 0,6 s, 0,6 s y 9,0 s | Linux (WSL2), misma máquina | 2026-11-01 |
+| Experimento completo de MountainCar (`time python run.py --entorno mountaincar --descargar --grupo entrega-e1-mountaincar`, online, commit `83323cb`): 20 BC, 20 GAIL de 300 iteraciones y evaluación de 42 agentes | 37 min 6 s, de ellos 41 s de evaluación (`evaluacion.json`) | Linux (WSL2), Intel Core i7-11800H, 5 procesos, sin GPU | 2026-11-02 |
+| Experimento completo de Acrobot (ídem, grupo `entrega-e1-acrobot`) | 49 min 34 s, de ellos 38 s de evaluación | Linux (WSL2), misma máquina | 2026-11-02 |
+| Experimento de Reacher, interrumpido a mano (4 BC y 4 GAIL a la vez) | 150 de las 500 iteraciones de GAIL en unos 3000 s | Linux (WSL2), misma máquina | 2026-11-02 |
 
 La ejecución de 7 min 13 s es el grupo `entrega-e1` de W&B (run de comparación
 `r6oajx1r`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
