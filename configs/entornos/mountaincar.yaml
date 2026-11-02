@@ -10,7 +10,7 @@ datos:
   demostraciones: data/demostraciones/mountaincar/congelado
   experto: checkpoints/expertos/mountaincar/congelado
   huella_partidas: 746797832e766391fcf0baec91211c82eb0817852cdfe0d074148febf700c1cc
-  huella_experto: d492bda5bd8fa7ca9b6eb949153cbf395ef835c6c1853077b430f5e2d42e0dd4  # SHA-256 de modelo.zip
+  huella_experto: 2100189a5baa32a394c36cc00ee731b59b18fa4a24de45855482c25ce2453ee9  # SHA-256 de policy.pth en modelo.zip
   artefacto_demostraciones: demostraciones-86c31ceb8ace  # Artefacto W&B congelado.
   artefacto_experto: experto-MountainCar-v0-d492bda5bd8f
 demostraciones:

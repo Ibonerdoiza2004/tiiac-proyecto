@@ -171,7 +171,8 @@ run de BC y GAIL lleva en su configuración.
 Las demostraciones y el experto no se versionan: se generan con los scripts de
 `scripts/`, se congelan y se publican en W&B, en el grupo `congelado`. La sección
 `datos` del perfil de cada entorno fija sus carpetas, la huella de las partidas,
-la de `modelo.zip` y los artefactos; `run.py` rechaza los datos cuyas huellas no
+la de los pesos de la política del experto (`policy.pth` dentro de `modelo.zip`) y los
+artefactos; `run.py` rechaza los datos cuyas huellas no
 coincidan.
 
 ### CartPole
@@ -185,6 +186,8 @@ Python 3.12.3 y las versiones de `requirements.txt`. Sus huellas SHA-256 son:
 - `splits.json`: `804bb82f4c5b16ce4a49e97bde07911d1af1687a83a33cafabe7e9442f52a9d3`
 - contenido de las partidas: `b31d19eda39c1167b67330995e26659d0782b43ae83cfde7b773e8b1df221f58`
 - `modelo.zip` del experto: `92c44313863ebe30c616be30664b2742650ee80cd833f2b799550fe742d517ac`
+- pesos de la política del experto (`policy.pth` dentro de `modelo.zip`, la que comprueba
+  `run.py`): `9d45aafa782e1d9b3514376cbf677ac39f74b3f34f074205baf0530d3ed75508`
 
 Está en W&B (runs `tiiac-experto-cartpole` y `tiiac-datos-cartpole`) como los
 artefactos `experto-CartPole-v1-92c44313863e` y `demostraciones-5c5168e7f5f8`.
@@ -217,15 +220,15 @@ del umbral de Gymnasium (ver
 [Decisiones](#decisiones-donde-el-paper-no-especifica)). Si no se alcanza, se
 guarda el experto de la mejor evaluación.
 
-Artefactos de W&B y huellas SHA-256 (`modelo.zip`, `demostraciones.npz`,
-`splits.json` y contenido de las partidas):
+Artefactos de W&B y huellas SHA-256 (`modelo.zip`, `policy.pth` dentro de `modelo.zip`,
+`demostraciones.npz`, `splits.json` y contenido de las partidas):
 
 | Entorno | Artefactos | Huellas |
 |---|---|---|
-| MountainCar-v0 | `experto-MountainCar-v0-d492bda5bd8f`, `demostraciones-86c31ceb8ace` | modelo `d492bda5bd8fa7ca9b6eb949153cbf395ef835c6c1853077b430f5e2d42e0dd4`; NPZ `86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364`; splits `dbda14e1a433358e71903f4fd071e80f6bd8184c18066c17619efcfd25be2828`; partidas `746797832e766391fcf0baec91211c82eb0817852cdfe0d074148febf700c1cc` |
-| Acrobot-v1 | `experto-Acrobot-v1-fad2206a39f6`, `demostraciones-45531794f3b9` | modelo `fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4`; NPZ `45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a`; splits `b81107d4f3450c6ba8710229ef1ab7ca2b9cde3126ea1d2de3a3c84a4e077dbb`; partidas `efad26895751d70b6104815b7ff2f1b418abf26a0a5fe9353725622494a27c80` |
-| Reacher-v5 | `experto-Reacher-v5-a69d425ddb0f`, `demostraciones-1b16407e4fd8` | modelo `a69d425ddb0f4dad6c0d8fd42e96a9295f982dc43e9cad8674cf3ff73f5c22b2`; NPZ `1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0`; splits `d886173eea50dc03614944ce06bb355157f7998abe0bac7edf42da6403126f31`; partidas `b2f098f94c7962c2c758eaf57647349dd84fb8b85a497426238986c5a98f384f` |
-| HalfCheetah-v5 | `experto-HalfCheetah-v5-331994138466`, `demostraciones-9a81e93f08fa` | modelo `3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762`; NPZ `9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9`; splits `2e943144b0c5647d6794cc2c3c1b409a2162ea8499b025688fe9d2bd3c220c61`; partidas `8d9ba527575966f027a93cde2e6f287ebfd2f07f7832cb0315dfc165b5f1d123` |
+| MountainCar-v0 | `experto-MountainCar-v0-d492bda5bd8f`, `demostraciones-86c31ceb8ace` | modelo `d492bda5bd8fa7ca9b6eb949153cbf395ef835c6c1853077b430f5e2d42e0dd4`; política `2100189a5baa32a394c36cc00ee731b59b18fa4a24de45855482c25ce2453ee9`; NPZ `86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364`; splits `dbda14e1a433358e71903f4fd071e80f6bd8184c18066c17619efcfd25be2828`; partidas `746797832e766391fcf0baec91211c82eb0817852cdfe0d074148febf700c1cc` |
+| Acrobot-v1 | `experto-Acrobot-v1-fad2206a39f6`, `demostraciones-45531794f3b9` | modelo `fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4`; política `e05581ac9536afec10172ca2767ba5523d2d4347803e2e9b266bc433b9e4ba44`; NPZ `45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a`; splits `b81107d4f3450c6ba8710229ef1ab7ca2b9cde3126ea1d2de3a3c84a4e077dbb`; partidas `efad26895751d70b6104815b7ff2f1b418abf26a0a5fe9353725622494a27c80` |
+| Reacher-v5 | `experto-Reacher-v5-a69d425ddb0f`, `demostraciones-1b16407e4fd8` | modelo `a69d425ddb0f4dad6c0d8fd42e96a9295f982dc43e9cad8674cf3ff73f5c22b2`; política `44a588281ef50b159a9a15fcac2bbd369da987f15b84156c2c0500b10dccc74a`; NPZ `1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0`; splits `d886173eea50dc03614944ce06bb355157f7998abe0bac7edf42da6403126f31`; partidas `b2f098f94c7962c2c758eaf57647349dd84fb8b85a497426238986c5a98f384f` |
+| HalfCheetah-v5 | `experto-HalfCheetah-v5-331994138466`, `demostraciones-9a81e93f08fa` | modelo `3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762`; política `8b74b0af9b801ce3182bf6454f81977c7b5593b8c9ab210b948341df0c044299`; NPZ `9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9`; splits `2e943144b0c5647d6794cc2c3c1b409a2162ea8499b025688fe9d2bd3c220c61`; partidas `8d9ba527575966f027a93cde2e6f287ebfd2f07f7832cb0315dfc165b5f1d123` |
 
 Se descargan como los de CartPole, cambiando los nombres de los artefactos y las
 carpetas, o con `run.py --entorno <entorno> --descargar`.

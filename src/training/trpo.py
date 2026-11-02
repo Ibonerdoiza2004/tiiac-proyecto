@@ -19,8 +19,10 @@ volvería a sembrar los generadores globales y los entornos por su cuenta.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,7 @@ from src.utils.tracking import con_seccion, registrar
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
+_ARCHIVO_POLITICA = "policy.pth"  # pesos de la política dentro del zip de sb3
 # Sección de W&B de las medidas de iteracion_trpo, que se devuelven sin prefijo.
 SECCION_TRPO = "trpo"
 _ARCHIVO_METADATOS = "experto.json"
@@ -458,6 +461,24 @@ def cargar_experto(directorio: Path) -> tuple[TRPO, dict[str, Any]]:
     with (directorio / _ARCHIVO_METADATOS).open(encoding="utf-8") as archivo:
         metadatos = json.load(archivo)
     return TRPO.load(directorio / _ARCHIVO_MODELO, device="cpu"), metadatos
+
+
+def huella_politica(modelo: Path) -> str:
+    """SHA-256 de los pesos de la política (policy.pth dentro del modelo.zip de sb3).
+
+    La huella del zip entero cambia al reentrenar con la misma config, porque sb3
+    guarda en él la hora de inicio, los tiempos de las partidas y la fecha de cada
+    entrada; los pesos salen idénticos.
+
+    Raises:
+        ValueError: Si el archivo no es un zip con policy.pth.
+    """
+    try:
+        with zipfile.ZipFile(modelo) as archivo:
+            contenido = archivo.read(_ARCHIVO_POLITICA)
+    except (zipfile.BadZipFile, KeyError) as error:
+        raise ValueError(f"{modelo} no es un modelo de sb3 con {_ARCHIVO_POLITICA}") from error
+    return hashlib.sha256(contenido).hexdigest()
 
 
 def cargar_politica_experto(directorio: Path, cfg: dict) -> tuple[Politica, dict[str, Any]]:

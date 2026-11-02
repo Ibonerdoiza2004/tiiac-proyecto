@@ -8,7 +8,7 @@ datos:
   demostraciones: data/demostraciones/halfcheetah/congelado
   experto: checkpoints/expertos/halfcheetah/congelado
   huella_partidas: 8d9ba527575966f027a93cde2e6f287ebfd2f07f7832cb0315dfc165b5f1d123
-  huella_experto: 3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762  # SHA-256 de modelo.zip
+  huella_experto: 8b74b0af9b801ce3182bf6454f81977c7b5593b8c9ab210b948341df0c044299  # SHA-256 de policy.pth en modelo.zip
   artefacto_demostraciones: demostraciones-9a81e93f08fa  # Artefacto W&B congelado.
   artefacto_experto: experto-HalfCheetah-v5-331994138466
 demostraciones:

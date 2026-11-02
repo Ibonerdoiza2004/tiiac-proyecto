@@ -10,11 +10,11 @@ import pytest
 import torch
 import yaml
 
-from src.data.splits import huella_archivo
 from src.training.flujo import (comprobar_datos_congelados, ejecutar_experimento,
                                 evaluar_carpeta,
                                 generar_y_registrar_datos, obtener_datos_congelados,
                                 entrenar_y_guardar_experto)
+from src.training.trpo import huella_politica
 from src.utils.configuracion import DATOS_PENDIENTES, resolver_configuracion
 
 RAIZ = Path(__file__).resolve().parents[1]
@@ -38,7 +38,7 @@ def _preparar(carpeta: Path) -> tuple[dict, Path, Path]:
     resultado = generar_y_registrar_datos(cfg, experto, datos, "test-flujo")
     assert resultado["coincide"]
     cfg["datos"]["huella_partidas"] = resultado["huella_partidas"]
-    cfg["datos"]["huella_experto"] = huella_archivo(experto / "modelo.zip")
+    cfg["datos"]["huella_experto"] = huella_politica(experto / "modelo.zip")
     return cfg, experto, datos
 
 

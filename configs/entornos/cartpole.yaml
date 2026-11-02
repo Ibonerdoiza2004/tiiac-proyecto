@@ -10,7 +10,7 @@ datos:
   demostraciones: data/demostraciones/cartpole/congelado
   experto: checkpoints/expertos/cartpole/congelado
   huella_partidas: b31d19eda39c1167b67330995e26659d0782b43ae83cfde7b773e8b1df221f58
-  huella_experto: 92c44313863ebe30c616be30664b2742650ee80cd833f2b799550fe742d517ac  # SHA-256 de modelo.zip
+  huella_experto: 9d45aafa782e1d9b3514376cbf677ac39f74b3f34f074205baf0530d3ed75508  # SHA-256 de policy.pth en modelo.zip
   artefacto_demostraciones: demostraciones-5c5168e7f5f8  # Artefacto W&B congelado.
   artefacto_experto: experto-CartPole-v1-92c44313863e
 demostraciones:

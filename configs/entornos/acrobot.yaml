@@ -10,7 +10,7 @@ datos:
   demostraciones: data/demostraciones/acrobot/congelado
   experto: checkpoints/expertos/acrobot/congelado
   huella_partidas: efad26895751d70b6104815b7ff2f1b418abf26a0a5fe9353725622494a27c80
-  huella_experto: fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4  # SHA-256 de modelo.zip
+  huella_experto: e05581ac9536afec10172ca2767ba5523d2d4347803e2e9b266bc433b9e4ba44  # SHA-256 de policy.pth en modelo.zip
   artefacto_demostraciones: demostraciones-45531794f3b9  # Artefacto W&B congelado.
   artefacto_experto: experto-Acrobot-v1-fad2206a39f6
 demostraciones:

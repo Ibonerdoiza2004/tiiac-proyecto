@@ -177,7 +177,7 @@ def test_perfil_cartpole_fija_rutas_y_huella_de_datos_congelados():
     assert cfg["datos"]["experto"] == "checkpoints/expertos/cartpole/congelado"
     assert cfg["datos"]["huella_partidas"]
     assert cfg["datos"]["huella_experto"] == (
-        "92c44313863ebe30c616be30664b2742650ee80cd833f2b799550fe742d517ac")
+        "9d45aafa782e1d9b3514376cbf677ac39f74b3f34f074205baf0530d3ed75508")
 
 
 def test_cambiar_la_base_no_cambia_los_tamanos_de_cartpole(tmp_path):

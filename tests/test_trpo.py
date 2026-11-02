@@ -9,9 +9,11 @@ los tests sean rápidos.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import re
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,8 +32,8 @@ from src.data.splits import huella_archivo
 from src.training.trpo import (cargar_experto, cargar_politica_experto, config_trpo,
                                config_trpo_experto, crear_trpo,
                                entrenar_experto, estadisticas_normalizacion, evaluar_retorno,
-                               guardar_experto, iteracion_trpo, normalizar_observacion,
-                               politica_trpo)
+                               guardar_experto, huella_politica, iteracion_trpo,
+                               normalizar_observacion, politica_trpo)
 from src.utils import archivos, procedencia
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import (fijar_seed, generador_torch_aislado, reiniciar_con_semilla,
@@ -1051,6 +1053,64 @@ def experto_guardado(tmp_path_factory):
     directorio = tmp_path_factory.mktemp("experto") / "cartpole"
     guardar_experto(directorio, modelo, cfg, resumen)
     return directorio
+
+
+def _reescribir_zip(origen: Path, destino: Path, cambios: dict[str, bytes],
+                   fecha: tuple[int, ...] | None = None) -> None:
+    """Copia un zip cambiando el contenido de algunas entradas y, si se pide, su fecha."""
+    with zipfile.ZipFile(origen) as entrada, zipfile.ZipFile(destino, "w") as salida:
+        for info in entrada.infolist():
+            if fecha is not None:
+                info.date_time = fecha
+            salida.writestr(info, cambios.get(info.filename, entrada.read(info.filename)))
+
+
+def test_huella_politica_es_la_de_policy_pth(experto_guardado):
+    modelo = experto_guardado / "modelo.zip"
+    with zipfile.ZipFile(modelo) as archivo:
+        pesos = archivo.read("policy.pth")
+    assert huella_politica(modelo) == hashlib.sha256(pesos).hexdigest()
+
+
+def test_huella_politica_no_cambia_con_los_metadatos_del_zip(experto_guardado, tmp_path):
+    """Regresión: la huella de modelo.zip cambiaba al reentrenar con los mismos pesos."""
+    modelo = experto_guardado / "modelo.zip"
+    copia = tmp_path / "modelo.zip"
+    _reescribir_zip(modelo, copia, {"data": b"{}", "system_info.txt": b"otra"},
+                    fecha=(2030, 1, 1, 0, 0, 0))
+    assert huella_archivo(copia) != huella_archivo(modelo)
+    assert huella_politica(copia) == huella_politica(modelo)
+
+
+def test_huella_politica_cambia_si_cambian_los_pesos(experto_guardado, tmp_path):
+    modelo = experto_guardado / "modelo.zip"
+    with zipfile.ZipFile(modelo) as archivo:
+        pesos = bytearray(archivo.read("policy.pth"))
+    pesos[-1] ^= 1
+    _reescribir_zip(modelo, tmp_path / "modelo.zip", {"policy.pth": bytes(pesos)})
+    assert huella_politica(tmp_path / "modelo.zip") != huella_politica(modelo)
+
+
+def test_reentrenar_con_la_misma_config_da_la_misma_huella_de_politica(tmp_path):
+    cfg = _cfg()
+    for nombre in ("primero", "segundo"):
+        modelo, resumen = entrenar_experto(cfg)
+        guardar_experto(tmp_path / nombre, modelo, cfg, resumen)
+    assert (huella_politica(tmp_path / "primero" / "modelo.zip")
+            == huella_politica(tmp_path / "segundo" / "modelo.zip"))
+
+
+def test_huella_politica_rechaza_archivos_que_no_son_un_modelo(tmp_path):
+    no_zip = tmp_path / "no_zip.zip"
+    no_zip.write_bytes(b"modelo de prueba")
+    sin_politica = tmp_path / "sin_politica.zip"
+    with zipfile.ZipFile(sin_politica, "w") as archivo:
+        archivo.writestr("data", "{}")
+    for ruta in (no_zip, sin_politica):
+        with pytest.raises(ValueError, match="policy.pth"):
+            huella_politica(ruta)
+    with pytest.raises(FileNotFoundError):
+        huella_politica(tmp_path / "falta.zip")
 
 
 def _cfg_grabacion(**cambios) -> dict:
