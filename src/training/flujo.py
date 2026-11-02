@@ -22,7 +22,7 @@ from src.training.bc import METODO_BC, cargar_politica_bc
 from src.training.evaluacion import config_evaluacion, evaluar_final
 from src.training.gail import METODO_GAIL, cargar_gail
 from src.training.trpo import (cargar_experto, cargar_politica_experto, entrenar_experto,
-                               guardar_experto)
+                               guardar_experto, huella_politica)
 from src.utils.archivos import (comprobar_directorio_libre, escribir_archivo_nuevo,
                                 escribir_carpeta_nueva, marca_de_tiempo)
 from src.utils.configuracion import dato_congelado
@@ -349,8 +349,8 @@ def comprobar_datos_congelados(cfg: dict, datos: Path, experto: Path) -> None:
     if huella_partidas(trayectorias) != huella_esperada_partidas:
         raise ValueError(f"{datos} no son las demostraciones congeladas: la huella de las "
                          "partidas no coincide con datos.huella_partidas")
-    if huella_archivo(experto / "modelo.zip") != huella_esperada_experto:
-        raise ValueError(f"{experto} no es el experto congelado: la huella de modelo.zip "
+    if huella_politica(experto / "modelo.zip") != huella_esperada_experto:
+        raise ValueError(f"{experto} no es el experto congelado: la huella de su política "
                          "no coincide con datos.huella_experto")
 
 

@@ -199,19 +199,25 @@ def test_nombre_artefacto_de_cada_tipo(argumentos, esperado):
     assert esperado.endswith("-" + HUELLA[:CARACTERES_HUELLA_ARTEFACTO])
 
 
-# Huellas de demostraciones.npz congeladas: las imprime get_data.py y las guarda el run de
-# datos en W&B (el perfil no las guarda; están también en el README).
-@pytest.mark.parametrize("entorno,npz", [
-    ("cartpole", "5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9"),
-    ("mountaincar", "86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364"),
-    ("acrobot", "45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a"),
-    ("reacher", "1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0"),
-    ("halfcheetah", "9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9"),
+# Huellas de demostraciones.npz y modelo.zip congelados: las imprime get_data.py y las
+# guardan los runs de W&B (el perfil guarda la de la política, no la del zip; las de
+# CartPole están también en el README).
+@pytest.mark.parametrize("entorno,npz,modelo", [
+    ("cartpole", "5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9",
+     "92c44313863ebe30c616be30664b2742650ee80cd833f2b799550fe742d517ac"),
+    ("mountaincar", "86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364",
+     "d492bda5bd8fa7ca9b6eb949153cbf395ef835c6c1853077b430f5e2d42e0dd4"),
+    ("acrobot", "45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a",
+     "fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4"),
+    ("reacher", "1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0",
+     "a69d425ddb0f4dad6c0d8fd42e96a9295f982dc43e9cad8674cf3ff73f5c22b2"),
+    ("halfcheetah", "9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9",
+     "3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762"),
 ])
-def test_nombre_artefacto_reproduce_los_artefactos_congelados(entorno, npz):
+def test_nombre_artefacto_reproduce_los_artefactos_congelados(entorno, npz, modelo):
     """Regresión: cambiar el formato o la longitud dejaría sin encontrar los congelados."""
     cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", entorno)
-    assert (nombre_artefacto("experto", cfg["datos"]["huella_experto"], cfg["entorno"]["id"])
+    assert (nombre_artefacto("experto", modelo, cfg["entorno"]["id"])
             == cfg["datos"]["artefacto_experto"])
     assert nombre_artefacto("demostraciones", npz) == cfg["datos"]["artefacto_demostraciones"]
 

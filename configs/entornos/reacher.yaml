@@ -11,7 +11,7 @@ datos:
   demostraciones: data/demostraciones/reacher/congelado
   experto: checkpoints/expertos/reacher/congelado
   huella_partidas: b2f098f94c7962c2c758eaf57647349dd84fb8b85a497426238986c5a98f384f
-  huella_experto: a69d425ddb0f4dad6c0d8fd42e96a9295f982dc43e9cad8674cf3ff73f5c22b2  # SHA-256 de modelo.zip
+  huella_experto: 44a588281ef50b159a9a15fcac2bbd369da987f15b84156c2c0500b10dccc74a  # SHA-256 de policy.pth en modelo.zip
   artefacto_demostraciones: demostraciones-1b16407e4fd8  # Artefacto W&B congelado.
   artefacto_experto: experto-Reacher-v5-a69d425ddb0f
 demostraciones:
