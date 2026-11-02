@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
@@ -15,6 +16,59 @@ class TipoEntorno(str, Enum):
     """Entornos activos en el proyecto y el nombre de su perfil YAML."""
 
     CARTPOLE = "cartpole"
+    MOUNTAINCAR = "mountaincar"
+    ACROBOT = "acrobot"
+    REACHER = "reacher"
+    HALFCHEETAH = "halfcheetah"
+
+
+# Valor provisional de datos.* en el perfil de un entorno cuyo experto y demostraciones
+# todavía no están congelados: la configuración se resuelve y se pueden generar, pero el
+# experimento completo se niega a empezar hasta que se sustituya por los valores reales.
+DATOS_PENDIENTES = "pendiente"
+
+
+def dato_congelado(cfg: dict, clave: str) -> Any:
+    """Devuelve cfg["datos"][clave] si el perfil ya tiene su valor congelado.
+
+    Args:
+        cfg: Configuración resuelta.
+        clave: Clave de la sección datos (rutas, huellas o artefactos).
+
+    Returns:
+        El valor del perfil.
+
+    Raises:
+        ValueError: Si el valor sigue siendo DATOS_PENDIENTES.
+    """
+    valor = cfg["datos"][clave]
+    if valor == DATOS_PENDIENTES:
+        raise ValueError(
+            f"datos.{clave} sigue «{DATOS_PENDIENTES}» en el perfil de "
+            f"{cfg['entorno']['id']}: genera y congela el experto y las demostraciones "
+            "(ver «Datos» en el README) y pon sus valores en el perfil")
+    return valor
+
+
+def crear_parser(descripcion: str | None) -> argparse.ArgumentParser:
+    """Crea el parser de un script con las opciones comunes a todos.
+
+    Son --config (YAML base), --entorno (un perfil de TipoEntorno), --sin-wandb y
+    --grupo (el grupo de W&B que comparten los scripts de una ejecución).
+
+    Args:
+        descripcion: Ayuda del script, normalmente su docstring.
+    """
+    ap = argparse.ArgumentParser(description=descripcion,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"),
+                    help="configuración base")
+    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
+                    default=TipoEntorno.CARTPOLE.value, help="perfil de entorno")
+    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
+    ap.add_argument("--grupo", default=None,
+                    help="grupo W&B compartido con los demás scripts de la ejecución")
+    return ap
 
 
 def _leer_yaml(ruta: Path) -> dict[str, Any]:
@@ -29,17 +83,39 @@ def _leer_yaml(ruta: Path) -> dict[str, Any]:
     return contenido
 
 
-def _combinar(base: dict[str, Any], capa: Mapping[str, Any], ruta: str = "") -> None:
-    """Combina una capa en base y rechaza claves que no declare la base."""
+# Secciones que cambian claves de otra solo para una parte del flujo: admiten las claves
+# de la sección de referencia (experto.trpo, las de trpo, solo al entrenar el experto).
+SOBRESCRITURAS = {"experto.trpo": "trpo"}
+
+
+def _combinar(base: dict[str, Any], capa: Mapping[str, Any], ruta: str = "",
+              raiz: dict[str, Any] | None = None) -> None:
+    """Combina una capa en base y rechaza claves que no declare la base.
+
+    En las secciones de SOBRESCRITURAS, las claves válidas son las de su sección de
+    referencia en raiz (por defecto, base).
+    """
+    raiz = base if raiz is None else raiz
     for clave, valor in capa.items():
-        if clave not in base:
-            nombre = f"{ruta}.{clave}" if ruta else str(clave)
-            raise ValueError(f"Clave de configuración desconocida: {nombre}")
         nombre = f"{ruta}.{clave}" if ruta else str(clave)
+        if clave not in base:
+            raise ValueError(f"Clave de configuración desconocida: {nombre}")
+        if nombre in SOBRESCRITURAS:
+            if not isinstance(valor, Mapping):
+                raise ValueError(f"Se esperaba un diccionario en {nombre}")
+            referencia = raiz[SOBRESCRITURAS[nombre]]
+            for subclave, subvalor in valor.items():
+                if subclave not in referencia:
+                    raise ValueError(f"Clave de configuración desconocida: {nombre}.{subclave}")
+                if isinstance(subvalor, Mapping):
+                    raise ValueError("Se esperaba un valor escalar o lista en "
+                                     f"{nombre}.{subclave}")
+                base[clave][subclave] = deepcopy(subvalor)
+            continue
         if isinstance(base[clave], dict):
             if not isinstance(valor, Mapping):
                 raise ValueError(f"Se esperaba un diccionario en {nombre}")
-            _combinar(base[clave], valor, nombre)
+            _combinar(base[clave], valor, nombre, raiz)
         elif isinstance(valor, Mapping):
             raise ValueError(f"Se esperaba un valor escalar o lista en {nombre}")
         else:

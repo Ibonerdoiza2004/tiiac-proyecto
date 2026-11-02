@@ -3,12 +3,11 @@
 
 experimento:
   nombre: tiiac  # Prefijo de los nombres de los runs de W&B.
-  seed: 42
   # Repeticiones de BC y GAIL por cada subconjunto, con semillas de modelo
   # distintas (codigo original: runs 7 en los entornos clasicos, 1 en MuJoCo).
   repeticiones: 7
-  # Entrenamientos que scripts/entrenar_gail.py lanza a la vez, cada uno en su
-  # proceso con un hilo. No cambia los resultados: cada entrenamiento depende solo
+  # Entrenamientos de BC y GAIL (y evaluaciones) que se lanzan a la vez, cada uno en
+  # su proceso con un hilo. No cambia los resultados: cada entrenamiento depende solo
   # de su cantidad y su repeticion. Depende de la maquina: como mucho, los nucleos
   # fisicos, y unos 830 MB de RAM por proceso (medido en CartPole). 1 = en serie.
   # 5 para el PC en el que se midio (6 nucleos fisicos, 7,9 GB en WSL); en otra
@@ -20,8 +19,9 @@ experimento:
   semilla_repeticiones: 3000
 
 datos:
-  raiz: data/
-  # Los fija el perfil de cada entorno con los datos congelados.
+  # Los fija el perfil de cada entorno con los datos congelados. Mientras no los
+  # tenga, el perfil pone `pendiente` en las seis: así se pueden entrenar el experto
+  # y grabar los datos, pero el experimento completo no empieza hasta sustituirlas.
   demostraciones: null
   experto: null
   huella_partidas: null
@@ -29,9 +29,9 @@ datos:
   artefacto_demostraciones: null
   artefacto_experto: null
 
+# Solo lo usa el esqueleto del aplicativo (src/app/serve.py) hasta la E2.
 modelo:
   nombre: mi_modelo
-  # ... los del paper. Cada valor deberia poder senyalarse en la ficha de replicacion.
 
 entorno:
   id: null
@@ -91,6 +91,10 @@ trpo:
   limite_normalizacion: 10.0       # recorte tras normalizar (valor de sb3)
   # Ventajas estandarizadas antes del paso de la politica, como el original.
   normalizar_ventajas: true
+  # Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas)
+  # e inicializacion ortogonal de los pesos; valores por defecto de sb3.
+  log_std_inicial: 0.0
+  inicializacion_ortogonal: true
   # Paso de la politica (valores por defecto de sb3-contrib).
   pasos_gradiente_conjugado: 15
   busqueda_lineal_factor: 0.8
@@ -115,6 +119,9 @@ experto:
   evaluar_cada: 2
   episodios_evaluacion: 10
   evaluacion_determinista: false
+  # Claves de trpo que cambian solo al entrenar el experto (por ejemplo, otros
+  # hiperparametros ajustados); GAIL usa siempre la seccion trpo. Vacia: igual que trpo.
+  trpo: {}
 
 gail:
   # Iteraciones de GAIL (paper, tabla 2: 300 en los entornos clasicos; el codigo

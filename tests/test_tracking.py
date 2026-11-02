@@ -10,10 +10,15 @@ import numpy as np
 import pytest
 import torch
 
-from src.utils.tracking import (abrir_run, abrir_run_barrido, comprobar_wandb,
-                                crear_grupo, descargar_artefacto, nombre_run, registrar,
-                                registrar_resumen, subir_artefacto, terminar_run,
-                                usar_artefacto)
+from src.utils.configuracion import resolver_configuracion
+from src.utils.tracking import (CARACTERES_GRUPO, CARACTERES_HUELLA_ARTEFACTO, CODIGO_INTERRUMPIDO,
+                                abrir_run, abrir_run_barrido,
+                                comprobar_wandb, con_seccion, crear_grupo, descargar_artefacto,
+                                nombre_artefacto, nombre_run, registrar, registrar_resumen,
+                                subir_artefacto, terminar_run, usar_artefacto)
+
+RAIZ = Path(__file__).resolve().parent.parent
+HUELLA = "0123456789abcdef" * 4
 
 
 def _cfg(modo: str = "online") -> dict:
@@ -60,11 +65,30 @@ def test_abrir_run_barrido_identifica_grupo_cantidad_repeticion(monkeypatch):
     monkeypatch.setattr("src.utils.tracking.abrir_run",
                         lambda *a, **kw: capturas.append((a, kw)) or "run")
     cfg = _cfg("offline")
-    assert abrir_run_barrido(cfg, "gail", 4, 2, "grupo-a") == "run"
+    assert abrir_run_barrido(cfg, "gail", np.int64(4), np.int64(2), "grupo-a") == "run"
     assert capturas[0][1] == {"grupo": "grupo-a", "job_type": "gail",
                               "etiquetas": ["entorno:CartPole-v1", "metodo:gail",
                                             "cantidad:4", "repeticion:2"]}
-    assert cfg["experimento"]["nombre"] == "exp"
+    # En la config para que W&B pueda agrupar por ellos; enteros de Python para el JSON.
+    barrido = capturas[0][0][0]["barrido"]
+    assert barrido == {"metodo": "gail", "cantidad": 4, "repeticion": 2}
+    assert all(type(barrido[k]) is int for k in ("cantidad", "repeticion"))
+    assert cfg["experimento"]["nombre"] == "exp" and "barrido" not in cfg
+
+
+@pytest.mark.parametrize("metricas,esperado", [
+    ({}, {}),
+    ({"pasos": 1.0}, {"trpo/pasos": 1.0}),
+    ({"discriminador/perdida": 0.5}, {"discriminador/perdida": 0.5}),
+    ({"pasos": 1.0, "reajuste/perdida_valor": float("inf"), "partidas": 0.0},
+     {"trpo/pasos": 1.0, "reajuste/perdida_valor": float("inf"), "trpo/partidas": 0.0}),
+    ({"a/b/c": 2}, {"a/b/c": 2}),
+])
+def test_con_seccion_solo_prefija_las_metricas_sin_seccion(metricas, esperado):
+    """Las que ya tienen sección se respetan; los valores no cambian."""
+    original = dict(metricas)
+    assert con_seccion(metricas, "trpo") == esperado
+    assert metricas == original
 
 
 def test_nombre_run_identifica_metodo_entorno_cantidad_y_repeticion():
@@ -161,6 +185,54 @@ def test_descargar_artefacto_sin_sesion_da_runtime_error(monkeypatch, tmp_path):
         descargar_artefacto(_cfg("disabled"), "datos", tmp_path / "datos")
 
 
+@pytest.mark.parametrize("argumentos,esperado", [
+    (("experto", HUELLA, "CartPole-v1"), "experto-CartPole-v1-0123456789ab"),
+    (("demostraciones", HUELLA), "demostraciones-0123456789ab"),
+    (("bc", HUELLA, "CartPole-v1", 4, 2), "bc-CartPole-v1-c4-r2-0123456789ab"),
+    (("gail", HUELLA, "CartPole-v1", 10, 0), "gail-CartPole-v1-c10-r0-0123456789ab"),
+    (("gail", HUELLA, "CartPole-v1", np.int64(1), np.int64(3)),
+     "gail-CartPole-v1-c1-r3-0123456789ab"),
+])
+def test_nombre_artefacto_de_cada_tipo(argumentos, esperado):
+    """Los cuatro tipos de artefacto siguen el formato <tipo>[-entorno][-cN-rM]-<huella corta>."""
+    assert nombre_artefacto(*argumentos) == esperado
+    assert esperado.endswith("-" + HUELLA[:CARACTERES_HUELLA_ARTEFACTO])
+
+
+# Huellas de demostraciones.npz congeladas: las imprime get_data.py y las guarda el run de
+# datos en W&B (el perfil no las guarda; están también en el README).
+@pytest.mark.parametrize("entorno,npz", [
+    ("cartpole", "5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9"),
+    ("mountaincar", "86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364"),
+    ("acrobot", "45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a"),
+    ("reacher", "1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0"),
+    ("halfcheetah", "9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9"),
+])
+def test_nombre_artefacto_reproduce_los_artefactos_congelados(entorno, npz):
+    """Regresión: cambiar el formato o la longitud dejaría sin encontrar los congelados."""
+    cfg = resolver_configuracion(RAIZ / "configs" / "default.yaml", entorno)
+    assert (nombre_artefacto("experto", cfg["datos"]["huella_experto"], cfg["entorno"]["id"])
+            == cfg["datos"]["artefacto_experto"])
+    assert nombre_artefacto("demostraciones", npz) == cfg["datos"]["artefacto_demostraciones"]
+
+
+@pytest.mark.parametrize("huella", [
+    None, 123, "", HUELLA[:CARACTERES_HUELLA_ARTEFACTO], HUELLA + "0", HUELLA.upper(),
+    "g" * 64,
+])
+def test_nombre_artefacto_rechaza_huellas_que_no_son_sha256(huella):
+    """Una huella recortada, en mayúsculas o que no es hexadecimal no da nombre."""
+    with pytest.raises(ValueError, match="SHA-256"):
+        nombre_artefacto("experto", huella, "CartPole-v1")
+
+
+@pytest.mark.parametrize("cantidad,repeticion", [(4, None), (None, 0)])
+def test_nombre_artefacto_exige_cantidad_y_repeticion_juntas(cantidad, repeticion):
+    """Sin la otra mitad, dos modelos distintos podrían compartir nombre."""
+    with pytest.raises(ValueError, match="juntas"):
+        nombre_artefacto("bc", HUELLA, "CartPole-v1", cantidad, repeticion)
+
+
 def test_registrar_solo_envia_metricas_escalares():
     """Solo se envían escalares numéricos de Python y NumPy, no contenedores/tensores."""
     llamadas = []
@@ -245,3 +317,10 @@ def test_crear_grupo_devuelve_identificadores_no_vacios_y_distintos():
     """Cada ejecución puede crear un grupo nuevo y breve."""
     primero, segundo = crear_grupo(), crear_grupo()
     assert primero and segundo and primero != segundo
+    assert all(len(g) == CARACTERES_GRUPO and int(g, 16) >= 0 for g in (primero, segundo))
+
+
+def test_codigo_interrumpido_es_el_de_ctrl_c_en_la_shell():
+    """128 + SIGINT: el que da bash a un proceso interrumpido con Ctrl+C."""
+    import signal
+    assert CODIGO_INTERRUMPIDO == 128 + signal.SIGINT

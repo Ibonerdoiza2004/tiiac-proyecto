@@ -1,0 +1,58 @@
+# Perfil de Acrobot. Tamaños del código original de GAIL (im_classic_pipeline.yaml),
+# repetidos aquí para que no cambien si cambia la base.
+experimento:
+  # Elección propia, como en CartPole: el código original usa 7 (runs); 5 para repartir
+  # el barrido en 5 procesos sin que compartan núcleo.
+  repeticiones: 5
+datos:
+  # Congelado el 2026-11-01 en Linux (WSL2, Python 3.12.3, OMP_NUM_THREADS=1), commit
+  # a6b8bdb2bbfce379554813c477bfaf33ef82e412. Sustituye al del commit 6ba7aae.
+  demostraciones: data/demostraciones/acrobot/congelado
+  experto: checkpoints/expertos/acrobot/congelado
+  huella_partidas: efad26895751d70b6104815b7ff2f1b418abf26a0a5fe9353725622494a27c80
+  huella_experto: fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-45531794f3b9  # Artefacto W&B congelado.
+  artefacto_experto: experto-Acrobot-v1-fad2206a39f6
+demostraciones:
+  partidas_train: 10  # Código original (full_dataset_num_trajs); igual al subconjunto mayor.
+  partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.
+  subconjuntos: [1, 4, 7, 10]  # Código original (dataset_num_trajs).
+  frecuencia_pares: 5  # Código original (data_subsamp_freq).
+entorno:
+  # Gymnasium; el original usa Acrobot-v0, que ya no existe. 500 pasos por partida.
+  id: Acrobot-v1
+trpo:
+  capas_ocultas: [100, 100]  # Paper Ho y Ermon (2016), sección 6.
+  activacion: tanh  # Paper Ho y Ermon (2016), sección 6.
+  gamma: 0.995  # Paper Ho y Ermon (2016), apéndice B.
+  gae_lambda: 0.97  # Paper Ho y Ermon (2016), apéndice B.
+  target_kl: 0.01  # Código original de GAIL (max_kl).
+  cg_damping: 0.1  # Código original de GAIL.
+  pasos_por_iteracion: 5000  # Código original (min_total_sa).
+  # Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración.
+  n_entornos: 10
+  normalizar_observaciones: true  # Como el original.
+  batch_size_valor: 250  # Divide los 5000 pasos de cada iteración.
+experto:
+  # Elección propia: tope del entrenamiento, que para al alcanzar el objetivo. Con el
+  # umbral de Gymnasium como objetivo, el experto lo alcanzaba en 100 000 pasos y 34 s.
+  pasos_totales: 1000000
+  # Elección propia: algo por encima del experto del paper (tabla 1: −75,25 ± 10,94, en
+  # Acrobot-v0) y más exigente que el umbral de Gymnasium (−100), con el que el experto
+  # paraba justo al cruzarlo.
+  retorno_objetivo: -70
+  # 50 partidas por evaluación, como las estadísticas del paper: con 10, la mejor de
+  # muchas evaluaciones es optimista y el experto paraba antes de tiempo.
+  episodios_evaluacion: 50
+gail:
+  iteraciones: 300  # Paper, tabla 2 (el código original usa max_iter 301).
+  evaluar_cada: 10  # Elección propia, como en CartPole.
+  episodios_evaluacion: 10  # Elección propia; la evaluación final usa 50.
+  evaluacion_determinista: true  # Como evalúa el original las políticas aprendidas.
+  # Código original: log D, porque las partidas terminan al levantar el brazo
+  # (cuts_off_on_success: true en im_classic_pipeline.yaml).
+  recompensa: log_d
+evaluacion:
+  episodios: 50  # Código original de GAIL (eval_num_trajs).
+  semilla: 9000
+  determinista: true  # Como evalúa el original las políticas aprendidas.

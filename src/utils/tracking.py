@@ -16,10 +16,21 @@ from typing import Any
 
 _ULTIMOS_PASOS: dict[int, tuple[Any, int]] = {}
 
+# Caracteres de la huella SHA-256 que lleva el nombre de un artefacto; los nombres
+# congelados de configs/ (datos.artefacto_*) siguen esta longitud.
+CARACTERES_HUELLA_ARTEFACTO = 12
+# Segundos que espera wandb.login antes de rendirse, para no bloquear el arranque sin red.
+ESPERA_SESION = 10
+# Caracteres hexadecimales del identificador aleatorio de un grupo (crear_grupo).
+CARACTERES_GRUPO = 12
+# Código de salida de los scripts y de los runs interrumpidos con Ctrl+C: 128 + SIGINT (2),
+# el que usa la shell.
+CODIGO_INTERRUMPIDO = 130
+
 
 def crear_grupo() -> str:
-    """Crea un identificador corto para agrupar una ejecución completa."""
-    return uuid.uuid4().hex[:12]
+    """Crea un identificador de CARACTERES_GRUPO caracteres hexadecimales para una ejecución."""
+    return uuid.uuid4().hex[:CARACTERES_GRUPO]
 
 
 def _wandb_activo(cfg: dict) -> bool:
@@ -48,7 +59,7 @@ def comprobar_wandb(cfg: dict, exigir_sesion: bool = False) -> Any | None:
         raise RuntimeError("wandb está activo, pero el paquete wandb no está instalado") from error
     if exigir_sesion and cfg.get("wandb", {}).get("modo", "online") == "online":
         try:
-            sesion = wandb.login(anonymous="never", timeout=10, verify=True)
+            sesion = wandb.login(anonymous="never", timeout=ESPERA_SESION, verify=True)
         except Exception as error:  # noqa: BLE001 - W&B envuelve errores de red y credenciales
             raise RuntimeError(f"no se pudo validar la sesión de W&B: {error}") from error
         if not sesion:
@@ -72,7 +83,7 @@ def abrir_run(cfg: dict, grupo: str | None = None, job_type: str | None = None,
     if wandb is None:
         return None
     return wandb.init(
-        project=wcfg.get("proyecto", "tiiac-2026"),
+        project=wcfg["proyecto"],
         entity=wcfg.get("entidad") or None,
         name=nombre or cfg["experimento"]["nombre"],
         config=cfg,
@@ -95,10 +106,13 @@ def nombre_run(cfg: dict, metodo: str, cantidad: int | None = None,
 
 def abrir_run_barrido(cfg: dict, metodo: str, cantidad: int, repeticion: int,
                       grupo: str | None = None) -> Any | None:
-    """Abre un run de BC o GAIL con grupo, job_type y etiquetas identificativas."""
+    """Abre un run de BC o GAIL con grupo, job_type, etiquetas y config.barrido identificativos."""
     entorno = cfg.get("origen", {}).get("entorno", cfg["entorno"]["id"])
     cfg_run = copy.deepcopy(cfg)
     cfg_run["experimento"]["nombre"] = nombre_run(cfg, metodo, cantidad, repeticion)
+    # En la config, y no solo en las etiquetas, para que W&B pueda agrupar por ellos.
+    cfg_run["barrido"] = {"metodo": metodo, "cantidad": int(cantidad),
+                          "repeticion": int(repeticion)}
     return abrir_run(cfg_run, grupo=grupo, job_type=metodo,
                      etiquetas=[f"entorno:{entorno}", f"metodo:{metodo}",
                                 f"cantidad:{cantidad}", f"repeticion:{repeticion}"])
@@ -122,6 +136,15 @@ def registrar(run: Any | None, metricas: dict, paso: int | None = None) -> None:
         run.log(escalares, step=paso)
 
 
+def con_seccion(metricas: dict[str, Any], seccion: str) -> dict[str, Any]:
+    """Pone en la sección dada (prefijo «<seccion>/») las métricas que no tienen ninguna.
+
+    W&B agrupa los paneles por prefijo; sin él, la métrica cae en la sección genérica.
+    """
+    return {clave if "/" in clave else f"{seccion}/{clave}": valor
+            for clave, valor in metricas.items()}
+
+
 def registrar_resumen(run: Any | None, resumen: dict[str, Any]) -> None:
     """Añade al summary del run la procedencia y el resumen final del entrenamiento."""
     summary = getattr(run, "summary", None) if run is not None else None
@@ -130,6 +153,34 @@ def registrar_resumen(run: Any | None, resumen: dict[str, Any]) -> None:
 
         summary.update({**resumen, "codigo": estado_git(),
                         "entorno_ejecucion": versiones_y_hardware()})
+
+
+def nombre_artefacto(tipo: str, huella: str, entorno: str | None = None,
+                     cantidad: int | None = None, repeticion: int | None = None) -> str:
+    """Nombre de un artefacto: <tipo>[-<entorno>][-c<cantidad>-r<repeticion>]-<huella corta>.
+
+    Args:
+        tipo: experto, demostraciones, bc o gail.
+        huella: SHA-256 del archivo que identifica el artefacto.
+        entorno: Id del entorno; las demostraciones no lo llevan.
+        cantidad: Subconjunto de BC y GAIL; va siempre con repeticion.
+        repeticion: Repetición de BC y GAIL; va siempre con cantidad.
+
+    Returns:
+        El nombre sin versión, con los primeros CARACTERES_HUELLA_ARTEFACTO de la huella.
+
+    Raises:
+        ValueError: Si la huella no es un SHA-256 o solo se da cantidad o repetición.
+    """
+    from src.data.splits import comprobar_huella
+
+    comprobar_huella(huella)
+    if (cantidad is None) != (repeticion is None):
+        raise ValueError("cantidad y repeticion van juntas en el nombre de un artefacto")
+    partes = [tipo] + ([entorno] if entorno is not None else [])
+    if cantidad is not None:
+        partes += [f"c{cantidad}", f"r{repeticion}"]
+    return "-".join([*partes, huella[:CARACTERES_HUELLA_ARTEFACTO]])
 
 
 def subir_artefacto(run: Any | None, nombre: str, tipo: str,
@@ -194,10 +245,10 @@ def descargar_artefacto(cfg: dict, nombre: str, destino: Path) -> Path:
 
 
 def terminar_run(run: Any | None, error: BaseException | None = None) -> None:
-    """Cierra el run con código 0, 1 por fallo o 130 por Ctrl+C."""
+    """Cierra el run con código 0, 1 por fallo o CODIGO_INTERRUMPIDO por Ctrl+C."""
     if run is not None:
-        run.finish(exit_code=(0 if error is None else
-                              130 if isinstance(error, KeyboardInterrupt) else 1))
+        run.finish(exit_code=(0 if error is None else CODIGO_INTERRUMPIDO
+                              if isinstance(error, KeyboardInterrupt) else 1))
         _ULTIMOS_PASOS.pop(id(run), None)
 
 

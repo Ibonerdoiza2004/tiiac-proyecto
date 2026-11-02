@@ -8,6 +8,7 @@ los tests sean rápidos.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -26,7 +27,8 @@ from src.training.gail import EntornoRecompensaGAIL
 from src.data.demostraciones import (generar_dataset, huella_partidas, jugar_partida,
                                      retorno_partida)
 from src.data.splits import huella_archivo
-from src.training.trpo import (cargar_experto, cargar_politica_experto, crear_trpo,
+from src.training.trpo import (cargar_experto, cargar_politica_experto, config_trpo,
+                               config_trpo_experto, crear_trpo,
                                entrenar_experto, estadisticas_normalizacion, evaluar_retorno,
                                guardar_experto, iteracion_trpo, normalizar_observacion,
                                politica_trpo)
@@ -111,6 +113,9 @@ def test_crear_trpo_no_siembra_por_su_cuenta(monkeypatch):
     ("cg_damping", -1, "cg_damping"),
     ("n_entornos", True, "n_entornos"),
     ("normalizar_observaciones", "si", "normalizar_observaciones"),
+    ("log_std_inicial", float("inf"), "log_std_inicial"),
+    ("log_std_inicial", "-1", "log_std_inicial"),
+    ("inicializacion_ortogonal", 1, "inicializacion_ortogonal"),
     ("limite_normalizacion", 0, "limite_normalizacion"),
     ("normalizar_ventajas", 1, "normalizar_ventajas"),
     ("pasos_gradiente_conjugado", 0, "pasos_gradiente_conjugado"),
@@ -288,6 +293,18 @@ def test_evaluar_mas_a_menudo_no_cambia_el_entrenamiento():
     assert resultados[0]["retornos"] == resultados[1]["retornos"]
 
 
+def test_entrenar_experto_registra_cada_medida_en_su_seccion_de_wandb():
+    """Las medidas de TRPO se devolvían sin prefijo y caían en la sección genérica."""
+    registros = []
+    run = SimpleNamespace(log=lambda metricas, step=None: registros.append(dict(metricas)))
+    cfg = _cfg()
+    cfg["experto"].update(pasos_totales=64 * 2, evaluar_cada=2, retorno_objetivo=10_000)
+    entrenar_experto(cfg, run)
+    assert {clave.split("/")[0] for m in registros for clave in m} == {"trpo", "evaluacion"}
+    assert {"trpo/pasos", "trpo/partidas", "trpo/retorno_real_medio",
+            "trpo/longitud_media"} == set(registros[0])
+
+
 def test_evaluar_retorno_juega_episodios_completos_con_su_semilla():
     cfg = _cfg()
     modelo, venv = _agente(cfg)
@@ -378,12 +395,21 @@ def test_el_experto_respeta_el_presupuesto_y_evalua_al_final(monkeypatch):
     assert set(resumen["semillas"]) == {"base", "modelo", "entornos", "evaluacion"}
 
 
-def test_el_presupuesto_debe_ser_multiplo_del_bloque():
-    # Regresión: con 200 pasos y bloques de 64 entrenaba 256 sin avisar.
-    cfg = _cfg()
-    cfg["experto"]["pasos_totales"] = 200
-    with pytest.raises(ValueError, match="múltiplo de trpo.pasos_por_iteracion"):
-        entrenar_experto(cfg)
+@pytest.mark.parametrize("presupuesto,iteraciones", [(192, 3), (193, 4), (200, 4), (255, 4),
+                                                     (256, 4), (257, 5), (1, 1)])
+def test_el_experto_para_en_la_primera_iteracion_que_llega_al_presupuesto(
+    presupuesto, iteraciones, monkeypatch
+):
+    """Sin múltiplo exacto, la última iteración se pasa y los pasos reales quedan en el resumen."""
+    cfg = _cfg()  # Bloques de 64 pasos.
+    cfg["experto"].update(pasos_totales=presupuesto, evaluar_cada=100, retorno_objetivo=1000)
+    llamadas = _evaluaciones_falsas(monkeypatch, [1.0])
+    _, resumen = entrenar_experto(cfg)
+    assert resumen["iteraciones"] == iteraciones
+    assert resumen["pasos"] == 64 * iteraciones >= presupuesto
+    assert resumen["pasos"] - presupuesto < 64
+    # Siempre se evalúa al terminar, aunque no toque por evaluar_cada.
+    assert len(llamadas) == 1 and resumen["evaluaciones"][0]["iteracion"] == iteraciones
 
 
 def test_el_experto_es_reproducible():
@@ -403,6 +429,83 @@ def test_el_experto_normaliza_si_lo_pide_el_perfil():
     assert normalizacion is not None and len(normalizacion["media"]) == 3
     _, sin = entrenar_experto(_cfg("Pendulum-v1"))
     assert sin["normalizacion"] is None
+
+
+@pytest.mark.parametrize("log_std,ortogonal", [(0.0, True), (-1.0, False)])
+def test_crear_trpo_aplica_la_inicializacion_de_la_politica(log_std, ortogonal):
+    cfg = _cfg("Pendulum-v1", log_std_inicial=log_std, inicializacion_ortogonal=ortogonal)
+    agente, venv = _agente(cfg)
+    try:
+        assert torch.allclose(agente.policy.log_std, torch.full_like(agente.policy.log_std,
+                                                                     log_std))
+        assert agente.policy.ortho_init is ortogonal
+    finally:
+        venv.close()
+
+
+def test_los_valores_por_defecto_de_la_politica_son_los_de_sb3():
+    """Regresión: las claves nuevas no cambian la política que ya se creaba."""
+    from sb3_contrib import TRPO
+    cfg = _cfg("Pendulum-v1")
+    fijar_seed(0)
+    venv = crear_entorno_vectorizado(cfg, 1, 3)
+    try:
+        propio = crear_trpo(cfg, venv)
+        fijar_seed(0)
+        sb3 = TRPO("MlpPolicy", venv, policy_kwargs={
+            "net_arch": {"pi": [16, 16], "vf": [16, 16]}, "activation_fn": torch.nn.Tanh},
+            device="cpu")
+        estado = sb3.policy.state_dict()
+        assert all(torch.equal(v, estado[k]) for k, v in propio.policy.state_dict().items())
+    finally:
+        venv.close()
+
+
+# --- experto.trpo: hiperparámetros propios del experto ------------------------------
+
+def test_config_trpo_experto_cambia_solo_sus_claves_y_no_toca_cfg():
+    cfg = _cfg()
+    original = copy.deepcopy(cfg)
+    assert config_trpo_experto(cfg)["trpo"] == cfg["trpo"]
+    cfg["experto"]["trpo"] = {"target_kl": 0.04, "capas_ocultas": [8]}
+    combinada = config_trpo_experto(cfg)
+    assert combinada["trpo"] == {**original["trpo"], "target_kl": 0.04, "capas_ocultas": [8]}
+    assert cfg["trpo"] == original["trpo"]
+    assert config_trpo(cfg)["target_kl"] == original["trpo"]["target_kl"]
+
+
+@pytest.mark.parametrize("cambios,mensaje", [
+    ({"target_kl": 0}, "trpo.target_kl"),
+    ({"pasos_por_iteracion": 48}, "debe dividir"),
+    ([], "experto.trpo debe ser un diccionario"),
+])
+def test_config_trpo_experto_comprueba_la_seccion_resultante(cambios, mensaje):
+    cfg = _cfg()
+    cfg["experto"]["trpo"] = cambios
+    with pytest.raises(ValueError, match=mensaje):
+        config_trpo_experto(cfg)
+    with pytest.raises(ValueError, match=mensaje):
+        entrenar_experto(cfg)
+
+
+def test_el_experto_entrena_con_experto_trpo():
+    cfg = _cfg()
+    cfg["experto"]["trpo"] = {"capas_ocultas": [8]}
+    modelo, _ = entrenar_experto(cfg)
+    assert modelo.policy.mlp_extractor.policy_net[0].out_features == 8
+    sin_cambios, _ = entrenar_experto(_cfg())
+    assert sin_cambios.policy.mlp_extractor.policy_net[0].out_features == 16
+
+
+def test_un_experto_trpo_con_los_mismos_valores_da_el_mismo_experto():
+    """Regresión: sin cambios efectivos, el experto sale idéntico al de antes."""
+    cfg = _cfg()
+    igual = _cfg()
+    igual["experto"]["trpo"] = {"target_kl": cfg["trpo"]["target_kl"]}
+    (modelo_a, resumen_a), (modelo_b, resumen_b) = entrenar_experto(cfg), entrenar_experto(igual)
+    assert resumen_a["evaluaciones"] == resumen_b["evaluaciones"]
+    estado_b = modelo_b.policy.state_dict()
+    assert all(torch.equal(v, estado_b[k]) for k, v in modelo_a.policy.state_dict().items())
 
 
 @pytest.mark.parametrize("clave,valor", [
@@ -1110,7 +1213,8 @@ def test_get_data_busca_el_artefacto_del_experto_por_huella(
     monkeypatch.setattr("src.training.flujo.abrir_run",
                         lambda *a, **k: nombres.append(k["nombre"]) or run)
     monkeypatch.setattr("src.training.flujo.registrar_resumen", lambda *a: None)
-    monkeypatch.setattr("src.training.flujo.subir_artefacto", lambda *a: None)
+    subidas = []
+    monkeypatch.setattr("src.training.flujo.subir_artefacto", lambda *a: subidas.append(a))
     monkeypatch.setattr("src.training.flujo.terminar_run", lambda *a: None)
     monkeypatch.setattr("src.training.flujo.avisar_estado_git", lambda *a: None)
     monkeypatch.setattr("src.utils.tracking.comprobar_wandb",
@@ -1126,6 +1230,7 @@ def test_get_data_busca_el_artefacto_del_experto_por_huella(
                                      "--salida", str(salida), "--grupo", "grupo-distinto"])
     assert script.main() == 0
     assert run.usados == [(nombre_esperado, "experto")]
+    assert subidas[0][1:3] == ("demostraciones-aaaaaaaaaaaa", "demostraciones")
     assert nombres == ["tiiac-datos-cartpole"]
 
 

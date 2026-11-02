@@ -1,0 +1,74 @@
+# Perfil de HalfCheetah (MuJoCo). Tamaños del código original de GAIL (im_pipeline.yaml),
+# repetidos aquí para que no cambien si cambia la base. Necesita gymnasium[mujoco].
+experimento:
+  repeticiones: 1  # Código original (runs).
+datos:
+  # Congelado el 2026-11-01 en Linux (WSL2, Python 3.12.3, OMP_NUM_THREADS=1), commit
+  # a6b8bdb2bbfce379554813c477bfaf33ef82e412. Sustituye al del commit 6ba7aae.
+  demostraciones: data/demostraciones/halfcheetah/congelado
+  experto: checkpoints/expertos/halfcheetah/congelado
+  huella_partidas: 8d9ba527575966f027a93cde2e6f287ebfd2f07f7832cb0315dfc165b5f1d123
+  huella_experto: 3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762  # SHA-256 de modelo.zip
+  artefacto_demostraciones: demostraciones-9a81e93f08fa  # Artefacto W&B congelado.
+  artefacto_experto: experto-HalfCheetah-v5-331994138466
+demostraciones:
+  # Igual al subconjunto mayor. El original graba 50 (full_dataset_num_trajs) y usa
+  # hasta 25; aquí la validación va aparte, por trayectoria.
+  partidas_train: 25
+  partidas_validacion: 5  # Elección propia, como en CartPole; el paper separa 70/30 los pares.
+  subconjuntos: [4, 11, 18, 25]  # Código original (dataset_num_trajs).
+  frecuencia_pares: 20  # Código original (data_subsamp_freq).
+entorno:
+  id: HalfCheetah-v5  # Gymnasium; el original usa HalfCheetah-v1. 1000 pasos por partida.
+trpo:
+  capas_ocultas: [100, 100]  # Paper Ho y Ermon (2016), sección 6.
+  activacion: tanh  # Paper Ho y Ermon (2016), sección 6.
+  gamma: 0.995  # Paper Ho y Ermon (2016), apéndice B.
+  gae_lambda: 0.97  # Paper Ho y Ermon (2016), apéndice B.
+  target_kl: 0.01  # Código original de GAIL (max_kl).
+  cg_damping: 0.1  # Código original de GAIL.
+  pasos_por_iteracion: 50000  # Código original (min_total_sa).
+  # Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración.
+  n_entornos: 10
+  normalizar_observaciones: true  # Como el original; en MuJoCo hace falta.
+  batch_size_valor: 250  # Divide los 50 000 pasos de cada iteración.
+experto:
+  # 25 M pasos, el presupuesto de antes (500 iteraciones de 50 000, como el snapshot del
+  # experto original, iter0000500). Con iteraciones de 2048 no es múltiplo: para en la
+  # primera que lo supera (12 208 iteraciones, 25 001 984 pasos).
+  pasos_totales: 25000000
+  # Cada 50 iteraciones, unos 100 000 pasos, como antes (2 iteraciones de 50 000).
+  evaluar_cada: 50
+  # Elección propia: por encima del experto del paper (tabla 1: 4463,46 ± 105,83, en
+  # HalfCheetah-v1) y del umbral de Gymnasium (4800).
+  retorno_objetivo: 5000
+  # Hiperparámetros del experto (GAIL sigue con la sección trpo): los de TRPO de RL Zoo
+  # para HalfCheetah-v4 (hyperparams/trpo.yml) sin normalizar la recompensa (RL Zoo la
+  # normaliza). Elegidos por el equipo en el ajuste del 2026-10-31 (grupo W&B
+  # ajuste-experto-halfcheetah), por ser la variante de mejor retorno.
+  trpo:
+    capas_ocultas: [64, 64]  # MlpPolicy por defecto de sb3 (RL Zoo no da policy_kwargs).
+    activacion: tanh
+    gamma: 0.99
+    gae_lambda: 0.95
+    target_kl: 0.04  # La única clave propia de HalfCheetah-v4 en RL Zoo.
+    cg_damping: 0.1
+    pasos_por_iteracion: 2048  # n_steps 1024 × n_envs 2.
+    n_entornos: 2
+    normalizar_observaciones: true
+    pasos_gradiente_conjugado: 25  # cg_max_steps.
+    pasos_valor: 20  # n_critic_updates.
+    learning_rate_valor: 0.001  # learning_rate (el del crítico en sb3-contrib).
+    batch_size_valor: 128  # batch_size.
+gail:
+  iteraciones: 500  # Código original (max_iter 501).
+  evaluar_cada: 10  # Elección propia, como en CartPole.
+  episodios_evaluacion: 10  # Elección propia; la evaluación final usa 50.
+  evaluacion_determinista: true  # Como evalúa el original las políticas aprendidas.
+  # Código original: −log(1 − D), porque las partidas no terminan al tener éxito
+  # (cuts_off_on_success: false en im_pipeline.yaml).
+  recompensa: menos_log_uno_menos_d
+evaluacion:
+  episodios: 50  # Código original de GAIL (eval_num_trajs).
+  semilla: 9000
+  determinista: true  # Como evalúa el original las políticas aprendidas.

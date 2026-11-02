@@ -12,7 +12,13 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
+
+
+def marca_de_tiempo() -> str:
+    """Fecha y hora actuales como AAAAMMDD-HHMMSS: el nombre de las salidas por defecto."""
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
 def comprobar_directorio_libre(directorio: Path) -> Path:

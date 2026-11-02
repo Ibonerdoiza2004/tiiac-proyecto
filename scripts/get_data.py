@@ -25,16 +25,15 @@ Registra el run de tipo datos y sube el NPZ y sus splits como artefacto. Usa
 
 from __future__ import annotations
 
-import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
 from src.training.flujo import generar_y_registrar_datos  # noqa: E402
-from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
+from src.utils.archivos import marca_de_tiempo  # noqa: E402
+from src.utils.configuracion import crear_parser, resolver_configuracion  # noqa: E402
 from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
 
 
@@ -51,12 +50,7 @@ def main() -> int:
     Raises:
         Ninguna: los errores esperados se presentan al usuario como códigos de salida.
     """
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"),
-                    help="configuración base")
-    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
-                    default=TipoEntorno.CARTPOLE.value, help="perfil de entorno")
+    ap = crear_parser(__doc__)
     ap.add_argument("--experto", type=Path, required=True,
                     help="carpeta del experto (modelo.zip y experto.json)")
     ap.add_argument("--salida", type=Path, default=None,
@@ -64,8 +58,6 @@ def main() -> int:
                          "(por defecto data/demostraciones/<entorno>/<fecha>)")
     ap.add_argument("--huella-esperada", default=None,
                     help="huella de las partidas congeladas, para verificar la regeneración")
-    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
-    ap.add_argument("--grupo", default=None, help="grupo W&B de esta ejecución completa")
     args = ap.parse_args()
 
     try:
@@ -74,8 +66,7 @@ def main() -> int:
     except ValueError as error:
         print(f"error de configuración: {error}", file=sys.stderr)
         return 2
-    salida = args.salida or (Path("data") / "demostraciones" / args.entorno
-                             / datetime.now().strftime("%Y%m%d-%H%M%S"))
+    salida = args.salida or Path("data") / "demostraciones" / args.entorno / marca_de_tiempo()
     try:
         comprobar_wandb(cfg, exigir_sesion=True)
     except RuntimeError as error:
@@ -103,6 +94,14 @@ def main() -> int:
         print(f"error: la huella de las partidas no coincide con la esperada "
               f"({args.huella_esperada}); son distintas de las congeladas", file=sys.stderr)
         return 1
+    _imprimir(resultado, salida)
+    if args.huella_esperada is not None:
+        print("ok: las partidas coinciden con las congeladas")
+    return 0
+
+
+def _imprimir(resultado: dict, salida: Path) -> None:
+    """Imprime el resumen de las partidas grabadas, los splits y sus huellas."""
     retornos = resultado["retornos"]
     print(f"{len(retornos)} partidas y {resultado['pasos']} pasos guardados en {salida}")
     print(f"retorno medio: {sum(retornos) / len(retornos):.1f} "
@@ -111,9 +110,6 @@ def main() -> int:
     print(f"huella de {resultado['demostraciones'].name}: {resultado['huella_dataset']}")
     print(f"huella de {resultado['splits'].name}: {resultado['huella_splits']}")
     print(f"huella de las partidas: {resultado['huella_partidas']}")
-    if args.huella_esperada is not None:
-        print("ok: las partidas coinciden con las congeladas")
-    return 0
 
 
 if __name__ == "__main__":

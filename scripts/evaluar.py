@@ -29,9 +29,7 @@ se guarda nada).
 
 from __future__ import annotations
 
-import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 import torch
 
@@ -40,8 +38,13 @@ sys.path.insert(0, str(RAIZ))
 
 from src.training.flujo import cargar_agentes, evaluar_y_guardar  # noqa: E402
 from src.training.evaluacion import config_evaluacion  # noqa: E402
-from src.utils.configuracion import TipoEntorno, resolver_configuracion  # noqa: E402
-from src.utils.tracking import comprobar_wandb, crear_grupo  # noqa: E402
+from src.utils.archivos import marca_de_tiempo  # noqa: E402
+from src.utils.configuracion import crear_parser, resolver_configuracion  # noqa: E402
+from src.utils.tracking import (  # noqa: E402
+    CODIGO_INTERRUMPIDO,
+    comprobar_wandb,
+    crear_grupo,
+)
 
 
 def main() -> int:
@@ -49,17 +52,12 @@ def main() -> int:
 
     Returns:
         Código de salida 0 si se guardó la comparación, 2 si falló la validación
-        y 130 si se interrumpió.
+        y CODIGO_INTERRUMPIDO (130) si se interrumpió.
 
     Raises:
         Ninguna: los errores esperados se presentan al usuario como códigos de salida.
     """
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"),
-                    help="configuración base")
-    ap.add_argument("--entorno", choices=[e.value for e in TipoEntorno],
-                    default=TipoEntorno.CARTPOLE.value, help="perfil de entorno")
+    ap = crear_parser(__doc__)
     ap.add_argument("--experto", type=Path, default=None,
                     help="carpeta de entrenar_experto.py (modelo.zip y experto.json)")
     ap.add_argument("--bc", type=Path, default=None, help="carpeta de entrenar_bc.py")
@@ -71,8 +69,6 @@ def main() -> int:
     ap.add_argument("--salida", type=Path, default=None,
                     help="archivo JSON nuevo (por defecto "
                          "checkpoints/evaluacion/<entorno>/<fecha>.json)")
-    ap.add_argument("--sin-wandb", action="store_true", help="no registrar en W&B")
-    ap.add_argument("--grupo", default=None, help="grupo W&B de esta ejecución completa")
     args = ap.parse_args()
 
     try:
@@ -98,7 +94,7 @@ def main() -> int:
         print(f"error de W&B: {error}", file=sys.stderr)
         return 2
     salida = args.salida or (Path("checkpoints") / "evaluacion" / args.entorno
-                             / f"{datetime.now():%Y%m%d-%H%M%S}.json")
+                             / f"{marca_de_tiempo()}.json")
     torch.set_num_threads(1)
     grupo = args.grupo or crear_grupo()
     print(f"grupo W&B: {grupo}")
@@ -106,19 +102,24 @@ def main() -> int:
         resultados = evaluar_y_guardar(cfg, agentes, huella, salida, grupo)
     except KeyboardInterrupt:
         print("interrumpido: no se ha guardado nada", file=sys.stderr)
-        return 130
+        return CODIGO_INTERRUMPIDO
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    _imprimir(resultados, protocolo["episodios"], salida)
+    return 0
+
+
+def _imprimir(resultados: list[dict], episodios: int, salida: Path) -> None:
+    """Imprime el retorno de cada agente evaluado y dónde quedan los resultados."""
     for resultado in resultados:
         cantidad = "-" if resultado["cantidad"] is None else resultado["cantidad"]
         repeticion = "-" if resultado["repeticion"] is None else resultado["repeticion"]
         print(f"{resultado['metodo']:9} cantidad {cantidad:>3} repetición {repeticion:>2}: "
               f"retorno {resultado['retorno_medio']:7.1f} ± "
               f"{resultado['retorno_desviacion']:6.1f}", flush=True)
-    print(f"{len(resultados)} agentes evaluados con {protocolo['episodios']} partidas cada uno; "
+    print(f"{len(resultados)} agentes evaluados con {episodios} partidas cada uno; "
           f"resultados en {salida}")
-    return 0
 
 
 if __name__ == "__main__":

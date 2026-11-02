@@ -34,12 +34,13 @@ from src.data.loaders import construir_loaders_bc
 from src.data.splits import SplitsDemostraciones, comprobar_huella, huella_archivo
 from src.data.tipos import Trayectoria
 from src.models.factory import PoliticaBC, comprobar_arquitectura, construir_politica_bc
-from src.training.barrido import comprobar_config_comun
+from src.training.barrido import MetodoBarrido, comprobar_config_comun
 from src.utils.archivos import escribir_archivo_nuevo
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, validar_semilla
-from src.utils.tracking import (abrir_run_barrido, registrar, registrar_resumen,
-                                subir_artefacto, terminar_run, usar_artefacto)
+from src.utils.tracking import (abrir_run_barrido, nombre_artefacto, registrar,
+                                registrar_resumen, subir_artefacto, terminar_run,
+                                usar_artefacto)
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 OPTIMIZADORES = {
@@ -136,7 +137,6 @@ def evaluar_bc(politica: PoliticaBC, loader: DataLoader) -> dict[str, float]:
         if politica.continua:
             coincidencia_total += ((salida - acciones) ** 2).sum().item()
         else:
-            # dim=1 son las acciones; dim=0 seria el batch.
             coincidencia_total += (salida.argmax(dim=1) == acciones).sum().item()
         total += len(acciones)
     if total == 0:
@@ -207,7 +207,6 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
             perdida.backward()
             opt.step()
             paso += 1
-            # .item() rompe el grafo: sin esto se acumula memoria hasta reventar
             registrar(run, {"bc/train/perdida": perdida.item()}, paso)
         if paso == 0:
             raise ValueError("El loader de train no tiene pares")
@@ -348,7 +347,6 @@ def guardar_politica_bc(
     payload = {"formato": _FORMATO_BC, "version": _VERSION_BC,
                "arquitectura": arquitectura, "state_dict": politica.state_dict(),
                "metadatos": _metadatos_checkpoint(cfg, metadatos)}
-    # Si falla al escribir, también por Ctrl+C, no queda un checkpoint a medias.
     escribir_archivo_nuevo(ruta, lambda temporal: torch.save(payload, temporal))
 
 
@@ -448,7 +446,8 @@ def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
     run = abrir_run_barrido(cfg, "bc", cantidad, repeticion, grupo)
     try:
         if cfg.get("wandb", {}).get("modo") == "online":
-            usar_artefacto(run, f"demostraciones-{datos['huella_dataset'][:12]}:latest")
+            usar_artefacto(run, nombre_artefacto("demostraciones", datos["huella_dataset"])
+                           + ":latest")
         inicio = time.perf_counter()
         fijar_seed(semillas["modelo"])
         politica, resumen = entrenar_bc_subconjunto(trayectorias, splits, cantidad, *espacios,
@@ -462,19 +461,16 @@ def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
                              "adicional": {"resumen": resumen, "datos": datos}})
         registrar_resumen(run, {**resumen, **datos})
         huella_modelo = huella_archivo(destino)
-        subir_artefacto(run, f"bc-{cfg['entorno']['id']}-c{cantidad}-r{repeticion}-"
-                        f"{huella_modelo[:12]}", "bc",
+        subir_artefacto(run, nombre_artefacto("bc", huella_modelo, cfg["entorno"]["id"],
+                                              cantidad, repeticion), "bc",
                         [destino], {"cantidad": cantidad, "repeticion": repeticion,
                                     "huella_modelo": huella_modelo, **datos})
     except BaseException as error:
-        # Si falla el entrenamiento o el guardado, W&B lo marca como fallido.
         terminar_run(run, error)
         raise
     terminar_run(run)
     return resumen
 
-
-from src.training.barrido import MetodoBarrido  # noqa: E402
 
 METODO_BC = MetodoBarrido(
     nombre="bc", comprobar_config=comprobar_config_barrido_bc,

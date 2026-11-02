@@ -37,10 +37,12 @@ from src.training.evaluacion import evaluar_politica, normalizar_observacion
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
-from src.utils.tracking import registrar
+from src.utils.tracking import con_seccion, registrar
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
+# Sección de W&B de las medidas de iteracion_trpo, que se devuelven sin prefijo.
+SECCION_TRPO = "trpo"
 _ARCHIVO_METADATOS = "experto.json"
 
 
@@ -66,6 +68,8 @@ def config_trpo(cfg: dict) -> dict:
         "normalizar_observaciones": lambda v: isinstance(v, bool),
         "limite_normalizacion": lambda v: es_real_finito(v) and v > 0,
         "normalizar_ventajas": lambda v: isinstance(v, bool),
+        "log_std_inicial": es_real_finito,
+        "inicializacion_ortogonal": lambda v: isinstance(v, bool),
         "pasos_gradiente_conjugado": es_entero_positivo,
         "busqueda_lineal_factor": lambda v: es_real_finito(v) and 0 < v < 1,
         "busqueda_lineal_maximo": es_entero_positivo,
@@ -90,6 +94,34 @@ def config_trpo(cfg: dict) -> dict:
         raise ValueError("Con trpo.normalizar_ventajas, trpo.pasos_por_iteracion y "
                          "trpo.batch_size_valor deben ser al menos 2")
     return tcfg
+
+
+def config_trpo_experto(cfg: dict) -> dict:
+    """Devuelve una copia de cfg con trpo cambiado por experto.trpo, la del experto.
+
+    experto.trpo cambia solo las claves que pone; vacía o ausente, el experto usa la
+    sección trpo, como GAIL. La sección resultante se comprueba con config_trpo.
+
+    Args:
+        cfg: Configuración resuelta.
+
+    Returns:
+        Configuración nueva; cfg no se modifica.
+
+    Raises:
+        ValueError: Si experto.trpo no es un diccionario o la sección resultante no
+            es válida.
+    """
+    experto = cfg.get("experto") if isinstance(cfg, dict) else None
+    cambios = experto.get("trpo", {}) if isinstance(experto, dict) else {}
+    if not isinstance(cambios, dict):
+        raise ValueError("experto.trpo debe ser un diccionario")
+    tcfg = cfg.get("trpo")
+    if not isinstance(tcfg, dict):
+        raise ValueError("La configuración necesita la sección trpo")
+    combinada = {**cfg, "trpo": {**tcfg, **cambios}}
+    config_trpo(combinada)
+    return combinada
 
 
 def _semilla_valida(valor: object) -> bool:
@@ -138,7 +170,8 @@ def crear_trpo(cfg: dict, venv: VecEnv) -> TRPO:
     """Crea un agente TRPO de sb3-contrib con los hiperparámetros de la configuración.
 
     La política y la red de valor son perceptrones con trpo.capas_ocultas y
-    trpo.activacion (2 × 100 tanh en el paper). Cada iteración recoge
+    trpo.activacion (2 × 100 tanh en el paper), con trpo.log_std_inicial (solo
+    acciones continuas) y trpo.inicializacion_ortogonal. Cada iteración recoge
     trpo.pasos_por_iteracion pasos repartidos entre los entornos del VecEnv, que
     puede estar envuelto (por EntornoRecompensaGAIL o VecNormalize). No recibe
     semilla: hay que llamar antes a fijar_seed y sembrar los entornos.
@@ -177,7 +210,9 @@ def crear_trpo(cfg: dict, venv: VecEnv) -> TRPO:
         normalize_advantage=tcfg["normalizar_ventajas"],
         target_kl=float(tcfg["target_kl"]),
         policy_kwargs={"net_arch": {"pi": capas, "vf": list(capas)},
-                       "activation_fn": ACTIVACIONES[tcfg["activacion"]]},
+                       "activation_fn": ACTIVACIONES[tcfg["activacion"]],
+                       "log_std_init": float(tcfg["log_std_inicial"]),
+                       "ortho_init": tcfg["inicializacion_ortogonal"]},
         device="cpu",
         verbose=0,
     )
@@ -287,9 +322,11 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
 def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
     """Entrena el experto TRPO con la recompensa real del entorno.
 
+    Usa la sección trpo con los cambios de experto.trpo (config_trpo_experto).
+
     De experto.semilla salen tres semillas independientes: la del modelo
     (fijar_seed), la de los entornos de entrenamiento y la de evaluación. Se
-    entrena por iteraciones hasta experto.pasos_totales; cada
+    entrena por iteraciones hasta llegar a experto.pasos_totales; cada
     experto.evaluar_cada iteraciones, y al final, se evalúa con
     experto.episodios_evaluacion episodios (política estocástica si
     experto.evaluacion_determinista es false, la que graba las demostraciones).
@@ -305,15 +342,16 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         iteración, si se alcanzó el objetivo, historial de evaluaciones,
         segundos medidos, semillas, estadísticas de normalización y entorno.
 
+    Cada iteración recoge un bloque completo, así que si experto.pasos_totales no es
+    múltiplo de trpo.pasos_por_iteracion se para en la primera iteración que lo
+    supera (decisión del usuario): los pasos reales quedan en el resumen.
+
     Raises:
-        ValueError: Si la configuración no es válida o experto.pasos_totales no es
-            múltiplo de trpo.pasos_por_iteracion.
+        ValueError: Si la configuración no es válida.
     """
-    tcfg, ecfg = config_trpo(cfg), _config_experto(cfg)
-    if ecfg["pasos_totales"] % tcfg["pasos_por_iteracion"]:
-        raise ValueError("experto.pasos_totales debe ser múltiplo de trpo.pasos_por_iteracion "
-                         f"({ecfg['pasos_totales']} entre {tcfg['pasos_por_iteracion']}): cada "
-                         "iteración recoge un bloque completo y se pasaría del presupuesto")
+    ecfg = _config_experto(cfg)
+    cfg_trpo = config_trpo_experto(cfg)
+    tcfg = cfg_trpo["trpo"]
     semilla_base = validar_semilla(ecfg["semilla"])
     semilla_modelo, semilla_entornos, semilla_evaluacion = semillas_independientes(
         semilla_base, 3)
@@ -324,14 +362,14 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
                             clip_obs=float(tcfg["limite_normalizacion"]))
     inicio = time.perf_counter()
     try:
-        modelo = crear_trpo(cfg, venv)
+        modelo = crear_trpo(cfg_trpo, venv)
         mejor: dict[str, Any] | None = None
         historial = []
         iteracion, alcanzado = 0, False
         while modelo.num_timesteps < ecfg["pasos_totales"]:
             iteracion += 1
             medidas = iteracion_trpo(modelo)
-            registrar(run, medidas, paso=modelo.num_timesteps)
+            registrar(run, con_seccion(medidas, SECCION_TRPO), paso=modelo.num_timesteps)
             if (iteracion % ecfg["evaluar_cada"]
                     and modelo.num_timesteps < ecfg["pasos_totales"]):
                 continue
@@ -400,7 +438,6 @@ def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,
             archivo.write(texto)
         modelo.save(carpeta / _ARCHIVO_MODELO)
 
-    # Si falla al escribir (disco lleno, Ctrl+C), no queda una carpeta a medias.
     escribir_carpeta_nueva(directorio, escribir)
 
 
