@@ -121,8 +121,8 @@ Las de la fase 2 incluyen backend, frontend y pruebas de punta a punta de su par
 
 ```mermaid
 flowchart TD
-    A[docs-cierre-e1] --> L[documentacion-final]
-    B[experimentos-finales] --> K
+    A[evaluacion-resultados<br>docs-cierre-e1 + experimentos-finales] --> L[documentacion-final]
+    A --> K
     C[api-base] --> G[docker]
     D[frontend-base] --> G
     C --> H & I & J & K
