@@ -34,13 +34,12 @@ diciembre de 2026**.
 | Plantilla del aplicativo | Se sustituye: fuera `serve.py`, `ModeloPlaceholder`, `construir_modelo` y la sección `modelo`, con sus tests |
 | Manejo de Docker | Un Taskfile con las tareas habituales (construir, arrancar, parar, tests, logs…) |
 | Precarga de la biblioteca | Se descarga de W&B al arrancar por primera vez (el profesor tiene acceso al proyecto) |
-| Regla 5/20 y T4 | Se justifica en el README que todo corre en CPU |
 | Pausar, reanudar y finalizar | Se mantienen, con checkpoints para retomar una ejecución cortada (sección 3) |
 | Trabajos a la vez | Como mucho `experimento.procesos` |
 | Partidas por defecto | Las de la E1: 50 por modelo al comparar y las del perfil al grabar con el experto; editables desde la interfaz. Al jugar a mano, las que quiera el jugador, hasta que pare |
 | Velocidad al jugar a mano | ×1: la del propio entorno (`render_fps`: 50 en CartPole, 30 en MountainCar) |
 | Documento técnico | Lo edita el equipo en Google Drive, fuera del repositorio |
-| Reparto entre Asier e Ibon | **Pendiente**: se decide más adelante |
+| Reparto entre Asier e Ibon | Por capas: Ibon, backend, datos e infraestructura; Asier, frontend (sección 4) |
 
 Pendientes de la E1 que entran en la E2: recortar el README, destacar el enlace al
 proyecto de W&B, ampliar el documento técnico (paper, arquitectura, diferencias y un
@@ -117,23 +116,47 @@ flowchart LR
 ## 4. Ramas
 
 Cada rama sale de `main`, se revisa en pareja con la plantilla del PR y lleva sus tests.
-Las de la fase 2 incluyen backend, frontend y pruebas de punta a punta de su parte.
+En la fase 2, cada funcionalidad se separa en dos ramas: `-api` (backend, con sus tests de
+pytest) y `-web` (frontend, con Vitest y pruebas de punta a punta), que sale de la `-api`.
+
+**Reparto** (por capas; cada PR lo revisa el otro):
+
+| Ibon (backend, datos e infraestructura) | Asier (frontend) |
+|---|---|
+| `evaluacion-resultados` | `frontend-base` |
+| `api-base` | `laboratorio-jugar-web` |
+| `trabajadores` | `laboratorio-entrenar-web` |
+| `datos-dashboard` | `comparar-web` |
+| `docker` | `biblioteca-web` |
+| `laboratorio-jugar-api` | |
+| `laboratorio-entrenar-api` | |
+| `comparar-api` | |
+| `biblioteca-api` | |
+| `documentacion-final` (los dos) | `documentacion-final` (los dos) |
+
+Al empezar, los dos acuerdan en `api-base` el contrato de la API (rutas, mensajes del
+WebSocket y formato del progreso y de las imágenes), para que el frontend avance en
+paralelo con datos simulados.
 
 ```mermaid
 flowchart TD
     A[evaluacion-resultados<br>docs-cierre-e1 + experimentos-finales] --> L[documentacion-final]
-    A --> K
+    A --> K1
     C[api-base] --> G[docker]
     D[frontend-base] --> G
-    C --> H & I & J & K
-    D --> H & I & J & K
-    E[trabajadores] --> I & J
-    F[datos-dashboard] --> H & I & K
-    G --> H[laboratorio-jugar]
-    G --> I[laboratorio-entrenar]
-    G --> J[comparar]
-    G --> K[biblioteca]
-    H & I & J & K --> L
+    C --> H1 & I1 & J1 & K1
+    D --> H2 & I2 & J2 & K2
+    E[trabajadores] --> I1 & J1
+    F[datos-dashboard] --> H1 & I1 & K1
+    G --> H1[laboratorio-jugar-api]
+    G --> I1[laboratorio-entrenar-api]
+    G --> J1[comparar-api]
+    G --> K1[biblioteca-api]
+    H1 --> H2[laboratorio-jugar-web]
+    I1 --> I2[laboratorio-entrenar-web]
+    J1 --> J2[comparar-web]
+    K1 --> K2[biblioteca-web]
+    H2 & I2 & J2 & K2 --> L
 ```
 
 ### Fase 0 · Cierre de la E1 (en paralelo con todo lo demás)
@@ -141,8 +164,6 @@ flowchart TD
 **1. `docs-cierre-e1`**: documentación pendiente de la E1.
 - Recortar el README: una lista de recortes que revisa el equipo antes de aplicarla.
 - Enlace al proyecto de W&B más visible.
-- Regla 5/20 y T4: justificar que todo corre en CPU (`device="cpu"`), que una GPU no
-  lo acelera y que los tiempos son los medidos en CPU; no se ha medido en Colab.
 - Hueco «Resultado» marcado para el equipo.
 - Hecho cuando: el README está revisado por los dos y el checker sigue en 100/100.
 
@@ -218,40 +239,66 @@ flowchart TD
   Taskfile permite repetirla.
 - Test: el smoke y un trabajo corto dentro del contenedor.
 
-**8. `laboratorio-jugar`**: «Jugar tú» y «Ver agente».
+**8. `laboratorio-jugar-api`**: backend de «Jugar tú» y «Ver agente».
 - Trabajador por sesión (sección 3), que cuenta para el límite de procesos.
-- Jugar con el teclado en CartPole y MountainCar. En CartPole, que no tiene acción de
-  «no hacer nada», el entorno se para mientras no haya ninguna tecla pulsada y sigue
-  al volver a pulsar. En MountainCar, sin tecla se usa su acción de no acelerar
-  (**pendiente de confirmar**).
-- «Ver agente»: el experto estocástico, como al grabar en la E1; cada partida con su
-  semilla, anotada en los metadatos.
-- Ver al experto jugar en los cinco entornos.
+- Teclado en CartPole y MountainCar. En CartPole, que no tiene acción de «no hacer
+  nada», el entorno se para mientras no haya ninguna tecla pulsada y sigue al volver a
+  pulsar. En MountainCar, sin tecla se usa su acción de no acelerar (**pendiente de
+  confirmar**).
+- «Ver agente»: el experto estocástico, como al grabar en la E1, en los cinco
+  entornos; cada partida con su semilla, anotada en los metadatos.
 - Grabar, revisar qué partidas y pares guardar, y guardarlos en la biblioteca.
 - Velocidad ×1, la del entorno. Partidas por sesión: al grabar con el experto, las
   del perfil; al jugar a mano, las que quiera el jugador, hasta que pare.
+- Rutas y mensajes del WebSocket (teclas, imágenes, partidas grabadas), con sus tests.
 
-**9. `laboratorio-entrenar`**: «Entrenar experto» y «Entrenar e imitar».
-- Experto, BC y GAIL desde la interfaz, con todos los ajustes y los datos elegidos.
-- Curvas en directo; dibujo opcional del entrenamiento para experto y GAIL.
+**9. `laboratorio-jugar-web`**: interfaz de «Jugar tú» y «Ver agente».
+- Vista del entorno con las imágenes del WebSocket y controles de teclado.
+- «Jugar tú» solo en CartPole y MountainCar; en los demás, solo ver y grabar con el
+  experto.
+- Contador de partidas y pares, y pantalla para revisar y guardar las partidas.
+- Tests de componentes y de punta a punta.
+
+**10. `laboratorio-entrenar-api`**: backend de «Entrenar experto» y «Entrenar e imitar».
+- Trabajos de experto, BC y GAIL con todos los ajustes y los datos elegidos.
+- Curvas en directo por WebSocket; dibujo opcional del entrenamiento para experto y
+  GAIL, que se puede cambiar en marcha.
 - Pausar, reanudar y finalizar, y retomar desde el último checkpoint (sección 3).
 - El modelo entrenado se guarda en la biblioteca; W&B opcional.
 
-**10. `comparar`**: la pestaña Comparar.
-- Varios modelos con las mismas partidas y semillas, visualización opcional.
+**11. `laboratorio-entrenar-web`**: interfaz de entrenamiento.
+- Formulario con todos los hiperparámetros (valores del perfil por defecto) y
+  selección de conjuntos y subconjuntos.
+- Curvas en directo, interruptor de vista y botones de pausar, reanudar y finalizar.
+- Tests de componentes y de punta a punta.
+
+**12. `comparar-api`**: backend de la pestaña Comparar.
+- Evaluación de varios modelos con las mismas partidas y semillas, visualización
+  opcional.
 - 50 partidas por modelo por defecto (protocolo de la E1), editable; pausar,
   reanudar y finalizar.
-- Resultados provisionales mientras evalúa, media ± desviación y puntuación por partida.
-- Guardar el resultado e historial de entrenamiento de cada modelo.
+- Resultados provisionales, media ± desviación y puntuación por partida; guardar el
+  resultado e historial de entrenamiento de cada modelo.
 
-**11. `biblioteca`**: la pestaña Biblioteca.
+**13. `comparar-web`**: interfaz de Comparar.
+- Selección de modelos y del número de partidas, vista opcional de las partidas.
+- Tabla de media ± desviación, puntuación por partida, resultados guardados e
+  historial de entrenamiento.
+- Tests de componentes y de punta a punta.
+
+**14. `biblioteca-api`**: backend de la Biblioteca.
 - Listado de modelos y demostraciones con sus metadatos.
-- Creación de subconjuntos (interfaz de lo hecho en `datos-dashboard`).
+- Rutas para crear subconjuntos (sobre lo hecho en `datos-dashboard`).
 - Precarga de congelados y de los BC y GAIL de los grupos de entrega.
+
+**15. `biblioteca-web`**: interfaz de la Biblioteca.
+- Listados de modelos y demostraciones, y detalle de cada uno.
+- Creación de subconjuntos eligiendo partidas y tramos de pares.
+- Tests de componentes y de punta a punta.
 
 ### Fase 3 · Cierre
 
-**12. `documentacion-final`**
+**16. `documentacion-final`**
 - README de la E2: cómo arrancar con Docker y cómo usar el dashboard.
 - Documento técnico ampliado (paper, arquitectura, diferencias y un apartado del
   aplicativo): lo edita el equipo en Google Drive; aquí solo se actualiza el PDF de
@@ -266,8 +313,8 @@ Cuatro semanas hasta el 4 de diciembre. Es una propuesta para ajustar al reparto
 | Semana | Ramas |
 |---|---|
 | 4–10 nov | `docs-cierre-e1`; lanzar `experimentos-finales` (corre en paralelo); `api-base`, `frontend-base`, `trabajadores` y `datos-dashboard` |
-| 11–17 nov | `docker` (probar pronto el render de MuJoCo) y `laboratorio-jugar` |
-| 18–24 nov | `laboratorio-entrenar`, `comparar` y `biblioteca` |
+| 11–17 nov | `docker` (probar pronto el render de MuJoCo), `laboratorio-jugar-api` y `laboratorio-jugar-web` |
+| 18–24 nov | `laboratorio-entrenar`, `comparar` y `biblioteca`, cada una en `-api` y `-web` |
 | 25 nov–1 dic | Integración, pruebas de punta a punta en Docker y `documentacion-final` |
 | 2–4 dic | Margen para fallos y entrega |
 
@@ -290,4 +337,3 @@ Cuatro semanas hasta el 4 de diciembre. Es una propuesta para ajustar al reparto
 ## 7. Preguntas abiertas
 
 1. Qué se recorta del README: se hablará más adelante.
-2. Reparto de ramas entre Asier e Ibon: más adelante.
