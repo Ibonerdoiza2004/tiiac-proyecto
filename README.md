@@ -11,9 +11,31 @@ HalfCheetah tienen también su perfil (ver [Datos](#datos)).
 - Autores: Asier Corral e Ibon Erdoiza.
 - Probado en Linux con Python 3.12.
 
-## Resultado
+## Resultados
 
-Pendiente de completar por el equipo.
+### Introducción
+En este apartado explicaremos los resultados que hemos obtenido. Nuestro objetivo es comprobar si podemos llegar a las mismas conclusiones a las que se llegaron en el paper original, partiendo de nuestros resultados.
+
+Se comparan cuatro agentes: Una política aleatoria, un experto, un agente entrenado mediante BC y un agente entrenado mediante GAIL. Para la evaluación, cada agente juega 50 episodios deterministas con las mismas semillas. Los resultados que comparamos en este apartado por cada entorno son la media de las recompensas obtenidas en la evaluación y la recompensa normalizada, donde 0 es la recompensa obtenida por la política aleatoria y 1 la obtenida por el experto.
+
+### Experto y política aleatoria
+Nuestros expertos igualan o superan a los del paper en todos los entornos, por lo que la exigencia para BC y GAIL es incluso mayor que en el paper de referencia. La política aleatoria también da valores parecidos, excepto en dos entornos que han sido actualizado (CartPole y Acrobot). CartPole-v1 permite 500 pasos, mientras que la v0 solo permitía 200. Este incremento de los pasos hace que la política aleatoria consiga un porcentaje más pequeño de la recompensa alcanzable, modificando la normalización de la recompensa. En Acrobot-v1 la política aleatoria obtiene −500 en lugar de −200, lo que infla la recompensa normalizada. Por eso, estos entornos no son del todo comparables con los del paper.
+
+### Resultados por entorno
+#### CartPole
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 21,3 | 18,6 | 406,1 (0,80) | 72,0 (0,29) | 500,0 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+| 4 | 21,3 | 18,6 | 500,0 (1,00) | 169,2 (0,83) | 499,3 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+| 7 | 21,3 | 18,6 | 500,0 (1,00) | 188,6 (0,94) | 500,0 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+| 10 | 21,3 | 18,6 | 500,0 (1,00) | 177,2 (0,87) | 500,0 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+
+El agente entrenado con GAIL, al igual que en el paper, alcanza la recompensa máxima o se queda muy cerca independientemente de la cantidad de partidas con las que se entrene. La diferencia está en BC, que en nuestra replicación consigue resultados mucho mejores.
+
+La mejoría de BC ocurre por dos razones, y las dos tienen que ver con la forma de validar. La primera es que en el paper, los pares de validación se sacan de las mismas partidas que los de entrenamiento, por lo que se parecen mucho a ellos y no permiten saber si el modelo generaliza a partidas nuevas. Nosotros, en cambio, validamos con 5 partidas distintas (las mismas en todos los entrenamientos) y nos quedamos con la época que mejor funciona en ellas, así que el modelo elegido generaliza mejor. La segunda es que, al usar para validación el 30 % de los pares del subconjunto, el paper entrena solo con el 70% restante, lo que tiene un gran impacto en los entrenamientos con pocas partidas.
+
+GAIL consigue la recompensa máxima entrenando solo durante 20 iteraciones, mientras que en el paper entrena durante 300. En la validación del entrenamiento, la media ya está entre 381 y 478 en la iteración 10, y entre 499 y 500 en la 20, por lo que la reducción de iteraciones no ha afectado al resultado. Por eso es bastante probable que el GAIL del paper también alcanzara la recompensa máxima mucho antes de las 300 iteraciones, pero que, como GAIL no tiene early stopping, siguiera entrenando.
 
 ## Ejecutar desde cero
 
