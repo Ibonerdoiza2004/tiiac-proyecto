@@ -55,6 +55,10 @@ demostraciones:
   # BC y GAIL toman un par (estado, accion) de cada N pasos de cada partida,
   # como el original (data_subsamp_freq). Depende del entorno: va en el perfil.
   frecuencia_pares: null
+  # Dashboard: fraccion de las partidas elegidas que se separan, enteras, para la
+  # validacion de BC (repartir_validacion). 0.3 sigue el 70/30 del paper; las
+  # mitades se redondean hacia arriba y queda al menos una partida en cada lado.
+  fraccion_validacion: 0.3
 
 bc:
   # Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh.

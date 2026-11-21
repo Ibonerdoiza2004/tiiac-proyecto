@@ -453,7 +453,7 @@ entorno y los clientes HTTP y WebSocket.
 ```text
 run.py                  punto de entrada: smoke, experimento y reevaluación
 configs/                toda la configuración: default.yaml, perfil de cada entorno y smoke.yaml
-src/data/               entornos, demostraciones, splits por trayectoria y loaders
+src/data/               entornos, demostraciones, splits por trayectoria, selecciones del dashboard y loaders
 src/models/factory.py   política de BC y discriminador
 src/training/           TRPO y experto, BC, GAIL, barridos, evaluación y flujo de run.py
 src/utils/              configuración, semillas, seguimiento W&B, archivos y validación

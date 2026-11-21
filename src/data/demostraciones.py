@@ -1,12 +1,17 @@
-"""Grabación, validación, guardado y carga de episodios completos.
+"""Grabación, validación, guardado, carga y combinación de episodios completos.
 
 Las partidas se guardan en NPZ con un manifiesto JSON versionado. generar_dataset
 graba las partidas con una política, las guarda y crea sus splits; es lo que usa
 scripts/get_data.py con el experto TRPO.
+
+Los metadatos dicen de dónde salen las partidas (clave fuente): de un experto (la
+fuente por defecto, la de los datos de la E1), jugadas a mano en el dashboard
+(metadatos_humanos) o de combinar varios archivos (combinar_demostraciones).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import tokenize
@@ -22,8 +27,10 @@ from gymnasium import spaces
 from numpy.typing import NDArray
 
 from src.data.entornos import crear_entorno
-from src.data.splits import comprobar_cantidades, crear_splits, guardar_splits, huella_archivo
+from src.data.splits import (comprobar_cantidades, comprobar_huella, crear_splits, guardar_splits,
+                             huella_archivo)
 from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria, es_id_episodio
+from src.utils.procedencia import estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.seed import (crear_generador, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes, validar_semilla)
 from src.utils.validacion import es_entero
@@ -38,7 +45,16 @@ _CAMPOS = (
     "estados", "acciones", "siguientes_estados", "recompensas_originales",
     "terminados", "truncados",
 )
-_METADATOS_REQUERIDOS = {"entorno", "experto", "procedencia", "configuracion_experto"}
+FUENTE_EXPERTO = "experto"
+FUENTE_HUMANO = "humano"
+FUENTE_COMBINADO = "combinado"
+# Claves obligatorias de los metadatos según su fuente. Sin la clave fuente, las
+# partidas son de un experto: así se leen los datos congelados de la E1, que no la tienen.
+_METADATOS_REQUERIDOS = {
+    FUENTE_EXPERTO: frozenset({"entorno", "experto", "procedencia", "configuracion_experto"}),
+    FUENTE_HUMANO: frozenset({"entorno", "procedencia"}),
+    FUENTE_COMBINADO: frozenset({"entorno", "procedencia", "origenes"}),
+}
 _FORMATO = "tiiac-demostraciones"
 _VERSION = 1
 
@@ -57,6 +73,30 @@ def _comprobar_claves_json(valor: object, visitados: set[int]) -> None:
             elementos = valor
         for elemento in elementos:
             _comprobar_claves_json(elemento, visitados)
+
+
+def fuente_metadatos(metadatos: object) -> str:
+    """Comprueba que los metadatos tienen las claves que exige su fuente y la devuelve.
+
+    La fuente es FUENTE_EXPERTO si falta la clave fuente (los datos de la E1 no
+    la tienen). Las claves obligatorias son: con experto, entorno, experto,
+    procedencia y configuracion_experto; con humano, entorno y procedencia; y
+    con combinado, entorno, procedencia y origenes.
+
+    Raises:
+        ValueError: Si no es un diccionario, la fuente es desconocida o falta
+            alguna clave obligatoria.
+    """
+    if not isinstance(metadatos, Mapping):
+        raise ValueError(f"Metadatos obligatorios: {sorted(_METADATOS_REQUERIDOS[FUENTE_EXPERTO])}")
+    fuente = metadatos.get("fuente", FUENTE_EXPERTO)
+    if not isinstance(fuente, str) or fuente not in _METADATOS_REQUERIDOS:
+        raise ValueError(f"Fuente de demostraciones desconocida: {fuente!r}; "
+                         f"opciones: {sorted(_METADATOS_REQUERIDOS)}")
+    requeridos = _METADATOS_REQUERIDOS[fuente]
+    if not requeridos <= metadatos.keys():
+        raise ValueError(f"Metadatos obligatorios: {sorted(requeridos)}")
+    return fuente
 
 
 def _escalar_numpy_a_python(valor: object) -> object:
@@ -213,7 +253,8 @@ def guardar_demostraciones(
     entorno. Los arrays conservan sus valores, dtype, orden y separación por
     episodio; no se normalizan.
 
-    Los metadatos JSON incluyen entorno, experto, procedencia y
+    Los metadatos JSON tienen las claves que exige su fuente (fuente_metadatos):
+    sin la clave fuente, entorno, experto, procedencia y
     configuracion_experto. Los escalares NumPy se guardan como números de
     Python y las tuplas se leerán como listas. La ruta termina en .npz y se
     crean sus directorios. El manifiesto de formato y versión vive dentro del
@@ -222,7 +263,7 @@ def guardar_demostraciones(
     Args:
         ruta: Destino del archivo NPZ, elegido por quien llama.
         trayectorias: Secuencia no vacía de objetos Trayectoria.
-        metadatos: Información JSON del entorno, experto y origen de los datos.
+        metadatos: Información JSON del entorno y del origen de los datos.
         espacio_observacion: Espacio de observación del entorno de origen.
         espacio_accion: Espacio de acción del entorno de origen.
 
@@ -238,8 +279,7 @@ def guardar_demostraciones(
     destino = Path(ruta)
     if destino.suffix != ".npz":
         raise ValueError("La ruta de demostraciones debe terminar en .npz")
-    if not isinstance(metadatos, Mapping) or not _METADATOS_REQUERIDOS <= metadatos.keys():
-        raise ValueError(f"Metadatos obligatorios: {sorted(_METADATOS_REQUERIDOS)}")
+    fuente_metadatos(metadatos)
     _comprobar_claves_json(metadatos, set())
     validadas = _validar_coleccion(trayectorias, espacio_observacion, espacio_accion)
 
@@ -314,9 +354,7 @@ def _leer_manifiesto(archivo: np.lib.npyio.NpzFile) -> dict[str, Any]:
     if manifiesto.get("version") != _VERSION or isinstance(manifiesto.get("version"), bool):
         raise ValueError(
             f"Versión no soportada: {manifiesto.get('version')!r}; se admite {_VERSION}")
-    metadatos = manifiesto.get("metadatos")
-    if not isinstance(metadatos, dict) or not _METADATOS_REQUERIDOS <= metadatos.keys():
-        raise ValueError(f"Metadatos obligatorios: {sorted(_METADATOS_REQUERIDOS)}")
+    fuente_metadatos(manifiesto.get("metadatos"))
     episodios = manifiesto.get("episodios")
     if not isinstance(episodios, list) or not episodios:
         raise ValueError("El manifiesto debe listar al menos un episodio")
@@ -625,3 +663,181 @@ def generar_dataset(cfg: Mapping[str, Any], politica: Politica, directorio: str 
                          "splits": semilla_splits},
             "train": list(splits.train), "validacion": list(splits.validacion),
             "pasos": sum(longitudes), "retornos": retornos, "longitudes": longitudes}
+
+
+def metadatos_humanos(entorno: str, semillas: Mapping[int, int]) -> dict[str, Any]:
+    """Metadatos de unas partidas jugadas a mano en el dashboard, para guardar_demostraciones.
+
+    A diferencia de las del experto, no citan ningún modelo: llevan la fuente
+    humano, el entorno y la procedencia (el código con el que se grabaron, las
+    versiones y el hardware, y la semilla con la que empezó cada partida).
+
+    Args:
+        entorno: Identificador de Gymnasium, como en entorno.id de la configuración.
+        semillas: Semilla de cada partida, por id_episodio.
+
+    Returns:
+        Los metadatos, con las semillas ordenadas por id_episodio.
+
+    Raises:
+        ValueError: Entorno vacío, ninguna partida, IDs fuera del rango de int64
+            o semillas no válidas.
+    """
+    if not isinstance(entorno, str) or not entorno.strip():
+        raise ValueError("entorno debe ser el identificador de Gymnasium del entorno")
+    if not isinstance(semillas, Mapping) or not semillas:
+        raise ValueError("semillas debe asociar al menos una partida con su semilla")
+    if not all(es_id_episodio(identificador) for identificador in semillas):
+        raise ValueError("Los id_episodio deben ser enteros en el rango de int64")
+    partidas = [{"id_episodio": int(identificador), "semilla": validar_semilla(semilla)}
+                for identificador, semilla in sorted(semillas.items(), key=lambda par: int(par[0]))]
+    return {
+        "fuente": FUENTE_HUMANO,
+        "entorno": entorno,
+        "procedencia": {
+            "generador": "partidas jugadas a mano en el dashboard",
+            "codigo": estado_git(),
+            "entorno_ejecucion": versiones_y_hardware(),
+            "semillas": partidas,
+        },
+    }
+
+
+def _huella_contenido(trayectoria: Trayectoria) -> str:
+    """Huella de los arrays de una partida, sin su id_episodio."""
+    return huella_partidas([dataclasses.replace(trayectoria, id_episodio=0)])
+
+
+def _origenes_de_archivo(trayectorias: Sequence[Trayectoria], metadatos: Mapping[str, Any],
+                         huella: str) -> dict[int, dict[str, Any]]:
+    """Devuelve, por id_episodio, el archivo original y el ID que tenía allí cada partida.
+
+    Si el archivo ya es una combinación, el origen es el que guardó al combinarse;
+    así, combinar otra vez no pierde de qué grabación sale cada partida.
+
+    Raises:
+        ValueError: Si los origenes de un archivo combinado no son coherentes con
+            sus partidas.
+    """
+    fuente = fuente_metadatos(metadatos)
+    ids = [int(t.id_episodio) for t in trayectorias]
+    if fuente != FUENTE_COMBINADO:
+        return {i: {"huella_dataset": huella, "id_episodio": i, "fuente": fuente} for i in ids}
+    origenes = metadatos["origenes"]
+    partidas = origenes.get("partidas") if isinstance(origenes, Mapping) else None
+    if not isinstance(partidas, list):
+        raise ValueError("Los origenes de un archivo combinado deben listar sus partidas")
+    resultado: dict[int, dict[str, Any]] = {}
+    for entrada in partidas:
+        origen = entrada.get("origen") if isinstance(entrada, Mapping) else None
+        if (not isinstance(origen, Mapping) or set(origen) != {"huella_dataset", "id_episodio",
+                                                                "fuente"}
+                or not es_id_episodio(entrada.get("id_episodio"))
+                or not es_id_episodio(origen["id_episodio"])
+                or origen["fuente"] not in (FUENTE_EXPERTO, FUENTE_HUMANO)):
+            raise ValueError("Entrada de origenes mal formada en el archivo combinado")
+        comprobar_huella(origen["huella_dataset"])
+        resultado[int(entrada["id_episodio"])] = dict(origen)
+    if len(resultado) != len(partidas) or set(resultado) != set(ids):
+        raise ValueError("Los origenes del archivo combinado no corresponden a sus partidas")
+    return resultado
+
+
+def combinar_demostraciones(
+    rutas: Sequence[str | Path],
+    destino: str | Path,
+    espacio_observacion: spaces.Space,
+    espacio_accion: spaces.Space,
+) -> dict[str, Any]:
+    """Combina varios archivos de demostraciones en uno nuevo, con IDs sin repetir.
+
+    Es el paso previo a crear splits o selecciones con partidas de varios
+    archivos (decisión del 13 de octubre de 2026): cada archivo de splits o de
+    selección corresponde a un único NPZ. Las partidas se recorren en el orden
+    de rutas y, dentro de cada archivo, en el orden guardado, y reciben los IDs
+    0, 1, 2… Una partida que llega dos veces (el mismo archivo dos veces, o un
+    archivo combinado y uno de sus orígenes) se guarda una sola vez: se
+    identifica por el archivo en que se grabó y el ID que tenía allí.
+
+    Los metadatos tienen fuente combinado, el entorno, la procedencia (código,
+    versiones y hardware) y origenes: por archivo de entrada, su ruta, su
+    huella, su fuente y el ID nuevo de cada uno de sus IDs (ids, pares
+    [antiguo, nuevo]); y por partida nueva, su origen (huella del archivo en
+    que se grabó, el ID que tenía allí y su fuente).
+
+    Args:
+        rutas: Archivos NPZ de guardar_demostraciones, del mismo entorno.
+        destino: Archivo NPZ nuevo.
+        espacio_observacion: Espacio de observación del entorno.
+        espacio_accion: Espacio de acción del entorno.
+
+    Returns:
+        La ruta (demostraciones), su huella (huella_dataset), la del contenido
+        (huella_partidas), el número de partidas, cuántas se descartaron por
+        repetidas y los metadatos guardados.
+
+    Raises:
+        ValueError: Ninguna ruta, archivos no válidos o incompatibles con los
+            espacios, entornos distintos, o una misma partida con contenidos distintos.
+        FileExistsError: El destino ya existe.
+        FileNotFoundError: Falta alguno de los archivos.
+    """
+    if isinstance(rutas, (str, bytes, Path)) or not isinstance(rutas, Sequence) or not rutas:
+        raise ValueError("Se requiere una secuencia no vacía de archivos de demostraciones")
+    destino = Path(destino)
+    if destino.suffix != ".npz":
+        raise ValueError("La ruta de demostraciones debe terminar en .npz")
+    if destino.exists():
+        raise FileExistsError(f"Ya existe {destino}")
+
+    combinadas: list[Trayectoria] = []
+    nuevo_de_origen: dict[tuple[str, int], int] = {}
+    contenido_de: list[str] = []
+    archivos: list[dict[str, Any]] = []
+    partidas: list[dict[str, Any]] = []
+    entorno: object = None
+    leidas = 0
+    for ruta in rutas:
+        ruta = Path(ruta)
+        trayectorias, metadatos = cargar_demostraciones(ruta, espacio_observacion, espacio_accion)
+        if entorno is None:
+            entorno = metadatos["entorno"]
+        elif metadatos["entorno"] != entorno:
+            raise ValueError(f"No se pueden combinar partidas de {entorno!r} y "
+                             f"{metadatos['entorno']!r}")
+        huella = huella_archivo(ruta)
+        origenes = _origenes_de_archivo(trayectorias, metadatos, huella)
+        ids: list[list[int]] = []
+        for trayectoria in trayectorias:
+            anterior = int(trayectoria.id_episodio)
+            origen = origenes[anterior]
+            clave = (origen["huella_dataset"], int(origen["id_episodio"]))
+            contenido = _huella_contenido(trayectoria)
+            if clave in nuevo_de_origen:
+                nuevo = nuevo_de_origen[clave]
+                if contenido_de[nuevo] != contenido:
+                    raise ValueError(f"La partida {anterior} de {ruta.name} tiene el mismo origen "
+                                     f"que otra ya combinada, pero distinto contenido")
+            else:
+                nuevo = len(combinadas)
+                nuevo_de_origen[clave] = nuevo
+                contenido_de.append(contenido)
+                combinadas.append(dataclasses.replace(trayectoria, id_episodio=nuevo))
+                partidas.append({"id_episodio": nuevo, "origen": origen})
+            ids.append([anterior, nuevo])
+        leidas += len(trayectorias)
+        archivos.append({"ruta": ruta_registrada(ruta), "huella_dataset": huella,
+                         "fuente": fuente_metadatos(metadatos), "ids": ids})
+
+    metadatos_nuevos = {
+        "fuente": FUENTE_COMBINADO,
+        "entorno": entorno,
+        "procedencia": {"generador": "combinar_demostraciones", "codigo": estado_git(),
+                        "entorno_ejecucion": versiones_y_hardware()},
+        "origenes": {"archivos": archivos, "partidas": partidas},
+    }
+    guardado = guardar_demostraciones(destino, combinadas, metadatos_nuevos,
+                                      espacio_observacion, espacio_accion)
+    return {"demostraciones": guardado, "huella_dataset": huella_archivo(guardado),
+            "huella_partidas": huella_partidas(combinadas), "partidas": len(combinadas),
+            "repetidas": leidas - len(combinadas), "metadatos": metadatos_nuevos}

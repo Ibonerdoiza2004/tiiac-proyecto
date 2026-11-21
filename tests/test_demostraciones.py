@@ -20,12 +20,13 @@ import torch
 from gymnasium.envs.classic_control import CartPoleEnv
 
 from src.data.demostraciones import (
-    ARCHIVO_DEMOSTRACIONES, ARCHIVO_SPLITS, cargar_demostraciones, config_demostraciones,
+    ARCHIVO_DEMOSTRACIONES, ARCHIVO_SPLITS, FUENTE_COMBINADO, FUENTE_EXPERTO, FUENTE_HUMANO,
+    cargar_demostraciones, combinar_demostraciones, config_demostraciones, fuente_metadatos,
     generar_dataset, grabar_demostraciones, guardar_demostraciones, huella_partidas,
-    jugar_partida, retorno_partida, validar_demostraciones,
+    jugar_partida, metadatos_humanos, retorno_partida, validar_demostraciones,
 )
 from src.data.entornos import crear_entorno
-from src.data.splits import cargar_splits, crear_splits, huella_archivo
+from src.data.splits import cargar_splits, crear_splits, guardar_splits, huella_archivo
 from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import crear_generador, semillas_independientes
@@ -1272,3 +1273,299 @@ def test_generar_dataset_falla_sin_crear_archivos(
         generar_dataset(_cfg_demostraciones(**cfg_cambios), _equilibrio, tmp_path / "datos",
                         _metadatos_grabacion() if metadatos is None else metadatos)
     assert not (tmp_path / "datos").exists()
+
+
+# --- Fuente de los metadatos y demostraciones humanas -------------------------
+
+_OBLIGATORIAS = {
+    FUENTE_EXPERTO: {"entorno", "experto", "procedencia", "configuracion_experto"},
+    FUENTE_HUMANO: {"entorno", "procedencia"},
+    FUENTE_COMBINADO: {"entorno", "procedencia", "origenes"},
+}
+
+
+def _metadatos_de(fuente: str) -> dict[str, object]:
+    """Metadatos mínimos de una fuente, con la clave fuente explícita."""
+    return {"fuente": fuente, **{clave: "x" for clave in _OBLIGATORIAS[fuente]}}
+
+
+@pytest.mark.parametrize("fuente", sorted(_OBLIGATORIAS))
+def test_fuente_metadatos_acepta_las_claves_de_cada_fuente(fuente: str) -> None:
+    assert fuente_metadatos(_metadatos_de(fuente)) == fuente
+
+
+@pytest.mark.parametrize(("fuente", "clave"), [
+    (fuente, clave) for fuente, claves in _OBLIGATORIAS.items() for clave in sorted(claves)])
+def test_fuente_metadatos_exige_cada_clave_de_su_fuente(fuente: str, clave: str) -> None:
+    metadatos = _metadatos_de(fuente)
+    del metadatos[clave]
+    with pytest.raises(ValueError, match=re.escape(
+            f"Metadatos obligatorios: {sorted(_OBLIGATORIAS[fuente])}")):
+        fuente_metadatos(metadatos)
+
+
+def test_sin_fuente_son_metadatos_de_experto(metadatos: dict[str, object]) -> None:
+    # Los datos congelados de la E1 no tienen la clave fuente y siguen siendo válidos.
+    assert "fuente" not in metadatos
+    assert fuente_metadatos(metadatos) == FUENTE_EXPERTO
+    sin_experto = {"entorno": "CartPole-v1", "procedencia": "x"}
+    with pytest.raises(ValueError, match="Metadatos obligatorios"):
+        fuente_metadatos(sin_experto)
+
+
+@pytest.mark.parametrize("fuente", ["robot", "", "Humano", None, 1, ["humano"]])
+def test_fuente_metadatos_rechaza_fuentes_desconocidas(fuente: Any) -> None:
+    with pytest.raises(ValueError, match="Fuente de demostraciones desconocida"):
+        fuente_metadatos({"fuente": fuente, "entorno": "x", "procedencia": "x"})
+
+
+@pytest.mark.parametrize("metadatos", [None, [], "humano", 3])
+def test_fuente_metadatos_rechaza_lo_que_no_es_diccionario(metadatos: Any) -> None:
+    with pytest.raises(ValueError, match="Metadatos obligatorios"):
+        fuente_metadatos(metadatos)
+
+
+def test_demostraciones_humanas_se_guardan_y_cargan_sin_experto(tmp_path: Path) -> None:
+    metadatos = metadatos_humanos("CartPole-v1", {np.int64(4): 11, 2: np.int64(7)})
+    assert metadatos["fuente"] == FUENTE_HUMANO
+    assert "experto" not in metadatos and "configuracion_experto" not in metadatos
+    assert metadatos["procedencia"]["semillas"] == [{"id_episodio": 2, "semilla": 7},
+                                                    {"id_episodio": 4, "semilla": 11}]
+    assert set(metadatos["procedencia"]) == {"generador", "codigo", "entorno_ejecucion",
+                                             "semillas"}
+    ruta = _guardar(tmp_path / "humanas.npz", [_trayectoria(identificador=2),
+                                              _trayectoria(identificador=4)], metadatos)
+    trayectorias, leidos = cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
+    assert [t.id_episodio for t in trayectorias] == [2, 4]
+    assert leidos == json.loads(json.dumps(metadatos))
+
+
+@pytest.mark.parametrize(("entorno", "semillas", "mensaje"), [
+    ("", {0: 1}, "entorno"),
+    ("   ", {0: 1}, "entorno"),
+    (None, {0: 1}, "entorno"),
+    ("CartPole-v1", {}, "al menos una partida"),
+    ("CartPole-v1", [(0, 1)], "al menos una partida"),
+    ("CartPole-v1", {True: 1}, "id_episodio"),
+    ("CartPole-v1", {"0": 1}, "id_episodio"),
+    ("CartPole-v1", {ID_EPISODIO_MAXIMO + 1: 1}, "id_episodio"),
+    ("CartPole-v1", {0: -1}, "semilla"),
+    ("CartPole-v1", {0: 1.5}, "semilla"),
+])
+def test_metadatos_humanos_rechazan_datos_no_validos(entorno: Any, semillas: Any,
+                                                    mensaje: str) -> None:
+    with pytest.raises(ValueError, match=mensaje):
+        metadatos_humanos(entorno, semillas)
+
+
+# --- combinar_demostraciones ---------------------------------------------------
+
+
+def _archivo(ruta: Path, ids: list[int], metadatos: dict[str, object], pasos: int = 3,
+             continua: bool = False) -> Path:
+    """Guarda partidas con esos IDs; el contenido depende del ID para distinguirlas."""
+    trayectorias = []
+    for i in ids:
+        campos = _campos(pasos, i, continua)
+        campos["estados"] = campos["estados"] + (i % 1000)
+        campos["siguientes_estados"] = campos["siguientes_estados"] + (i % 1000)
+        trayectorias.append(Trayectoria(**campos))
+    return _guardar(ruta, trayectorias, metadatos, continua)
+
+
+def _por_id(ruta: Path) -> dict[int, Trayectoria]:
+    trayectorias, _ = cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
+    return {t.id_episodio: t for t in trayectorias}
+
+
+def _iguales(a: Trayectoria, b: Trayectoria) -> bool:
+    return all(np.array_equal(getattr(a, campo), getattr(b, campo))
+               and getattr(a, campo).dtype == getattr(b, campo).dtype
+               for campo in ("estados", "acciones", "siguientes_estados",
+                             "recompensas_originales", "terminados", "truncados"))
+
+
+def test_combinar_renumera_y_conserva_partidas_y_origenes(
+    tmp_path: Path, metadatos: dict[str, object],
+) -> None:
+    humanas = _archivo(tmp_path / "humanas.npz", [9, 5],
+                       metadatos_humanos("CartPole-v1", {9: 1, 5: 2}))
+    experto = _archivo(tmp_path / "experto.npz", [0, 1, 2], metadatos)
+    resultado = combinar_demostraciones([humanas, experto], tmp_path / "c.npz",
+                                        OBSERVACION, DISCRETA)
+
+    combinadas, leidos = cargar_demostraciones(resultado["demostraciones"], OBSERVACION, DISCRETA)
+    assert [t.id_episodio for t in combinadas] == [0, 1, 2, 3, 4]
+    originales = [_por_id(humanas)[9], _por_id(humanas)[5],
+                  _por_id(experto)[0], _por_id(experto)[1], _por_id(experto)[2]]
+    assert all(_iguales(a, b) for a, b in zip(combinadas, originales))
+    assert resultado["partidas"] == 5 and resultado["repetidas"] == 0
+    assert resultado["huella_dataset"] == huella_archivo(resultado["demostraciones"])
+    assert resultado["huella_partidas"] == huella_partidas(combinadas)
+    assert leidos == json.loads(json.dumps(resultado["metadatos"]))
+    assert fuente_metadatos(leidos) == FUENTE_COMBINADO and leidos["entorno"] == "CartPole-v1"
+
+    archivos = leidos["origenes"]["archivos"]
+    assert [a["huella_dataset"] for a in archivos] == [huella_archivo(humanas),
+                                                       huella_archivo(experto)]
+    assert [a["fuente"] for a in archivos] == [FUENTE_HUMANO, FUENTE_EXPERTO]
+    assert [a["ids"] for a in archivos] == [[[9, 0], [5, 1]], [[0, 2], [1, 3], [2, 4]]]
+    assert [a["ruta"] for a in archivos] == ["humanas.npz", "experto.npz"]
+    assert leidos["origenes"]["partidas"][1] == {
+        "id_episodio": 1,
+        "origen": {"huella_dataset": huella_archivo(humanas), "id_episodio": 5,
+                   "fuente": FUENTE_HUMANO}}
+    assert set(leidos["procedencia"]) == {"generador", "codigo", "entorno_ejecucion"}
+
+
+def test_combinar_un_archivo_dos_veces_no_repite_partidas(
+    tmp_path: Path, metadatos: dict[str, object],
+) -> None:
+    datos = _archivo(tmp_path / "a.npz", [3, 7], metadatos)
+    resultado = combinar_demostraciones([datos, datos], tmp_path / "c.npz", OBSERVACION, DISCRETA)
+    assert resultado["partidas"] == 2 and resultado["repetidas"] == 2
+    archivos = resultado["metadatos"]["origenes"]["archivos"]
+    assert archivos[0]["ids"] == archivos[1]["ids"] == [[3, 0], [7, 1]]
+
+
+def test_combinar_un_combinado_conserva_el_origen_de_cada_partida(
+    tmp_path: Path, metadatos: dict[str, object],
+) -> None:
+    a = _archivo(tmp_path / "a.npz", [0, 1], metadatos)
+    b = _archivo(tmp_path / "b.npz", [7], metadatos_humanos("CartPole-v1", {7: 3}))
+    ab = combinar_demostraciones([a, b], tmp_path / "ab.npz", OBSERVACION, DISCRETA)
+    # b y el combinado que ya lo contiene: la partida de b no se repite.
+    final = combinar_demostraciones([b, ab["demostraciones"]], tmp_path / "final.npz",
+                                    OBSERVACION, DISCRETA)
+    assert final["partidas"] == 3 and final["repetidas"] == 1
+    origenes = [p["origen"] for p in final["metadatos"]["origenes"]["partidas"]]
+    assert origenes == [
+        {"huella_dataset": huella_archivo(b), "id_episodio": 7, "fuente": FUENTE_HUMANO},
+        {"huella_dataset": huella_archivo(a), "id_episodio": 0, "fuente": FUENTE_EXPERTO},
+        {"huella_dataset": huella_archivo(a), "id_episodio": 1, "fuente": FUENTE_EXPERTO},
+    ]
+    assert final["metadatos"]["origenes"]["archivos"][1]["ids"] == [[0, 1], [1, 2], [2, 0]]
+
+
+def test_combinar_es_reproducible_y_admite_splits(
+    tmp_path: Path, metadatos: dict[str, object],
+) -> None:
+    a = _archivo(tmp_path / "a.npz", [ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO], metadatos)
+    b = _archivo(tmp_path / "b.npz", [4, 5, 6], metadatos)
+    uno = combinar_demostraciones([str(a), b], tmp_path / "uno.npz", OBSERVACION, DISCRETA)
+    dos = combinar_demostraciones([a, str(b)], tmp_path / "dos.npz", OBSERVACION, DISCRETA)
+    assert uno["huella_dataset"] == dos["huella_dataset"]
+    assert uno["metadatos"]["origenes"]["archivos"][0]["ids"] == [[ID_EPISODIO_MAXIMO, 0],
+                                                                 [ID_EPISODIO_MINIMO, 1]]
+    trayectorias, _ = cargar_demostraciones(uno["demostraciones"], OBSERVACION, DISCRETA)
+    splits = crear_splits(trayectorias, 3, 2, [1, 3], crear_generador(0), uno["huella_dataset"])
+    ruta = tmp_path / "splits.json"
+    guardar_splits(ruta, splits)
+    assert cargar_splits(ruta, uno["huella_dataset"], range(5)) == splits
+
+
+def test_combinar_acciones_continuas(tmp_path: Path, metadatos: dict[str, object]) -> None:
+    a = _archivo(tmp_path / "a.npz", [1], metadatos, continua=True)
+    b = _archivo(tmp_path / "b.npz", [1], metadatos, pasos=2, continua=True)
+    resultado = combinar_demostraciones([a, b], tmp_path / "c.npz", OBSERVACION, CONTINUA)
+    combinadas, _ = cargar_demostraciones(resultado["demostraciones"], OBSERVACION, CONTINUA)
+    assert [t.numero_pasos for t in combinadas] == [3, 2]
+    assert combinadas[0].acciones.shape == (3, 2)
+
+
+@pytest.mark.parametrize("rutas", [[], (), "a.npz", b"a.npz", Path("a.npz"), None])
+def test_combinar_rechaza_listas_vacias_o_no_validas(tmp_path: Path, rutas: Any) -> None:
+    with pytest.raises(ValueError, match="secuencia no vacía"):
+        combinar_demostraciones(rutas, tmp_path / "c.npz", OBSERVACION, DISCRETA)
+    assert not (tmp_path / "c.npz").exists()
+
+
+def test_combinar_rechaza_entornos_distintos(tmp_path: Path, metadatos: dict[str, object]) -> None:
+    a = _archivo(tmp_path / "a.npz", [0], metadatos)
+    b = _archivo(tmp_path / "b.npz", [0], {**metadatos, "entorno": "Acrobot-v1"})
+    with pytest.raises(ValueError, match="No se pueden combinar partidas de 'CartPole-v1' y "
+                                         "'Acrobot-v1'"):
+        combinar_demostraciones([a, b], tmp_path / "c.npz", OBSERVACION, DISCRETA)
+    assert not (tmp_path / "c.npz").exists()
+
+
+def test_combinar_no_sobrescribe(tmp_path: Path, metadatos: dict[str, object]) -> None:
+    a = _archivo(tmp_path / "a.npz", [0], metadatos)
+    destino = tmp_path / "c.npz"
+    destino.write_bytes(b"previo")
+    with pytest.raises(FileExistsError):
+        combinar_demostraciones([a], destino, OBSERVACION, DISCRETA)
+    assert destino.read_bytes() == b"previo"
+    # Se comprueba antes de leer los archivos de entrada: no se carga nada en balde.
+    with pytest.raises(FileExistsError):
+        combinar_demostraciones([tmp_path / "no_existe.npz"], destino, OBSERVACION, DISCRETA)
+
+
+@pytest.mark.parametrize("nombre", ["c.json", "c", "c.npz.tmp"])
+def test_combinar_exige_destino_npz(tmp_path: Path, metadatos: dict[str, object],
+                                    nombre: str) -> None:
+    a = _archivo(tmp_path / "a.npz", [0], metadatos)
+    with pytest.raises(ValueError, match="terminar en .npz"):
+        combinar_demostraciones([a], tmp_path / nombre, OBSERVACION, DISCRETA)
+
+
+def test_combinar_archivo_que_falta(tmp_path: Path, metadatos: dict[str, object]) -> None:
+    a = _archivo(tmp_path / "a.npz", [0], metadatos)
+    with pytest.raises(FileNotFoundError):
+        combinar_demostraciones([a, tmp_path / "no.npz"], tmp_path / "c.npz",
+                                OBSERVACION, DISCRETA)
+    assert not (tmp_path / "c.npz").exists()
+
+
+def test_combinar_valida_frente_a_los_espacios(tmp_path: Path,
+                                               metadatos: dict[str, object]) -> None:
+    a = _archivo(tmp_path / "a.npz", [0], metadatos, continua=True)
+    with pytest.raises(ValueError):
+        combinar_demostraciones([a], tmp_path / "c.npz", OBSERVACION, DISCRETA)
+
+
+def _combinado_falso(ruta: Path, ids: list[int], origenes: Any) -> Path:
+    """Archivo con fuente combinado y los origenes indicados, válidos o no."""
+    return _archivo(ruta, ids, {"fuente": FUENTE_COMBINADO, "entorno": "CartPole-v1",
+                                "procedencia": "prueba", "origenes": origenes})
+
+
+def _origen(huella: str = "c" * 64, identificador: int = 0,
+            fuente: str = FUENTE_EXPERTO) -> dict[str, object]:
+    return {"huella_dataset": huella, "id_episodio": identificador, "fuente": fuente}
+
+
+@pytest.mark.parametrize(("origenes", "mensaje"), [
+    ("texto", "deben listar sus partidas"),
+    ({"archivos": []}, "deben listar sus partidas"),
+    ({"partidas": [{"id_episodio": 0}]}, "mal formada"),
+    ({"partidas": [{"id_episodio": 0, "origen": {**_origen(), "extra": 1}}]}, "mal formada"),
+    ({"partidas": [{"id_episodio": True, "origen": _origen()}]}, "mal formada"),
+    ({"partidas": [{"id_episodio": 0, "origen": _origen(identificador=-0.5)}]}, "mal formada"),
+    ({"partidas": [{"id_episodio": 0, "origen": _origen(fuente=FUENTE_COMBINADO)}]},
+     "mal formada"),
+    ({"partidas": [{"id_episodio": 0, "origen": _origen(huella="XYZ")}]}, "SHA-256"),
+    ({"partidas": []}, "no corresponden a sus partidas"),
+    ({"partidas": [{"id_episodio": 1, "origen": _origen()}]}, "no corresponden"),
+    ({"partidas": [{"id_episodio": 0, "origen": _origen()},
+                   {"id_episodio": 0, "origen": _origen(identificador=1)}]}, "no corresponden"),
+], ids=["texto", "sin_partidas", "sin_origen", "clave_extra", "id_bool", "id_real",
+        "fuente_combinada", "huella_mala", "vacias", "otro_id", "id_repetido"])
+def test_combinar_rechaza_origenes_incoherentes(tmp_path: Path, origenes: Any,
+                                                mensaje: str) -> None:
+    falso = _combinado_falso(tmp_path / "falso.npz", [0], origenes)
+    with pytest.raises(ValueError, match=mensaje):
+        combinar_demostraciones([falso], tmp_path / "c.npz", OBSERVACION, DISCRETA)
+    assert not (tmp_path / "c.npz").exists()
+
+
+def test_combinar_rechaza_un_mismo_origen_con_otro_contenido(
+    tmp_path: Path, metadatos: dict[str, object],
+) -> None:
+    real = _archivo(tmp_path / "real.npz", [0], metadatos)
+    # Dice venir de la partida 0 de real.npz, pero sus arrays son de otra partida.
+    falso = _combinado_falso(tmp_path / "falso.npz", [5], {
+        "partidas": [{"id_episodio": 5, "origen": _origen(huella_archivo(real), 0)}]})
+    with pytest.raises(ValueError, match="mismo origen que otra ya combinada, pero distinto"):
+        combinar_demostraciones([real, falso], tmp_path / "c.npz", OBSERVACION, DISCRETA)
+    assert not (tmp_path / "c.npz").exists()
