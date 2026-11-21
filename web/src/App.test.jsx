@@ -1,14 +1,16 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import App from './App.jsx';
 import { ENTORNOS } from './entornos.js';
+import { crearApiLaboratorioSimulada } from './simulado/laboratorio.js';
 import { VISTAS } from './vistas.js';
 
 const navegacion = () => screen.getByRole('navigation', { name: 'Navegación principal' });
 const pestana = (nombre) => within(navegacion()).getByRole('button', { name: nombre });
 const selector = () => screen.getByRole('combobox', { name: 'Entorno' });
+const dibujoFalso = async () => new Blob(['imagen'], { type: 'image/jpeg' });
 
 describe('App', () => {
   it('arranca en el Laboratorio con CartPole', () => {
@@ -102,13 +104,35 @@ describe('App', () => {
     }
   });
 
-  it('el Laboratorio explica cómo se graban las demostraciones según el entorno', async () => {
+  it('el Laboratorio solo deja jugar a mano en CartPole y MountainCar', async () => {
     const usuario = userEvent.setup();
-    render(<App />);
-    expect(screen.getByText('Juega a CartPole, mira al experto y graba demostraciones.')).toBeInTheDocument();
+    render(<App apiLaboratorio={crearApiLaboratorioSimulada({ dibujar: dibujoFalso })} />);
+    const jugar = () => screen.getByRole('button', { name: 'Jugar tú' });
+    expect(jugar()).toBeEnabled();
     await usuario.selectOptions(selector(), 'halfcheetah');
-    expect(
-      screen.getByText('En HalfCheetah, las demostraciones se graban con el experto.'),
-    ).toBeInTheDocument();
+    expect(jugar()).toBeDisabled();
+    expect(screen.getByText('En HalfCheetah solo se puede ver al experto y grabar partidas con él.'))
+      .toBeInTheDocument();
+    await usuario.selectOptions(selector(), 'mountaincar');
+    expect(jugar()).toBeEnabled();
   });
+
+  it('con una sesión abierta no se cambia de entorno y la sesión sigue al cambiar de pestaña',
+    async () => {
+      const usuario = userEvent.setup();
+      render(<App apiLaboratorio={crearApiLaboratorioSimulada({ dibujar: dibujoFalso })} />);
+      expect(selector()).toBeEnabled();
+      await usuario.click(screen.getByRole('button', { name: 'Iniciar sesión' }));
+      await waitFor(() => expect(selector()).toBeDisabled());
+      expect(selector()).toHaveAttribute('title', 'Termina las ejecuciones en marcha para cambiarlo');
+
+      await usuario.click(pestana('Comparar'));
+      await usuario.click(pestana('Laboratorio'));
+      expect(screen.getByRole('button', { name: 'Finalizar' })).toBeEnabled();
+
+      await usuario.click(screen.getByRole('button', { name: 'Finalizar' }));
+      // Sin ninguna partida terminada no hay nada que revisar y el entorno se libera.
+      await waitFor(() => expect(selector()).toBeEnabled());
+      expect(screen.getByRole('alert')).toHaveTextContent('sin ninguna partida completa');
+    });
 });
