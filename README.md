@@ -19,7 +19,7 @@ En este apartado explicaremos los resultados que hemos obtenido. Nuestro objetiv
 Se comparan cuatro agentes: Una política aleatoria, un experto, un agente entrenado mediante BC y un agente entrenado mediante GAIL. Para la evaluación, cada agente juega 50 episodios deterministas con las mismas semillas. Los resultados que comparamos en este apartado por cada entorno son la media de las recompensas obtenidas en la evaluación y la recompensa normalizada, donde 0 es la recompensa obtenida por la política aleatoria y 1 la obtenida por el experto.
 
 ### Experto y política aleatoria
-Nuestros expertos igualan o superan a los del paper en todos los entornos, por lo que la exigencia para BC y GAIL es incluso mayor que en el paper de referencia. La política aleatoria también da valores parecidos, excepto en dos entornos que han sido actualizado (CartPole y Acrobot). CartPole-v1 permite 500 pasos, mientras que la v0 solo permitía 200. Este incremento de los pasos hace que la política aleatoria consiga un porcentaje más pequeño de la recompensa alcanzable, modificando la normalización de la recompensa. En Acrobot-v1 la política aleatoria obtiene −500 en lugar de −200, lo que infla la recompensa normalizada. Por eso, estos entornos no son del todo comparables con los del paper.
+Nuestros expertos igualan o superan a los del paper en todos los entornos, por lo que la exigencia para BC y GAIL es igual o mayor que en el paper de referencia. La política aleatoria también da valores parecidos, excepto en CartPole y Acrobot, los cuales han cambiado la duración máxima de los episodios. CartPole-v1 permite 500 pasos, mientras que la v0 solo permitía 200. Este incremento de los pasos hace que la política aleatoria consiga un porcentaje más pequeño de la recompensa alcanzable, modificando la normalización de la recompensa. En Acrobot-v1 la política aleatoria obtiene −500 en lugar de −200, lo que infla la recompensa normalizada. Por eso, estos entornos no son del todo comparables con los del paper.
 
 ### Resultados por entorno
 #### CartPole
@@ -33,9 +33,84 @@ Nuestros expertos igualan o superan a los del paper en todos los entornos, por l
 
 El agente entrenado con GAIL, al igual que en el paper, alcanza la recompensa máxima o se queda muy cerca independientemente de la cantidad de partidas con las que se entrene. La diferencia está en BC, que en nuestra replicación consigue resultados mucho mejores.
 
-La mejoría de BC ocurre por dos razones, y las dos tienen que ver con la forma de validar. La primera es que en el paper, los pares de validación se sacan de las mismas partidas que los de entrenamiento, por lo que se parecen mucho a ellos y no permiten saber si el modelo generaliza a partidas nuevas. Nosotros, en cambio, validamos con 5 partidas distintas (las mismas en todos los entrenamientos) y nos quedamos con la época que mejor funciona en ellas, así que el modelo elegido generaliza mejor. La segunda es que, al usar para validación el 30 % de los pares del subconjunto, el paper entrena solo con el 70% restante, lo que tiene un gran impacto en los entrenamientos con pocas partidas.
+La mejoría de BC ocurre probablemente a dos razones, y las dos tienen que ver con la forma de validar. La primera es que en el paper los pares de validación se sacan de las mismas partidas que los de entrenamiento, por lo que se parecen mucho a ellos y no permiten saber si el modelo generaliza a partidas nuevas. Nosotros, en cambio, validamos con 5 partidas distintas (las mismas en todos los entrenamientos) y nos quedamos con la época que mejor funciona en ellas. La segunda es que, al usar para validación el 30% de los pares del subconjunto, el paper entrena solo con el 70% restante, algo que pesa más cuantas menos partidas hay.
 
 GAIL consigue la recompensa máxima entrenando solo durante 20 iteraciones, mientras que en el paper entrena durante 300. En la validación del entrenamiento, la media ya está entre 381 y 478 en la iteración 10, y entre 499 y 500 en la 20, por lo que la reducción de iteraciones no ha afectado al resultado. Por eso es bastante probable que el GAIL del paper también alcanzara la recompensa máxima mucho antes de las 300 iteraciones, pero que, como GAIL no tiene early stopping, siguiera entrenando.
+
+#### MountainCar
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | −200,0 | −200,0 | −143,5 (0,55) | −136,8 (0,62) | −101,1 (0,97) | −101,6 (0,97) | −97,8 | −98,8 |
+| 4 | −200,0 | −200,0 | −118,7 (0,80) | −133,3 (0,66) | −99,2 (0,99) | −101,4 (0,97) | −97,8 | −98,8 |
+| 7 | −200,0 | −200,0 | −113,4 (0,85) | −127,3 (0,72) | −98,6 (0,99) | −99,9 (0,99) | −97,8 | −98,8 |
+| 10 | −200,0 | −200,0 | −108,6 (0,89) | −123,1 (0,76) | −99,7 (0,98) | −100,8 (0,98) | −97,8 | −98,8 |
+
+Los resultados de GAIL son parecidos a los del paper. Con una única partida ya consigue una puntuación muy similar a la del experto y GAIL supera a BC en 19 de las 20 comparaciones con la misma cantidad y repetición. Cuando se han usado 4 o más partidas, al final del entrenamiento el discriminador solamente acierta alrededor de la mitad de sus predicciones, lo que sugiere que el agente toma acciones muy parecidas a las del experto.
+
+BC también muestra una tendencia parecida a la del paper. BC mejora a medida que tiene más partidas, pero no llega al experto. Con una partida obtiene un resultado algo peor que el del paper, y a partir de 4 partidas lo supera. Sus resultados son menos regulares que los de GAIL (todos los episodios llegan a la meta, pero algunos tardan mucho más que el experto).
+
+#### Acrobot
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | −500,0 | −200,0 | −93,8 (0,95) | −130,6 (0,56) | −71,0 (1,00) | −77,3 (0,98) | −72,1 | −75,3 |
+| 4 | −500,0 | −200,0 | −84,2 (0,97) | −93,2 (0,86) | −68,5 (1,01) | −83,1 (0,94) | −72,1 | −75,3 |
+| 7 | −500,0 | −200,0 | −77,9 (0,99) | −96,9 (0,83) | −68,0 (1,01) | −82,6 (0,94) | −72,1 | −75,3 |
+| 10 | −500,0 | −200,0 | −79,1 (0,98) | −95,1 (0,84) | −67,4 (1,01) | −78,9 (0,97) | −72,1 | −75,3 |
+
+GAIL obtiene unos resultados muy buenos en este entorno. Consigue una recompensa mayor que la del paper y que la de BC con todas las cantidades de partidas e incluso queda algo por encima del experto. Al final del entrenamiento el discriminador sigue distinguiendo bien al agente del experto, acertando entre el 84% y el 100%.
+
+BC también consigue mayor recompensa que en el paper con todas las cantidades de partidas. Al igual que en MountainCar, sus resultados son menos regulares que los de GAIL.
+
+#### HalfCheetah
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 4 | −320,7 | −282,4 | −342,4 (0,00) | −493,6 (−0,04) | 4775,3 (0,95) | 4515,7 (1,01) | 5040,9 | 4463,5 |
+| 11 | −320,7 | −282,4 | 1061,5 (0,26) | 637,6 (0,19) | 4970,2 (0,99) | 4280,7 (0,96) | 5040,9 | 4463,5 |
+| 18 | −320,7 | −282,4 | 2293,3 (0,49) | 2705,0 (0,63) | 4931,8 (0,98) | 4749,4 (1,06) | 5040,9 | 4463,5 |
+| 25 | −320,7 | −282,4 | 4782,3 (0,95) | 3718,6 (0,84) | 4728,1 (0,94) | 4840,1 (1,08) | 5040,9 | 4463,5 |
+
+GAIL consigue entre el 94 % y el 99 % de la recompensa del experto con todas las cantidades de partidas. En retorno, supera al paper en 3 de las 4 cantidades, pero en recompensa normalizada queda por debajo en 3 de ellas.
+
+BC muestra la misma tendencia que en el paper. Con 4 partidas no mejora a la política aleatoria, mejora mucho a medida que tiene más partidas, y con 25 llega a un resultado muy parecido al de GAIL. Con 11 y 18 partidas sus resultados son muy irregulares, igual que en el paper. Con 18 partidas los episodios se reparten casi a partes iguales entre los dos extremos de puntuación.
+
+#### Reacher
+
+Para este entorno, el paper tiene una tabla con ejecuciones con distintos parámetros, nosotros tomamos el GAIL sin regularización de entropía (λ = 0), que es el equivalente al nuestro. El paper no prueba con 25 partidas.
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 4 | −43,8 | −43,2 | −8,3 (0,88) | −11,0 (0,82) | −27,3 (0,41) | −67,2 (−0,61) | −3,4 | −4,1 |
+| 11 | −43,8 | −43,2 | −9,3 (0,85) | −6,2 (0,95) | −20,7 (0,57) | −6,1 (0,95) | −3,4 | −4,1 |
+| 18 | −43,8 | −43,2 | −10,4 (0,83) | −4,8 (0,98) | −94,6 (−1,26) | −8,3 (0,89) | −3,4 | −4,1 |
+| 25 | −43,8 | −43,2 | −10,9 (0,81) | — | −12,1 (0,78) | — | −3,4 | — |
+
+Es el único entorno en el que GAIL obtiene peores resultados que BC con todas las cantidades de partidas. En el paper, GAIL con 4 partidas queda por debajo de la política aleatoria, pero con 11 y 18 partidas se recupera y el nuestro no. La recompensa de Reacher tiene en cuenta la distancia a la diana y el coste de control. En la distancia, GAIL consigue valores parecidos a los de BC (aunque están lejos del experto), pero la diferencia está en el coste de control, donde el de GAIL va de −4,0 a −86,7 y el de BC de −0,5 a −1,4. Con 18 partidas, donde actúa peor que la política aleatoria, el 92 % de su recompensa negativa es coste de control. Al final del entrenamiento, el discriminador acierta prácticamente el 100% de sus predicciones, tanto con el experto como con el agente.
+
+BC obtiene mejores resultados que GAIL, aunque su rendimiento real es más limitado de lo que indica la recompensa normalizada. Una política que deja el brazo quieto obtiene un 0,79 normalizado porque no paga ningún coste de control. BC solo mejora a esa política entre 0,8 y 3,4 puntos. Si se mira únicamente la distancia a la diana, BC acerca el brazo a la diana mucho menos que el experto. Además, a diferencia del paper, donde BC se queda cada vez más cerca de su experto, nuestro BC empeora a medida que tiene más partidas.
+
+### Comparación entre BC y GAIL
+
+La principal conclusión del paper es que GAIL necesita muchas menos demostraciones que BC para acercarse al experto y nuestros resultados la confirman en todos los entornos menos en Reacher. Con la menor cantidad de partidas, GAIL ya se acerca a la recompensa del experto, mientras que BC necesita más datos para acercarse.
+
+GAIL también es más regular que BC en MountainCar y Acrobot, con todas las cantidades de partidas. La diferencia es especialmente grande en HalfCheetah con 11 y 18 partidas, donde BC alterna episodios en los que corre casi como el experto con otros en los que apenas avanza.
+
+Aun así, GAIL tiene una desventaja respecto a BC. BC se entrena en pocos segundos y no necesita jugar en el entorno, mientras que GAIL necesita jugar cientos de miles o millones de pasos y tarda desde medio minuto en CartPole hasta casi tres horas en HalfCheetah y Reacher.
+
+### Limitaciones
+
+- **Pocas repeticiones en los entornos MuJoCo.** En Reacher y HalfCheetah solo hay un agente por cantidad de partidas, así que no se puede medir la variación entre semillas. Por ejemplo, no se puede saber si el −94,6 de GAIL con 18 partidas en Reacher es algo puntual.
+- **Versiones distintas de los entornos.** Salvo en MountainCar, usamos versiones más recientes que las del paper (CartPole-v1, Acrobot-v1, Reacher-v5 y HalfCheetah-v5), en parte porque algunas de las originales ya no existen en Gymnasium. Por eso, los retornos no se pueden comparar directamente con los del paper, y en Acrobot la recompensa normalizada sale inflada.
+- **Expertos distintos.** Nuestros expertos son iguales o mejores que los del paper, así que la recompensa normalizada no mide exactamente lo mismo en los dos casos.
+- **Solo se mide el retorno.** La evaluación compara la recompensa obtenida, no si el agente se comporta igual que el experto.
+
+### Trabajo futuro
+
+- **Más repeticiones en Reacher y HalfCheetah.** Al menos 3 por cantidad de partidas, para poder medir la variación entre semillas. Cada entrenamiento de GAIL tarda unas 2 h 45 min, así que tendría un coste importante.
+- **Comprobar el efecto de la recompensa del discriminador.** Entrenar GAIL en CartPole, MountainCar y Acrobot con una recompensa constante, sin discriminador, y comparar con nuestros resultados. Así se sabría cuánto del éxito de GAIL en esos entornos se debe a imitar al experto y cuánto al signo de la recompensa.
+- **Más épocas para BC en MountainCar.** Con 4 partidas, las 5 repeticiones llegaron al máximo de 500 épocas sin que la parada temprana se activara, así que podría mejorar entrenando más.
 
 ## Ejecutar desde cero
 
@@ -88,8 +163,8 @@ aleatorio, BC y GAIL) con 50 episodios cada uno e imprime una línea de métrica
 por agente.
 
 Los otros entornos se ejecutan igual, cambiando `--entorno`. Usan los tamaños del
-código original, así que tardan más: 37 y 50 min MountainCar y Acrobot (medido), y
-varias horas Reacher y HalfCheetah (estimación) (ver [Tiempos medidos](#tiempos-medidos)):
+código original, así que tardan más: 37 y 50 min MountainCar y Acrobot, y unas
+2 h 45 min Reacher y HalfCheetah (ver [Tiempos medidos](#tiempos-medidos)):
 
 | Entorno | BC + GAIL | Agentes evaluados | Iteraciones de GAIL |
 |---|---|---|---|
@@ -246,7 +321,9 @@ experimento, usa `--sin-wandb`; los tests y el smoke no registran nada.
 |---|---|
 | `congelado` | Los expertos y las demostraciones congelados |
 | `entrega-e1` | El experimento completo de CartPole medido para la entrega |
+| `entrega-e1-cartpole` | El experimento completo de CartPole repetido el 2026-11-12 (run de comparación `ft49odps`), con los mismos retornos que `entrega-e1`; es el que usa [Resultados](#resultados) |
 | `entrega-e1-mountaincar`, `entrega-e1-acrobot` | El experimento completo de MountainCar y de Acrobot |
+| `entrega-e1-reacher`, `entrega-e1-halfcheetah` | El experimento completo de Reacher y de HalfCheetah (runs de comparación `u0imo43m` y `k7v7i4fo`). El de Reacher contiene también runs de intentos interrumpidos |
 | `ajuste-experto-halfcheetah`, `ajuste-experto-reacher` | La comparación de hiperparámetros del experto (ver [Ajuste del experto](#ajuste-del-experto)) |
 
 ## Tiempos medidos
@@ -271,7 +348,8 @@ Con los datos congelados y la configuración actual:
 | Demostraciones congeladas de MountainCar, Acrobot, Reacher y HalfCheetah | 0,7 s, 0,6 s, 0,6 s y 9,0 s | Linux (WSL2), misma máquina | 2026-11-01 |
 | Experimento completo de MountainCar (`time python run.py --entorno mountaincar --descargar --grupo entrega-e1-mountaincar`, online, commit `83323cb`): 20 BC, 20 GAIL de 300 iteraciones y evaluación de 42 agentes | 37 min 6 s, de ellos 41 s de evaluación (`evaluacion.json`) | Linux (WSL2), Intel Core i7-11800H, 5 procesos, sin GPU | 2026-11-02 |
 | Experimento completo de Acrobot (ídem, grupo `entrega-e1-acrobot`) | 49 min 34 s, de ellos 38 s de evaluación | Linux (WSL2), misma máquina | 2026-11-02 |
-| Experimento de Reacher, interrumpido a mano (4 BC y 4 GAIL a la vez) | 150 de las 500 iteraciones de GAIL en unos 3000 s | Linux (WSL2), misma máquina | 2026-11-02 |
+| Experimento completo de Reacher (`python run.py --entorno reacher --descargar --grupo entrega-e1-reacher`, online, commit `a1fa25d`): 4 BC, 4 GAIL de 500 iteraciones a la vez y evaluación de 10 agentes | Unas 2 h 44 min, de ellos 12 s de evaluación (sin `time`: desde la creación de la carpeta de salida hasta `evaluacion.json`) | Linux (WSL2), misma máquina | 2026-11-14 |
+| Experimento completo de HalfCheetah (ídem, grupo `entrega-e1-halfcheetah`) | Unas 2 h 46 min, de ellos 42 s de evaluación (medido igual) | Linux (WSL2), misma máquina | 2026-11-14 |
 
 La ejecución de 7 min 13 s es el grupo `entrega-e1` de W&B (run de comparación
 `r6oajx1r`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
