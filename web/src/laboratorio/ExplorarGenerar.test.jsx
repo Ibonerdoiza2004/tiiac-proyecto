@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { apiConSocket } from '../pruebas/apiConSocket.js';
 import { crearApiLaboratorioSimulada } from '../simulado/laboratorio.js';
 import ExplorarGenerar from './ExplorarGenerar.jsx';
+import { ESPERA_FIN_MS } from './useSesionJuego.js';
 
 const dibujar = async () => new Blob(['imagen'], { type: 'image/jpeg' });
 
@@ -274,5 +276,204 @@ describe('errores del backend', () => {
     await usuario.click(boton('Iniciar sesión'));
     await avanzar(100);
     expect(screen.getByRole('alert')).toHaveTextContent('Conexión perdida');
+  });
+});
+
+describe('conexión perdida', () => {
+  const PERDIDA = 'Se perdió la conexión con el servidor';
+  const SIN_RESPUESTA = 'El servidor no respondió al finalizar';
+  const PARTIDA = { indice: 0, pasos: 10, retorno: 10, semilla: 1 };
+  const MODOS_INICIO = [['manual', 'cartpole', 'Iniciar sesión'], ['experto', 'reacher', 'Ver al experto']];
+
+  async function enSesion(entorno = 'cartpole', inicio = 'Iniciar sesión', abrir = true) {
+    const doble = apiConSocket();
+    const ocupado = vi.fn();
+    await montar(entorno, doble.api, ocupado);
+    await usuario.click(boton(inicio));
+    const socket = doble.sockets[0];
+    if (abrir) {
+      act(() => socket.abrir());
+    }
+    return { ...doble, socket, ocupado };
+  }
+
+  function esperarLiberado(ocupado, texto, inicio = 'Iniciar sesión') {
+    expect(screen.getByRole('alert')).toHaveTextContent(texto);
+    expect(screen.getByRole('status')).toHaveTextContent('Preparado');
+    expect(boton(inicio)).toBeEnabled();
+    expect(boton('Ver agente')).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Finalizar' })).not.toBeInTheDocument();
+    expect(ocupado).toHaveBeenLastCalledWith(false);
+  }
+
+  // Los dos modos por los tres momentos en que se puede cerrar el socket.
+  describe.each(MODOS_INICIO)('en modo %s', (_, entorno, inicio) => {
+    it('si se cierra antes de abrirse, libera la sesión', async () => {
+      const { socket, ocupado } = await enSesion(entorno, inicio, false);
+      act(() => socket.caer());
+      esperarLiberado(ocupado, PERDIDA, inicio);
+    });
+
+    it('si se cierra jugando, libera la sesión', async () => {
+      const { socket, ocupado } = await enSesion(entorno, inicio);
+      act(() => socket.recibir({ tipo: 'partida_terminada', partida: PARTIDA }));
+      act(() => socket.caer());
+      esperarLiberado(ocupado, PERDIDA, inicio);
+      expect(screen.queryByRole('form')).not.toBeInTheDocument();
+    });
+
+    it('si se cierra terminando, libera la sesión', async () => {
+      const { socket, ocupado } = await enSesion(entorno, inicio);
+      await usuario.click(boton('Finalizar'));
+      expect(screen.getByRole('status')).toHaveTextContent('Terminando…');
+      act(() => socket.caer());
+      esperarLiberado(ocupado, PERDIDA, inicio);
+    });
+
+    it('si el servidor no responde al finalizar, espera el plazo justo y libera', async () => {
+      const { socket, ocupado } = await enSesion(entorno, inicio);
+      await usuario.click(boton('Finalizar'));
+      expect(socket.enviados).toEqual([{ tipo: 'finalizar' }]);
+      await avanzar(ESPERA_FIN_MS - 1);
+      expect(screen.getByRole('status')).toHaveTextContent('Terminando…');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      await avanzar(1);
+      esperarLiberado(ocupado, SIN_RESPUESTA, inicio);
+      expect(socket.readyState).toBe(3);
+    });
+  });
+
+  it.each([0, 2, 3])('finalizar con el socket en readyState %i libera la sesión', async (estado) => {
+    const { socket, ocupado } = await enSesion();
+    socket.readyState = estado;
+    await usuario.click(boton('Finalizar'));
+    esperarLiberado(ocupado, PERDIDA);
+  });
+
+  it('el error del socket deja paso al de conexión perdida', async () => {
+    const { socket, ocupado } = await enSesion();
+    act(() => {
+      socket.onerror({});
+      socket.caer();
+    });
+    esperarLiberado(ocupado, PERDIDA);
+  });
+
+  it('un mensaje de error con la conexión abierta no termina la sesión', async () => {
+    const { socket } = await enSesion();
+    act(() => socket.recibir({ tipo: 'error', mensaje: 'Aviso del servidor' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Aviso del servidor');
+    expect(boton('Finalizar')).toBeEnabled();
+  });
+
+  it('el cierre normal tras sesion_terminada no es una conexión perdida', async () => {
+    const { socket } = await enSesion();
+    act(() => {
+      socket.recibir({ tipo: 'sesion_terminada', partidas: [PARTIDA] });
+      socket.caer();
+    });
+    expect(screen.getByRole('form', { name: 'Revisar partidas' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('una respuesta dentro del plazo anula la espera', async () => {
+    const { socket } = await enSesion();
+    await usuario.click(boton('Finalizar'));
+    await avanzar(ESPERA_FIN_MS - 1);
+    act(() => socket.recibir({ tipo: 'sesion_terminada', partidas: [PARTIDA] }));
+    await avanzar(ESPERA_FIN_MS);
+    expect(screen.getByRole('form', { name: 'Revisar partidas' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('una respuesta fuera de plazo se ignora', async () => {
+    const { socket, ocupado } = await enSesion();
+    await usuario.click(boton('Finalizar'));
+    await avanzar(ESPERA_FIN_MS);
+    act(() => socket.recibir({ tipo: 'sesion_terminada', partidas: [PARTIDA] }));
+    esperarLiberado(ocupado, SIN_RESPUESTA);
+    expect(screen.queryByRole('form')).not.toBeInTheDocument();
+  });
+
+  it('se puede empezar otra y ni el socket ni la espera de la anterior la afectan', async () => {
+    const { socket, sockets } = await enSesion();
+    await usuario.click(boton('Finalizar'));
+    act(() => socket.caer());
+    await usuario.click(boton('Iniciar sesión'));
+    act(() => sockets[1].abrir());
+    act(() => socket.recibir({ tipo: 'sesion_terminada', partidas: [PARTIDA] }));
+    await avanzar(ESPERA_FIN_MS * 2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(boton('Finalizar')).toBeEnabled();
+  });
+
+  it('las flechas dejan de bloquearse al perder la conexión', async () => {
+    const { socket } = await enSesion();
+    act(() => socket.caer());
+    expect(fireEvent.keyDown(window, { key: 'ArrowRight' })).toBe(true);
+  });
+
+  it('desmontar cancela la espera', async () => {
+    await enSesion();
+    await usuario.click(boton('Finalizar'));
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    cleanup();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('configuración que falla', () => {
+  it('lo dice al ver al agente y deja escribir las partidas', async () => {
+    const { api, http } = apiConSocket();
+    http.obtener.mockRejectedValueOnce(new Error('Perfil ilegible'));
+    await montar('cartpole', api);
+    // Jugar a mano no necesita ese número.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await usuario.click(boton('Ver agente'));
+    const campo = screen.getByRole('spinbutton', { name: 'Partidas del experto' });
+    expect(campo).toHaveValue(null);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No se pudieron cargar las partidas por defecto (Perfil ilegible). Escribe cuántas quieres.');
+    await usuario.type(campo, '3');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await usuario.click(boton('Ver al experto'));
+    expect(http.enviar).toHaveBeenCalledWith('/sesiones',
+      { entorno: 'cartpole', modo: 'experto', partidas: 3 });
+  });
+});
+
+describe('configuración que llega tarde', () => {
+  it('no pisa la del entorno que se muestra', async () => {
+    const { api, http } = apiConSocket();
+    let responder;
+    http.obtener.mockReturnValueOnce(new Promise((resolver) => {
+      responder = resolver;
+    }));
+    http.obtener.mockResolvedValueOnce({ fps: 50, partidas_experto: 30 });
+    const vista = render(<ExplorarGenerar entorno="cartpole" api={api} />);
+    vista.rerender(<ExplorarGenerar entorno="reacher" api={api} />);
+    await avanzar(0);
+    await act(async () => responder({ fps: 50, partidas_experto: 15 }));
+    expect(screen.getByRole('spinbutton')).toHaveValue(30);
+  });
+});
+
+describe('pares recogidos', () => {
+  it('suman solo las partidas terminadas, no la que está en curso', async () => {
+    const { api, sockets } = apiConSocket();
+    await montar('cartpole', api);
+    await usuario.click(boton('Iniciar sesión'));
+    const estado = (partida, paso, pares) => act(() => sockets[0].recibir(
+      { tipo: 'estado', partida, paso, retorno: paso, pares, esperando: false }));
+    const terminar = (indice, pasos) => act(() => sockets[0].recibir(
+      { tipo: 'partida_terminada', partida: { indice, pasos, retorno: pasos, semilla: indice } }));
+
+    estado(1, 7, 7);
+    expect(contador('Pares recogidos')).toBe(0);
+    terminar(0, 10);
+    estado(2, 3, 13);
+    expect(contador('Pares recogidos')).toBe(10);
+    terminar(1, 5);
+    expect(contador('Pares recogidos')).toBe(15);
   });
 });

@@ -13,7 +13,8 @@ import ExplorarGenerar from '../laboratorio/ExplorarGenerar.jsx';
 export default function Laboratorio({ entorno, api, alCambiarOcupado }) {
   return (
     <section aria-label="Laboratorio" className="rejilla-dos">
-      <ExplorarGenerar entorno={entorno} api={api} alCambiarOcupado={alCambiarOcupado} />
+      {/* Con key, cada entorno empieza sin la imagen, los contadores ni los avisos del anterior. */}
+      <ExplorarGenerar key={entorno} entorno={entorno} api={api} alCambiarOcupado={alCambiarOcupado} />
       <article className="panel" aria-labelledby="panel-entrenar">
         <h2 id="panel-entrenar">Entrenar e imitar</h2>
         <p className="nota">Entrena GAIL o BC con las demostraciones que elijas.</p>

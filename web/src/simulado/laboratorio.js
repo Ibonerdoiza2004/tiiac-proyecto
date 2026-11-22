@@ -157,10 +157,13 @@ export function crearApiLaboratorioSimulada({ dibujar, semilla = 1000 } = {}) {
           return true;
         },
         finalizar() {
-          if (!activa || sesion.terminada) {
+          if (!activa) {
             return false;
           }
-          terminar();
+          // Si el experto acaba de terminar, sesion_terminada ya está de camino.
+          if (!sesion.terminada) {
+            terminar();
+          }
           return true;
         },
         cerrar() {

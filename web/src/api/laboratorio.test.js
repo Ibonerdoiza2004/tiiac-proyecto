@@ -68,11 +68,22 @@ describe('crearApiLaboratorio', () => {
     expect(callbacks.alError.mock.calls[0][0].message).toBe('red');
   });
 
+  it('pasa los cambios de estado de la conexión', () => {
+    const { conectar } = conexionFalsa();
+    const alCambiarEstado = vi.fn();
+    crearApiLaboratorio({ http: http(), conectar }).conectar('s1', { alCambiarEstado });
+    for (const estado of ['conectando', 'abierta', 'cerrada']) {
+      conectar.mock.calls[0][1].alCambiarEstado(estado);
+    }
+    expect(alCambiarEstado.mock.calls).toEqual([['conectando'], ['abierta'], ['cerrada']]);
+  });
+
   it('funciona sin callbacks', () => {
     const { conectar } = conexionFalsa();
     crearApiLaboratorio({ http: http(), conectar }).conectar('s1');
-    const { alMensaje, alImagen, alError } = conectar.mock.calls[0][1];
+    const { alMensaje, alImagen, alError, alCambiarEstado } = conectar.mock.calls[0][1];
     expect(() => {
+      alCambiarEstado('cerrada');
       alMensaje({ tipo: 'estado' });
       alImagen(new Blob(['x']));
       alError(new Error('x'));

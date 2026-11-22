@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { ESTADOS_CONEXION } from '../api/websocket.js';
+
 /** Fases de una sesión de juego. */
 export const FASES = Object.freeze({
   INACTIVA: 'inactiva',
@@ -15,6 +17,15 @@ export const FASES = Object.freeze({
 export const FASES_OCUPADAS = Object.freeze(new Set([FASES.PREPARANDO, FASES.JUGANDO,
   FASES.TERMINANDO, FASES.REVISION, FASES.GUARDANDO]));
 
+/**
+ * Milisegundos que se espera sesion_terminada tras pedir finalizar. Hace falta además de
+ * vigilar el cierre: un servidor colgado o una red cortada no siempre cierran el WebSocket.
+ */
+export const ESPERA_FIN_MS = 10_000;
+
+const CONEXION_PERDIDA = 'Se perdió la conexión con el servidor. Las partidas de esta sesión no se han guardado.';
+const FIN_SIN_RESPUESTA = 'El servidor no respondió al finalizar. Las partidas de esta sesión no se han guardado.';
+
 const ESTADO_INICIAL = { partida: 1, paso: 0, retorno: 0, pares: 0, esperando: false };
 
 const mensajeDe = (error) => (error instanceof Error ? error.message : String(error));
@@ -22,6 +33,9 @@ const mensajeDe = (error) => (error instanceof Error ? error.message : String(er
 /**
  * Sesión de «Jugar tú» o «Ver agente»: la crea, se conecta, recibe imágenes y progreso,
  * la termina y guarda o descarta sus partidas.
+ *
+ * Si la conexión se cierra antes de sesion_terminada, o esta no llega en ESPERA_FIN_MS
+ * tras finalizar, la sesión vuelve a INACTIVA con un error.
  *
  * @param {import('../api/laboratorio.js').ApiLaboratorio} api
  * @returns {object} Estado de la sesión (fase, sesion, estado, imagen, partidas,
@@ -38,11 +52,19 @@ export default function useSesionJuego(api) {
   const [error, setError] = useState(null);
   const [guardado, setGuardado] = useState(null);
   const conexion = useRef(null);
+  const esperaFin = useRef(null);
 
   const cerrarConexion = useCallback(() => {
+    clearTimeout(esperaFin.current);
     conexion.current?.cerrar();
     conexion.current = null;
   }, []);
+
+  const abandonar = useCallback((motivo) => {
+    cerrarConexion();
+    setFase(FASES.INACTIVA);
+    setError(motivo);
+  }, [cerrarConexion]);
 
   useEffect(() => cerrarConexion, [cerrarConexion]);
 
@@ -71,21 +93,35 @@ export default function useSesionJuego(api) {
           }
         },
         alError: (e) => setError(mensajeDe(e)),
+        // Solo hay conexión en JUGANDO y TERMINANDO: al recibir sesion_terminada se cierra
+        // desde aquí, y cerrar() ya no avisa.
+        alCambiarEstado: (nuevoEstado) => {
+          if (nuevoEstado === ESTADOS_CONEXION.CERRADA) {
+            abandonar(CONEXION_PERDIDA);
+          }
+        },
       });
       setFase(FASES.JUGANDO);
     } catch (e) {
       setFase(FASES.INACTIVA);
       setError(mensajeDe(e));
     }
-  }, [api, cerrarConexion]);
+  }, [abandonar, api, cerrarConexion]);
 
   const enviarAccion = useCallback((accion) => conexion.current?.enviarAccion(accion) ?? false, []);
 
   const finalizar = useCallback(() => {
-    if (conexion.current?.finalizar()) {
-      setFase(FASES.TERMINANDO);
+    if (!conexion.current) {
+      return;
     }
-  }, []);
+    if (!conexion.current.finalizar()) {
+      abandonar(CONEXION_PERDIDA);
+      return;
+    }
+    setFase(FASES.TERMINANDO);
+    clearTimeout(esperaFin.current);
+    esperaFin.current = setTimeout(() => abandonar(FIN_SIN_RESPUESTA), ESPERA_FIN_MS);
+  }, [abandonar]);
 
   const guardar = useCallback(async (nombre, seleccion) => {
     setFase(FASES.GUARDANDO);

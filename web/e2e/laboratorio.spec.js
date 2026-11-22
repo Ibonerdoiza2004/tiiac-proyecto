@@ -33,6 +33,11 @@ test('jugar a CartPole con el teclado, revisar y guardar', async ({ page }) => {
   await revision.getByRole('button', { name: 'Guardar en la biblioteca' }).click();
   await expect(page.getByText(/Guardado «cartpole_e2e»: \d+ partidas? y \d+ pares?/)).toBeVisible();
   await expect(selector).toBeEnabled();
+
+  await selector.selectOption('mountaincar');
+  await expect(page.getByText(/Guardado «cartpole_e2e»/)).toHaveCount(0);
+  await expect(page.locator('.escena img')).toHaveCount(0);
+  await expect(contador(page, 'Pares recogidos')).toHaveText('0');
 });
 
 test('ver al experto de Reacher, revisar y descartar', async ({ page }) => {

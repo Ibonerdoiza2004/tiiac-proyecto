@@ -83,6 +83,8 @@ export const MENSAJES_SERVIDOR = Object.freeze({
  * @property {(partida: Partida) => void} [alTerminarPartida]
  * @property {(partidas: Partida[]) => void} [alTerminarSesion]
  * @property {(error: Error) => void} [alError]
+ * @property {(estado: string) => void} [alCambiarEstado] Recibe los cambios de la conexión
+ *   (ESTADOS_CONEXION de ./websocket.js).
  */
 
 /**
@@ -146,6 +148,7 @@ export function crearApiLaboratorio({ http = crearClienteHttp(), conectar = cone
         alMensaje: (mensaje) => repartirMensaje(mensaje, callbacks),
         alImagen: (imagen) => callbacks.alImagen?.(imagen),
         alError: (error) => callbacks.alError?.(error),
+        alCambiarEstado: (estado) => callbacks.alCambiarEstado?.(estado),
       });
       return {
         enviarAccion: (accion) => conexion.enviar({ tipo: 'accion', accion }),

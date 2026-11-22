@@ -40,6 +40,7 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
   const [modo, setModo] = useState(jugarAMano ? MODOS.MANUAL : MODOS.EXPERTO);
   const [partidas, setPartidas] = useState('');
   const [errorPartidas, setErrorPartidas] = useState(null);
+  const [errorConfiguracion, setErrorConfiguracion] = useState(null);
   const ocupado = FASES_OCUPADAS.has(fase);
   const manual = modo === MODOS.MANUAL;
   const jugando = fase === FASES.JUGANDO;
@@ -47,12 +48,18 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
   useEffect(() => {
     setModo(jugarAMano ? MODOS.MANUAL : MODOS.EXPERTO);
     setErrorPartidas(null);
+    setErrorConfiguracion(null);
     let vigente = true;
     api.configuracion(entorno).then((configuracion) => {
       if (vigente) {
         setPartidas(String(configuracion.partidas_experto));
       }
-    }).catch(() => {});
+    }).catch((error) => {
+      if (vigente) {
+        setPartidas('');
+        setErrorConfiguracion(error instanceof Error ? error.message : String(error));
+      }
+    });
     return () => {
       vigente = false;
     };
@@ -121,6 +128,8 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
   const etiqueta = jugando ? (estado.esperando ? 'Esperando tecla' : 'En marcha') : ETIQUETAS[fase];
   const aviso = jugando && sesion?.modo === MODOS.MANUAL ? ayudaTeclado(entorno) : undefined;
   const objetivo = sesion?.partidas;
+  // Solo las terminadas: la partida en curso no se guarda si no termina.
+  const paresRecogidos = juego.terminadas.reduce((total, partida) => total + partida.pasos, 0);
 
   return (
     <article className="panel" aria-labelledby="panel-explorar">
@@ -145,8 +154,14 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
               onChange={(e) => {
                 setPartidas(e.target.value);
                 setErrorPartidas(null);
+                setErrorConfiguracion(null);
               }} />
           </label>
+          {errorConfiguracion ? (
+            <p className="error" role="alert">
+              No se pudieron cargar las partidas por defecto ({errorConfiguracion}). Escribe cuántas quieres.
+            </p>
+          ) : null}
           {errorPartidas ? <p className="error" id="error-partidas">{errorPartidas}</p> : null}
           <p className="nota">El experto juega con su política estocástica, una semilla por partida.</p>
         </>
@@ -161,7 +176,7 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
           <dl className="contadores">
             <div><dt>Partida</dt><dd>{estado.partida}{objetivo ? ` / ${objetivo}` : ''}</dd></div>
             <div><dt>Puntuación</dt><dd>{decimales(estado.retorno)}</dd></div>
-            <div><dt>Pares recogidos</dt><dd>{estado.pares}</dd></div>
+            <div><dt>Pares recogidos</dt><dd>{paresRecogidos}</dd></div>
             <div><dt>Partidas terminadas</dt><dd>{juego.terminadas.length}</dd></div>
           </dl>
           <div className="controles">

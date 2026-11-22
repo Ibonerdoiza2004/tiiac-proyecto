@@ -157,6 +157,21 @@ describe('ver al experto', () => {
       expect(new Set(terminadas.map((p) => p.semilla)).size).toBe(partidas);
     });
 
+  it('finalizar justo cuando el experto acaba no pierde sus partidas', async () => {
+    const api = crearApiLaboratorioSimulada({ dibujar });
+    const { c, juego } = await sesion(api, { entorno: 'reacher', modo: 'experto', partidas: 1 });
+    // La última partida ya ha acabado y sesion_terminada sale en el siguiente temporizador.
+    vi.advanceTimersByTime(999);
+    while (!c.alTerminarPartida.mock.calls.length) {
+      vi.advanceTimersToNextTimer();
+    }
+    expect(c.alTerminarSesion).not.toHaveBeenCalled();
+    expect(juego.finalizar()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(c.alTerminarSesion).toHaveBeenCalledOnce();
+    expect(c.alTerminarSesion.mock.calls[0][0]).toHaveLength(1);
+  });
+
   it('la misma semilla base da las mismas partidas', async () => {
     const resultados = [];
     for (let i = 0; i < 2; i += 1) {
