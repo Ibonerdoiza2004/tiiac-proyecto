@@ -26,3 +26,32 @@ jobs:
 
       - name: Comprobador de reproducibilidad
         run: python tools/tiiac_check.py .
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26.13.0"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Tests de componentes (Vitest)
+        run: npm test
+
+      - name: Compilar
+        run: npm run build
+
+      - name: Tests de punta a punta (Playwright)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e

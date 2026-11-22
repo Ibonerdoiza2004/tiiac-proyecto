@@ -384,6 +384,34 @@ W&B `ajuste-experto-reacher` y `ajuste-experto-halfcheetah`. El equipo eligió e
 dos la de RL Zoo sin normalizar la recompensa, con su red (256 × 256 ReLU en Reacher y
 64 × 64 tanh en HalfCheetah); sus valores están en `experto.trpo` de cada perfil.
 
+## Dashboard (en desarrollo)
+
+El frontend del aplicativo de la E2 está en `web/`: React con JavaScript y Vite, con
+Vitest y Testing Library para los componentes y Playwright para las pruebas de punta a
+punta. Hace falta Node.js 24 o posterior (probado con 26.13.0, la LTS); las versiones
+exactas de las dependencias están en `web/package-lock.json`. Desde `web/`:
+
+| Para qué | Comando |
+|---|---|
+| Instalar las dependencias | `npm ci` |
+| Servidor de desarrollo (http://127.0.0.1:5173) | `npm run dev` |
+| Tests de componentes | `npm test` |
+| Navegador para Playwright, una vez | `npx playwright install chromium` |
+| Tests de punta a punta | `npm run e2e` |
+| Compilar para producción (`web/dist/`) | `npm run build` |
+
+En desarrollo, Vite reenvía `/api` (HTTP y WebSocket) a `http://127.0.0.1:8000`, o a la
+dirección de `TIIAC_API_URL`. En producción, FastAPI sirve `web/dist/`.
+
+Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
+(CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con
+contadores de partidas y pares y la revisión de qué partidas y pares guardar. Mientras no
+existe el backend, la interfaz usa uno simulado en el navegador (`web/src/simulado/`):
+CartPole y MountainCar con las ecuaciones de Gymnasium y animaciones de ejemplo en los
+demás; no entrena ni guarda nada de verdad. Con `VITE_API=real npm run dev` usa el backend
+real. Las rutas y los mensajes propuestos están en
+[`docs/contrato-api.md`](docs/contrato-api.md).
+
 ## Estructura del repositorio
 
 ```text
@@ -394,6 +422,7 @@ src/models/factory.py   política de BC y discriminador
 src/training/           TRPO y experto, BC, GAIL, barridos, evaluación y flujo de run.py
 src/utils/              configuración, semillas, seguimiento W&B, archivos y validación
 src/app/                esqueleto del aplicativo (E2)
+web/                    frontend del aplicativo (React con Vite) y sus tests
 scripts/                cada etapa por separado
 tests/                  tests (pytest)
 tools/tiiac_check.py    comprobador de la asignatura

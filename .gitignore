@@ -23,6 +23,13 @@ venv/
 env/
 .conda/
 
+# ---- frontend (web/): dependencias, compilación y resultados de Playwright ----
+node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/blob-report/
+
 # ---- seguimiento de experimentos (el historial real vive en el servidor) ----
 wandb/
 mlruns/
