@@ -101,10 +101,12 @@ si acaba de pasar dentro del checker y no ha cambiado el código.
   Si no puede escribir el archivo, comunicarlo y proporcionar la entrada pendiente.
 - Revisar `git status` y el diff; preservar cambios ajenos. Trabajar por cambios
   pequeños y revisar los PR con la pareja usando la plantilla del repositorio.
-  Hacer commits, push o entregas solo cuando formen parte del encargo.
+  Hacer push o entregas solo cuando formen parte del encargo.
 
 ## Lo que NO hay que tocar
 
+- **Prohibido hacer commits.** Ninguna IA hace commits en este repositorio, ni
+  aunque formen parte del encargo: los hace siempre el equipo.
 - No borrar pruebas ni rebajar `tools/tiiac_check.py` para conseguir verde.
 - No descartar cambios ajenos ni resolver conflictos de intención sin acuerdo.
 - No versionar datos, demostraciones, pesos, entornos, cachés, `wandb/` ni secretos.

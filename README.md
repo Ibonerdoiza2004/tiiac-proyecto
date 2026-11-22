@@ -4,16 +4,113 @@ Replicación educativa de **Generative Adversarial Imitation Learning** (Ho y
 Ermon, 2016): se compara GAIL con Behavioral Cloning (BC), tomando como
 referencia un experto TRPO y una política aleatoria. CartPole es el entorno
 principal y el que cumple la regla 5/20. MountainCar, Acrobot, Reacher y
-HalfCheetah tienen también su perfil (ver [Otros entornos](#otros-entornos)).
+HalfCheetah tienen también su perfil (ver [Datos](#datos)).
 
 - Paper: [Generative Adversarial Imitation Learning](https://arxiv.org/abs/1606.03476)
 - Seguimiento de experimentos: [proyecto W&B `tiiac-proyecto`](https://wandb.ai/a-corral-universidad-de-deusto/tiiac-proyecto)
 - Autores: Asier Corral e Ibon Erdoiza.
 - Probado en Linux con Python 3.12.
 
-## Resultado
+## Resultados
 
-Pendiente de completar por el equipo.
+### Introducción
+En este apartado explicaremos los resultados que hemos obtenido. Nuestro objetivo es comprobar si podemos llegar a las mismas conclusiones a las que se llegaron en el paper original, partiendo de nuestros resultados.
+
+Se comparan cuatro agentes: Una política aleatoria, un experto, un agente entrenado mediante BC y un agente entrenado mediante GAIL. Para la evaluación, cada agente juega 50 episodios deterministas con las mismas semillas. Los resultados que comparamos en este apartado por cada entorno son la media de las recompensas obtenidas en la evaluación y la recompensa normalizada, donde 0 es la recompensa obtenida por la política aleatoria y 1 la obtenida por el experto.
+
+### Experto y política aleatoria
+Nuestros expertos igualan o superan a los del paper en todos los entornos, por lo que la exigencia para BC y GAIL es igual o mayor que en el paper de referencia. La política aleatoria también da valores parecidos, excepto en CartPole y Acrobot, los cuales han cambiado la duración máxima de los episodios. CartPole-v1 permite 500 pasos, mientras que la v0 solo permitía 200. Este incremento de los pasos hace que la política aleatoria consiga un porcentaje más pequeño de la recompensa alcanzable, modificando la normalización de la recompensa. En Acrobot-v1 la política aleatoria obtiene −500 en lugar de −200, lo que infla la recompensa normalizada. Por eso, estos entornos no son del todo comparables con los del paper.
+
+### Resultados por entorno
+#### CartPole
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 21,3 | 18,6 | 406,1 (0,80) | 72,0 (0,29) | 500,0 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+| 4 | 21,3 | 18,6 | 500,0 (1,00) | 169,2 (0,83) | 499,3 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+| 7 | 21,3 | 18,6 | 500,0 (1,00) | 188,6 (0,94) | 500,0 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+| 10 | 21,3 | 18,6 | 500,0 (1,00) | 177,2 (0,87) | 500,0 (1,00) | 200,0 (1,00) | 500,0 | 200,0 |
+
+El agente entrenado con GAIL, al igual que en el paper, alcanza la recompensa máxima o se queda muy cerca independientemente de la cantidad de partidas con las que se entrene. La diferencia está en BC, que en nuestra replicación consigue resultados mucho mejores.
+
+La mejoría de BC ocurre probablemente a dos razones, y las dos tienen que ver con la forma de validar. La primera es que en el paper los pares de validación se sacan de las mismas partidas que los de entrenamiento, por lo que se parecen mucho a ellos y no permiten saber si el modelo generaliza a partidas nuevas. Nosotros, en cambio, validamos con 5 partidas distintas (las mismas en todos los entrenamientos) y nos quedamos con la época que mejor funciona en ellas. La segunda es que, al usar para validación el 30% de los pares del subconjunto, el paper entrena solo con el 70% restante, algo que pesa más cuantas menos partidas hay.
+
+GAIL consigue la recompensa máxima entrenando solo durante 20 iteraciones, mientras que en el paper entrena durante 300. En la validación del entrenamiento, la media ya está entre 381 y 478 en la iteración 10, y entre 499 y 500 en la 20, por lo que la reducción de iteraciones no ha afectado al resultado. Por eso es bastante probable que el GAIL del paper también alcanzara la recompensa máxima mucho antes de las 300 iteraciones, pero que, como GAIL no tiene early stopping, siguiera entrenando.
+
+#### MountainCar
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | −200,0 | −200,0 | −143,5 (0,55) | −136,8 (0,62) | −101,1 (0,97) | −101,6 (0,97) | −97,8 | −98,8 |
+| 4 | −200,0 | −200,0 | −118,7 (0,80) | −133,3 (0,66) | −99,2 (0,99) | −101,4 (0,97) | −97,8 | −98,8 |
+| 7 | −200,0 | −200,0 | −113,4 (0,85) | −127,3 (0,72) | −98,6 (0,99) | −99,9 (0,99) | −97,8 | −98,8 |
+| 10 | −200,0 | −200,0 | −108,6 (0,89) | −123,1 (0,76) | −99,7 (0,98) | −100,8 (0,98) | −97,8 | −98,8 |
+
+Los resultados de GAIL son parecidos a los del paper. Con una única partida ya consigue una puntuación muy similar a la del experto y GAIL supera a BC en 19 de las 20 comparaciones con la misma cantidad y repetición. Cuando se han usado 4 o más partidas, al final del entrenamiento el discriminador solamente acierta alrededor de la mitad de sus predicciones, lo que sugiere que el agente toma acciones muy parecidas a las del experto.
+
+BC también muestra una tendencia parecida a la del paper. BC mejora a medida que tiene más partidas, pero no llega al experto. Con una partida obtiene un resultado algo peor que el del paper, y a partir de 4 partidas lo supera. Sus resultados son menos regulares que los de GAIL (todos los episodios llegan a la meta, pero algunos tardan mucho más que el experto).
+
+#### Acrobot
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | −500,0 | −200,0 | −93,8 (0,95) | −130,6 (0,56) | −71,0 (1,00) | −77,3 (0,98) | −72,1 | −75,3 |
+| 4 | −500,0 | −200,0 | −84,2 (0,97) | −93,2 (0,86) | −68,5 (1,01) | −83,1 (0,94) | −72,1 | −75,3 |
+| 7 | −500,0 | −200,0 | −77,9 (0,99) | −96,9 (0,83) | −68,0 (1,01) | −82,6 (0,94) | −72,1 | −75,3 |
+| 10 | −500,0 | −200,0 | −79,1 (0,98) | −95,1 (0,84) | −67,4 (1,01) | −78,9 (0,97) | −72,1 | −75,3 |
+
+GAIL obtiene unos resultados muy buenos en este entorno. Consigue una recompensa mayor que la del paper y que la de BC con todas las cantidades de partidas e incluso queda algo por encima del experto. Al final del entrenamiento el discriminador sigue distinguiendo bien al agente del experto, acertando entre el 84% y el 100%.
+
+BC también consigue mayor recompensa que en el paper con todas las cantidades de partidas. Al igual que en MountainCar, sus resultados son menos regulares que los de GAIL.
+
+#### HalfCheetah
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 4 | −320,7 | −282,4 | −342,4 (0,00) | −493,6 (−0,04) | 4775,3 (0,95) | 4515,7 (1,01) | 5040,9 | 4463,5 |
+| 11 | −320,7 | −282,4 | 1061,5 (0,26) | 637,6 (0,19) | 4970,2 (0,99) | 4280,7 (0,96) | 5040,9 | 4463,5 |
+| 18 | −320,7 | −282,4 | 2293,3 (0,49) | 2705,0 (0,63) | 4931,8 (0,98) | 4749,4 (1,06) | 5040,9 | 4463,5 |
+| 25 | −320,7 | −282,4 | 4782,3 (0,95) | 3718,6 (0,84) | 4728,1 (0,94) | 4840,1 (1,08) | 5040,9 | 4463,5 |
+
+GAIL consigue entre el 94 % y el 99 % de la recompensa del experto con todas las cantidades de partidas. En retorno, supera al paper en 3 de las 4 cantidades, pero en recompensa normalizada queda por debajo en 3 de ellas.
+
+BC muestra la misma tendencia que en el paper. Con 4 partidas no mejora a la política aleatoria, mejora mucho a medida que tiene más partidas, y con 25 llega a un resultado muy parecido al de GAIL. Con 11 y 18 partidas sus resultados son muy irregulares, igual que en el paper. Con 18 partidas los episodios se reparten casi a partes iguales entre los dos extremos de puntuación.
+
+#### Reacher
+
+Para este entorno, el paper tiene una tabla con ejecuciones con distintos parámetros, nosotros tomamos el GAIL sin regularización de entropía (λ = 0), que es el equivalente al nuestro. El paper no prueba con 25 partidas.
+
+| Partidas | Aleatoria | Aleatoria (paper) | BC | BC (paper) | GAIL | GAIL (paper) | Experto | Experto (paper) |
+|---|---|---|---|---|---|---|---|---|
+| 4 | −43,8 | −43,2 | −8,3 (0,88) | −11,0 (0,82) | −27,3 (0,41) | −67,2 (−0,61) | −3,4 | −4,1 |
+| 11 | −43,8 | −43,2 | −9,3 (0,85) | −6,2 (0,95) | −20,7 (0,57) | −6,1 (0,95) | −3,4 | −4,1 |
+| 18 | −43,8 | −43,2 | −10,4 (0,83) | −4,8 (0,98) | −94,6 (−1,26) | −8,3 (0,89) | −3,4 | −4,1 |
+| 25 | −43,8 | −43,2 | −10,9 (0,81) | — | −12,1 (0,78) | — | −3,4 | — |
+
+Es el único entorno en el que GAIL obtiene peores resultados que BC con todas las cantidades de partidas. En el paper, GAIL con 4 partidas queda por debajo de la política aleatoria, pero con 11 y 18 partidas se recupera y el nuestro no. La recompensa de Reacher tiene en cuenta la distancia a la diana y el coste de control. En la distancia, GAIL consigue valores parecidos a los de BC (aunque están lejos del experto), pero la diferencia está en el coste de control, donde el de GAIL va de −4,0 a −86,7 y el de BC de −0,5 a −1,4. Con 18 partidas, donde actúa peor que la política aleatoria, el 92 % de su recompensa negativa es coste de control. Al final del entrenamiento, el discriminador acierta prácticamente el 100% de sus predicciones, tanto con el experto como con el agente.
+
+BC obtiene mejores resultados que GAIL, aunque su rendimiento real es más limitado de lo que indica la recompensa normalizada. Una política que deja el brazo quieto obtiene un 0,79 normalizado porque no paga ningún coste de control. BC solo mejora a esa política entre 0,8 y 3,4 puntos. Si se mira únicamente la distancia a la diana, BC acerca el brazo a la diana mucho menos que el experto. Además, a diferencia del paper, donde BC se queda cada vez más cerca de su experto, nuestro BC empeora a medida que tiene más partidas.
+
+### Comparación entre BC y GAIL
+
+La principal conclusión del paper es que GAIL necesita muchas menos demostraciones que BC para acercarse al experto y nuestros resultados la confirman en todos los entornos menos en Reacher. Con la menor cantidad de partidas, GAIL ya se acerca a la recompensa del experto, mientras que BC necesita más datos para acercarse.
+
+GAIL también es más regular que BC en MountainCar y Acrobot, con todas las cantidades de partidas. La diferencia es especialmente grande en HalfCheetah con 11 y 18 partidas, donde BC alterna episodios en los que corre casi como el experto con otros en los que apenas avanza.
+
+Aun así, GAIL tiene una desventaja respecto a BC. BC se entrena en pocos segundos y no necesita jugar en el entorno, mientras que GAIL necesita jugar cientos de miles o millones de pasos y tarda desde medio minuto en CartPole hasta casi tres horas en HalfCheetah y Reacher.
+
+### Limitaciones
+
+- **Pocas repeticiones en los entornos MuJoCo.** En Reacher y HalfCheetah solo hay un agente por cantidad de partidas, así que no se puede medir la variación entre semillas. Por ejemplo, no se puede saber si el −94,6 de GAIL con 18 partidas en Reacher es algo puntual.
+- **Versiones distintas de los entornos.** Salvo en MountainCar, usamos versiones más recientes que las del paper (CartPole-v1, Acrobot-v1, Reacher-v5 y HalfCheetah-v5), en parte porque algunas de las originales ya no existen en Gymnasium. Por eso, los retornos no se pueden comparar directamente con los del paper, y en Acrobot la recompensa normalizada sale inflada.
+- **Expertos distintos.** Nuestros expertos son iguales o mejores que los del paper, así que la recompensa normalizada no mide exactamente lo mismo en los dos casos.
+- **Solo se mide el retorno.** La evaluación compara la recompensa obtenida, no si el agente se comporta igual que el experto.
+
+### Trabajo futuro
+
+- **Más repeticiones en Reacher y HalfCheetah.** Al menos 3 por cantidad de partidas, para poder medir la variación entre semillas. Cada entrenamiento de GAIL tarda unas 2 h 45 min, así que tendría un coste importante.
+- **Comprobar el efecto de la recompensa del discriminador.** Entrenar GAIL en CartPole, MountainCar y Acrobot con una recompensa constante, sin discriminador, y comparar con nuestros resultados. Así se sabría cuánto del éxito de GAIL en esos entornos se debe a imitar al experto y cuánto al signo de la recompensa.
+- **Más épocas para BC en MountainCar.** Con 4 partidas, las 5 repeticiones llegaron al máximo de 500 épocas sin que la parada temprana se activara, así que podría mejorar entrenando más.
 
 ## Ejecutar desde cero
 
@@ -66,8 +163,8 @@ aleatorio, BC y GAIL) con 50 episodios cada uno e imprime una línea de métrica
 por agente.
 
 Los otros entornos se ejecutan igual, cambiando `--entorno`. Usan los tamaños del
-código original, así que tardan más: 37 y 50 min MountainCar y Acrobot (medido), y
-varias horas Reacher y HalfCheetah (estimación) (ver [Tiempos medidos](#tiempos-medidos)):
+código original, así que tardan más: 37 y 50 min MountainCar y Acrobot, y unas
+2 h 45 min Reacher y HalfCheetah (ver [Tiempos medidos](#tiempos-medidos)):
 
 | Entorno | BC + GAIL | Agentes evaluados | Iteraciones de GAIL |
 |---|---|---|---|
@@ -77,14 +174,6 @@ varias horas Reacher y HalfCheetah (estimación) (ver [Tiempos medidos](#tiempos
 
 Conviene lanzarlos de uno en uno: cada experimento ya reparte sus
 entrenamientos en `experimento.procesos` procesos.
-
-### Comandos estándar
-
-| Para qué | Comando |
-|---|---|
-| Smoke | `python run.py --smoke` |
-| Experimento completo | `python run.py --entorno cartpole --descargar --grupo <nombre>` |
-| Otro entorno | `python run.py --entorno <entorno> --descargar --grupo <nombre>` |
 
 ## Argumentos de `run.py`
 
@@ -162,105 +251,29 @@ evaluación con las tablas `comparacion` y `episodios`. Las métricas se agrupan
 secciones por prefijo: `bc/`, `trpo/`, `discriminador/`, `reajuste/` y
 `validacion/`.
 
-Para ver una ejecución: en *Runs*, **Filter** → `Group` = `<nombre>`. Para
-comparar curvas, **Group** por `barrido.metodo` o `barrido.cantidad`, que cada
-run de BC y GAIL lleva en su configuración.
+En *Runs*, filtra por `Group` para ver una ejecución y agrupa por `barrido.metodo` o
+`barrido.cantidad` para comparar curvas.
 
 ## Datos
 
-Las demostraciones y el experto no se versionan: se generan con los scripts de
-`scripts/`, se congelan y se publican en W&B, en el grupo `congelado`. La sección
-`datos` del perfil de cada entorno fija sus carpetas, la huella de las partidas,
-la de los pesos de la política del experto (`policy.pth` dentro de `modelo.zip`) y los
-artefactos; `run.py` rechaza los datos cuyas huellas no
-coincidan.
+El experto y las demostraciones de cada entorno no se versionan: están congelados en
+W&B (grupo `congelado`) y `run.py --descargar` los baja a
+`checkpoints/expertos/<entorno>/congelado/` y `data/demostraciones/<entorno>/congelado/`.
+Antes de entrenar, `run.py` comprueba sus huellas SHA-256, que fija la sección `datos`
+de cada perfil (`configs/entornos/<entorno>.yaml`), y rechaza los que no coincidan.
 
-### CartPole
+| Entorno | Experto | Demostraciones | Partidas (train + validación) |
+|---|---|---|---|
+| CartPole-v1 | `experto-CartPole-v1-92c44313863e` | `demostraciones-5c5168e7f5f8` | 15 (10 + 5) |
+| MountainCar-v0 | `experto-MountainCar-v0-d492bda5bd8f` | `demostraciones-86c31ceb8ace` | 15 (10 + 5) |
+| Acrobot-v1 | `experto-Acrobot-v1-fad2206a39f6` | `demostraciones-45531794f3b9` | 15 (10 + 5) |
+| Reacher-v5 | `experto-Reacher-v5-a69d425ddb0f` | `demostraciones-1b16407e4fd8` | 30 (25 + 5) |
+| HalfCheetah-v5 | `experto-HalfCheetah-v5-331994138466` | `demostraciones-9a81e93f08fa` | 30 (25 + 5) |
 
-Congelado el 2026-10-30 (commit `15416db8bdec494f55bba3e2ff527907bdc6fafc`) en
-`data/demostraciones/cartpole/congelado/` y
-`checkpoints/expertos/cartpole/congelado/`. Se generó en Linux (WSL2) con
-Python 3.12.3 y las versiones de `requirements.txt`. Sus huellas SHA-256 son:
-
-- `demostraciones.npz`: `5c5168e7f5f8ad8dc415ff8e13ff0acc3d9fe8e0445e4f9d0298f0817198aff9`
-- `splits.json`: `804bb82f4c5b16ce4a49e97bde07911d1af1687a83a33cafabe7e9442f52a9d3`
-- contenido de las partidas: `b31d19eda39c1167b67330995e26659d0782b43ae83cfde7b773e8b1df221f58`
-- `modelo.zip` del experto: `92c44313863ebe30c616be30664b2742650ee80cd833f2b799550fe742d517ac`
-- pesos de la política del experto (`policy.pth` dentro de `modelo.zip`, la que comprueba
-  `run.py`): `9d45aafa782e1d9b3514376cbf677ac39f74b3f34f074205baf0530d3ed75508`
-
-Está en W&B (runs `tiiac-experto-cartpole` y `tiiac-datos-cartpole`) como los
-artefactos `experto-CartPole-v1-92c44313863e` y `demostraciones-5c5168e7f5f8`.
-`run.py --descargar` los baja y los comprueba. Para descargarlos sin ejecutar
-nada más (sin comprobar las huellas, que comprobará `run.py` después):
-
-```bash
-wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/demostraciones-5c5168e7f5f8:latest --root data/demostraciones/cartpole/congelado
-wandb artifact get a-corral-universidad-de-deusto/tiiac-proyecto/experto-CartPole-v1-92c44313863e:latest --root checkpoints/expertos/cartpole/congelado
-```
-
-### Otros entornos
-
-MountainCar, Acrobot, Reacher y HalfCheetah están congelados desde el 2026-11-01
-(commit `a6b8bdb2bbfce379554813c477bfaf33ef82e412`, sin cambios sin commit) en
-`data/demostraciones/<entorno>/congelado/` y `checkpoints/expertos/<entorno>/congelado/`.
-Se generaron en Linux (WSL2) con Python 3.12.3, `OMP_NUM_THREADS=1`, los cuatro a la
-vez y `--grupo congelado`. Sustituyen a los congelados el 2026-10-31 desde el commit
-`6ba7aae`, que se retiraron al cambiar la configuración de su experto.
-
-| Entorno | Objetivo del experto | Hiperparámetros del experto | Experto congelado | Partidas |
-|---|---|---|---|---|
-| MountainCar-v0 | −90, evaluado con 50 partidas | Sección `trpo` (paper y código original) | 1 000 000 pasos, sin alcanzar el objetivo | 15 (10 + 5), 1471 pasos |
-| Acrobot-v1 | −70, evaluado con 50 partidas | Sección `trpo` (paper y código original) | 980 000 pasos, objetivo alcanzado | 15 (10 + 5), 1088 pasos |
-| Reacher-v5 | −3,5 | RL Zoo para ReacherBulletEnv-v0, sin normalizar la recompensa (`experto.trpo`) | 25 001 984 pasos, sin alcanzar el objetivo | 30 (25 + 5), 1500 pasos |
-| HalfCheetah-v5 | 5000 | RL Zoo para HalfCheetah-v4, sin normalizar la recompensa (`experto.trpo`) | 7 168 000 pasos, objetivo alcanzado | 30 (25 + 5), 30 000 pasos |
-
-Los objetivos son elección propia, por encima del experto del paper (tabla 1) y
-del umbral de Gymnasium (ver
-[Decisiones](#decisiones-donde-el-paper-no-especifica)). Si no se alcanza, se
-guarda el experto de la mejor evaluación.
-
-Artefactos de W&B y huellas SHA-256 (`modelo.zip`, `policy.pth` dentro de `modelo.zip`,
-`demostraciones.npz`, `splits.json` y contenido de las partidas):
-
-| Entorno | Artefactos | Huellas |
-|---|---|---|
-| MountainCar-v0 | `experto-MountainCar-v0-d492bda5bd8f`, `demostraciones-86c31ceb8ace` | modelo `d492bda5bd8fa7ca9b6eb949153cbf395ef835c6c1853077b430f5e2d42e0dd4`; política `2100189a5baa32a394c36cc00ee731b59b18fa4a24de45855482c25ce2453ee9`; NPZ `86c31ceb8aceeaf7b300eaad20eba47927b49abfdb3039d4c4358c89814da364`; splits `dbda14e1a433358e71903f4fd071e80f6bd8184c18066c17619efcfd25be2828`; partidas `746797832e766391fcf0baec91211c82eb0817852cdfe0d074148febf700c1cc` |
-| Acrobot-v1 | `experto-Acrobot-v1-fad2206a39f6`, `demostraciones-45531794f3b9` | modelo `fad2206a39f6ef55f9822d5d4bd8738b3e04dacd1d425002d74804fdc7ccdcf4`; política `e05581ac9536afec10172ca2767ba5523d2d4347803e2e9b266bc433b9e4ba44`; NPZ `45531794f3b9781b9c25a117ab9c136b1b9a6606507572e97bcc3497c973594a`; splits `b81107d4f3450c6ba8710229ef1ab7ca2b9cde3126ea1d2de3a3c84a4e077dbb`; partidas `efad26895751d70b6104815b7ff2f1b418abf26a0a5fe9353725622494a27c80` |
-| Reacher-v5 | `experto-Reacher-v5-a69d425ddb0f`, `demostraciones-1b16407e4fd8` | modelo `a69d425ddb0f4dad6c0d8fd42e96a9295f982dc43e9cad8674cf3ff73f5c22b2`; política `44a588281ef50b159a9a15fcac2bbd369da987f15b84156c2c0500b10dccc74a`; NPZ `1b16407e4fd8f3ce1da578ce75ca626962129b26201ed93afef8407869e1b1e0`; splits `d886173eea50dc03614944ce06bb355157f7998abe0bac7edf42da6403126f31`; partidas `b2f098f94c7962c2c758eaf57647349dd84fb8b85a497426238986c5a98f384f` |
-| HalfCheetah-v5 | `experto-HalfCheetah-v5-331994138466`, `demostraciones-9a81e93f08fa` | modelo `3319941384669b19fb854a56bb70a65e3eba24a1c5740488b979e0c691759762`; política `8b74b0af9b801ce3182bf6454f81977c7b5593b8c9ab210b948341df0c044299`; NPZ `9a81e93f08fad6ccb6d2082b2ae365f32ba6e41a51bb8068ec534107769424f9`; splits `2e943144b0c5647d6794cc2c3c1b409a2162ea8499b025688fe9d2bd3c220c61`; partidas `8d9ba527575966f027a93cde2e6f287ebfd2f07f7832cb0315dfc165b5f1d123` |
-
-Se descargan como los de CartPole, cambiando los nombres de los artefactos y las
-carpetas, o con `run.py --entorno <entorno> --descargar`.
-
-### Regenerar o congelar los datos
-
-```bash
-python scripts/entrenar_experto.py --entorno cartpole
-python scripts/get_data.py --entorno cartpole --experto checkpoints/expertos/cartpole/<fecha> \
-  --grupo <grupo> --huella-esperada b31d19eda39c1167b67330995e26659d0782b43ae83cfde7b773e8b1df221f58
-```
-
-`get_data.py` graba las partidas con el experto estocástico (en CartPole, 10 de
-train y 5 de validación, separadas por trayectoria), guarda `demostraciones.npz`
-y `splits.json` con los subconjuntos de train e imprime las huellas. Con
-`--huella-esperada` comprueba si las partidas coinciden con las congeladas. Para
-congelar un entorno se usan los mismos dos scripts desde un commit limpio, con
-`--salida` en las carpetas `congelado` y `--grupo congelado`.
-
-Comprobado el 2026-10-30: en la misma máquina, un experto reentrenado desde cero
-graba exactamente las mismas partidas (el NPZ y los splits cambian de bytes porque
-sus metadatos citan el experto, pero no la huella de las partidas). Las semillas
-salen de `configs/`, pero en otra plataforma el redondeo puede cambiar las
-acciones del experto y, con ellas, las partidas: los mismos datos generados en
-Windows con Python 3.13 tenían otra huella. Por eso el experimento parte de los
-datos congelados.
-
-### Procedencia y licencias
-
-Son datos propios, generados en los entornos de Gymnasium (licencia MIT). Reacher
-y HalfCheetah usan además MuJoCo (licencia Apache 2.0); `gymnasium[mujoco]` y
-`mujoco` están en `requirements.txt`.
+Se generan con `scripts/entrenar_experto.py` y `scripts/get_data.py` (ver
+[Etapas por separado](#etapas-por-separado)). Son datos propios, generados en los
+entornos de Gymnasium (licencia MIT); Reacher y HalfCheetah usan además MuJoCo
+(licencia Apache 2.0).
 
 ## Etapas por separado
 
@@ -287,9 +300,9 @@ aceptan `--sin-wandb` y `--salida`.
    `configs/default.yaml` deja a `null`. Las seis claves de `datos` van con el
    valor provisional `pendiente`, porque los datos todavía no existen.
 3. Comprobar el pipeline con `python run.py --smoke --entorno <nombre>`.
-4. Generar y congelar el experto y las demostraciones (ver
-   [Regenerar o congelar los datos](#regenerar-o-congelar-los-datos)) y sustituir
-   `pendiente` por sus rutas, huellas y artefactos.
+4. Generar y congelar el experto y las demostraciones con `scripts/entrenar_experto.py`
+   y `scripts/get_data.py` (ver [Etapas por separado](#etapas-por-separado)) y
+   sustituir `pendiente` por sus rutas, huellas y artefactos.
 
 Mientras quede algún `pendiente`, se pueden ejecutar el smoke y los scripts, pero
 `run.py --entorno <nombre>` sale con código 2 y dice qué valor falta.
@@ -301,39 +314,19 @@ El proyecto es privado y pertenece a la organización
 hace falta una cuenta con acceso: pedidlo a los autores. Con una clave de otra
 organización, W&B responde con un error 403.
 
-La credencial se guarda fuera del repositorio (`wandb login`). Para trabajar
-sin conexión, cambia `wandb.modo` a `offline` en la configuración y sincroniza
-luego con `wandb sync`. Para no registrar un experimento, usa `--sin-wandb`.
-Los tests y el smoke usan `disabled`.
+La credencial se guarda fuera del repositorio (`wandb login`). Para no registrar un
+experimento, usa `--sin-wandb`; los tests y el smoke no registran nada.
 
 | Grupo | Qué contiene |
 |---|---|
 | `congelado` | Los expertos y las demostraciones congelados |
 | `entrega-e1` | El experimento completo de CartPole medido para la entrega |
+| `entrega-e1-cartpole` | El experimento completo de CartPole repetido el 2026-11-12 (run de comparación `ft49odps`), con los mismos retornos que `entrega-e1`; es el que usa [Resultados](#resultados) |
 | `entrega-e1-mountaincar`, `entrega-e1-acrobot` | El experimento completo de MountainCar y de Acrobot |
+| `entrega-e1-reacher`, `entrega-e1-halfcheetah` | El experimento completo de Reacher y de HalfCheetah (runs de comparación `u0imo43m` y `k7v7i4fo`). El de Reacher contiene también runs de intentos interrumpidos |
 | `ajuste-experto-halfcheetah`, `ajuste-experto-reacher` | La comparación de hiperparámetros del experto (ver [Ajuste del experto](#ajuste-del-experto)) |
 
-## Reproducibilidad y regla 5/20
-
-Las semillas están en `configs/` y solo se inicializan en `src/utils/seed.py`;
-las dependencias tienen versiones exactas en `requirements.txt`. Cada
-entrenamiento de BC y GAIL usa un solo hilo de PyTorch, así que en la misma
-máquina da el mismo resultado en serie y en paralelo.
-
-- **Smoke:** 5 s en CPU, muy por debajo de los 5 minutos.
-- **Experimento completo de CartPole:** 7 min 13 s en CPU (ver
-  [Tiempos medidos](#tiempos-medidos)), por debajo de los 20 minutos. TRPO, las
-  políticas y el discriminador se ejecutan en CPU (`device="cpu"`), así que una
-  GPU no acelera estos entrenamientos.
-- **Otros entornos:** la regla se aplica al experimento de CartPole. MountainCar,
-  Acrobot, Reacher y HalfCheetah usan los tamaños del código original y no la
-  cumplen: el experimento completo tardó 37 min en MountainCar y 50 min en Acrobot.
-  El de Reacher y HalfCheetah no se ha ejecutado todavía; el barrido GAIL de
-  Reacher con datos de prueba tardó 2 h 37 min.
-- **Pendiente:** medirlo en una T4 de Colab gratuito o dejar aquí la
-  justificación de por qué no se mide.
-
-### Tiempos medidos
+## Tiempos medidos
 
 `experimento.procesos` (en `configs/default.yaml`) fija cuántos entrenamientos
 se ejecutan a la vez. Está en 5, elegido para un PC de 6 núcleos físicos. En
@@ -355,24 +348,12 @@ Con los datos congelados y la configuración actual:
 | Demostraciones congeladas de MountainCar, Acrobot, Reacher y HalfCheetah | 0,7 s, 0,6 s, 0,6 s y 9,0 s | Linux (WSL2), misma máquina | 2026-11-01 |
 | Experimento completo de MountainCar (`time python run.py --entorno mountaincar --descargar --grupo entrega-e1-mountaincar`, online, commit `83323cb`): 20 BC, 20 GAIL de 300 iteraciones y evaluación de 42 agentes | 37 min 6 s, de ellos 41 s de evaluación (`evaluacion.json`) | Linux (WSL2), Intel Core i7-11800H, 5 procesos, sin GPU | 2026-11-02 |
 | Experimento completo de Acrobot (ídem, grupo `entrega-e1-acrobot`) | 49 min 34 s, de ellos 38 s de evaluación | Linux (WSL2), misma máquina | 2026-11-02 |
-| Experimento de Reacher, interrumpido a mano (4 BC y 4 GAIL a la vez) | 150 de las 500 iteraciones de GAIL en unos 3000 s | Linux (WSL2), misma máquina | 2026-11-02 |
+| Experimento completo de Reacher (`python run.py --entorno reacher --descargar --grupo entrega-e1-reacher`, online, commit `a1fa25d`): 4 BC, 4 GAIL de 500 iteraciones a la vez y evaluación de 10 agentes | Unas 2 h 44 min, de ellos 12 s de evaluación (sin `time`: desde la creación de la carpeta de salida hasta `evaluacion.json`) | Linux (WSL2), misma máquina | 2026-11-14 |
+| Experimento completo de HalfCheetah (ídem, grupo `entrega-e1-halfcheetah`) | Unas 2 h 46 min, de ellos 42 s de evaluación (medido igual) | Linux (WSL2), misma máquina | 2026-11-14 |
 
 La ejecución de 7 min 13 s es el grupo `entrega-e1` de W&B (run de comparación
 `r6oajx1r`). El *Runtime* que muestra W&B en una fila agrupada resume los runs
 del grupo y no equivale al tiempo de la ejecución.
-
-Mediciones anteriores, con otros datos congelados o con otra configuración:
-
-| Medición | Tiempo | Hardware | Fecha |
-|---|---|---|---|
-| Expertos retirados de MountainCar (150 000 pasos, parada en el umbral de Gymnasium), Acrobot (100 000, ídem), Reacher (25 000 000, sin llegar al objetivo) y HalfCheetah (ídem) | 40 s, 34 s, 4503 s (75 min) y 5312 s (89 min) | Linux (WSL2), Intel Core i7-11800H, un experto a la vez | 2026-10-30/31 |
-| Barrido GAIL de Reacher con datos de prueba (4 entrenamientos a la vez, 500 iteraciones de 50 000 pasos, sin W&B) | 9393 s (2 h 37 min), unos 18,7 s por iteración | Linux (WSL2), Intel Core i7-11800H, 4 procesos | 2026-10-30 |
-| Experimento completo de CartPole con los datos congelados en Windows, ya sustituidos (grupo `4a2683ef47f9`) | 17 min 32 s (1051,8 s), de ellos 5 min 53 s de evaluación | Windows 11, AMD64 Family 23 Model 160, 8 procesadores lógicos, 5 procesos, sin GPU | 2026-10-28 |
-| Barrido de CartPole con 80 iteraciones de GAIL y evaluación | unos 42 min | Windows 11, 8 procesadores lógicos | 2026-10-28 |
-| Experto de CartPole (50 000 pasos, 1 entorno) | 53 s | Linux (WSL2), 12 núcleos | 2026-10-16 |
-| Demostraciones de CartPole (15 partidas, 7401 pasos, 244 KB) | 6 s | Linux (WSL2), 12 núcleos | 2026-10-19 |
-| Iteración de GAIL en CartPole con 10 entornos, un entrenamiento a la vez | 2,1–2,6 s | Linux (WSL2) | 2026-10-21/22 |
-| Iteración de GAIL en CartPole con 10 entornos, 4 entrenamientos a la vez | 4,2 s | Linux (WSL2), 6 núcleos físicos, 7,9 GB | 2026-10-22 |
 
 ## Decisiones donde el paper no especifica
 
@@ -396,36 +377,12 @@ Mediciones anteriores, con otros datos congelados o con otra configuración:
 
 ### Ajuste del experto
 
-`experto.trpo` cambia claves de la sección `trpo` solo al entrenar el experto;
-GAIL sigue con los valores del paper. En Reacher y HalfCheetah se compararon
-variantes de esos hiperparámetros, de unos 5 M pasos cada una, en un grupo de W&B
-propio por entorno. La elegida está en `experto.trpo` del perfil, con su fuente.
-
-**HalfCheetah** (2026-10-31, grupo `ajuste-experto-halfcheetah`, con el objetivo
-de entonces, 4800). Se compararon los hiperparámetros de TRPO de RL Zoo para
-HalfCheetah-v4 (red 64 × 64, 2048 pasos por iteración, `target_kl` 0,04,
-recompensa normalizada), tres variaciones suyas (red del paper, `target_kl` 0,01
-y sin normalizar la recompensa) y la sección `trpo` del perfil con la recompensa
-normalizada. El equipo eligió la de mejor retorno, RL Zoo sin normalizar la
-recompensa, que paró al alcanzar 4800 a los 2,87 M pasos. Después se entrenó esa
-configuración con su red de 64 × 64 y con la del paper, 100 × 100 (runs del mismo
-grupo, objetivo 5000, unos 5 M pasos cada uno), y el equipo se quedó con 64 × 64.
-
-**Reacher** (2026-10-31, grupo `ajuste-experto-reacher`, con el objetivo de
-entonces, −3,75). RL Zoo solo tiene TRPO para `ReacherBulletEnv-v0` (PyBullet, no
-MuJoCo), así que sus valores eran un punto de partida, no un ajuste para este
-entorno. Se compararon:
-
-| Variante | Qué cambia |
-|---|---|
-| `rl_zoo` | Hiperparámetros de TRPO de RL Zoo para ReacherBulletEnv-v0 (red 256 × 256 ReLU, `log_std` inicial −1, sin inicialización ortogonal, 2048 pasos por iteración, recompensa normalizada…) |
-| `rl_zoo_red_100` | `rl_zoo` con la red del paper (100 × 100 tanh) |
-| `rl_zoo_mujoco` | Los valores comunes de RL Zoo sin los propios de ReacherBulletEnv-v0 (red 64 × 64 tanh) |
-| `rl_zoo_sin_norm_recompensa` | `rl_zoo` sin normalizar la recompensa |
-| `actual_norm_recompensa` | La sección `trpo` del perfil con la recompensa normalizada |
-
-El equipo eligió `rl_zoo_sin_norm_recompensa`, la única que alcanzó −3,75, en su
-última iteración (5 M pasos).
+`experto.trpo` cambia claves de la sección `trpo` solo al entrenar el experto; GAIL
+sigue con los valores del paper. En Reacher y HalfCheetah se compararon variantes de
+los hiperparámetros de TRPO de RL Zoo, de unos 5 M pasos cada una, en los grupos de
+W&B `ajuste-experto-reacher` y `ajuste-experto-halfcheetah`. El equipo eligió en los
+dos la de RL Zoo sin normalizar la recompensa, con su red (256 × 256 ReLU en Reacher y
+64 × 64 tanh en HalfCheetah); sus valores están en `experto.trpo` de cada perfil.
 
 ## Dashboard (en desarrollo)
 
