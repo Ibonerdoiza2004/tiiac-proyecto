@@ -444,9 +444,16 @@ exactas de las dependencias están en `web/package-lock.json`. Desde `web/`:
 | Compilar para producción (`web/dist/`) | `npm run build` |
 
 En desarrollo, Vite reenvía `/api` (HTTP y WebSocket) a `http://127.0.0.1:8000`, o a la
-dirección de `TIIAC_API_URL`. En producción, FastAPI sirve `web/dist/`. Por ahora solo
-existen el esqueleto de las pestañas Laboratorio, Comparar y Biblioteca, el selector de
-entorno y los clientes HTTP y WebSocket.
+dirección de `TIIAC_API_URL`. En producción, FastAPI sirve `web/dist/`.
+
+Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
+(CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con
+contadores de partidas y pares y la revisión de qué partidas y pares guardar. Mientras no
+existe el backend, la interfaz usa uno simulado en el navegador (`web/src/simulado/`):
+CartPole y MountainCar con las ecuaciones de Gymnasium y animaciones de ejemplo en los
+demás; no entrena ni guarda nada de verdad. Con `VITE_API=real npm run dev` usa el backend
+real. Las rutas y los mensajes propuestos están en
+[`docs/contrato-api.md`](docs/contrato-api.md).
 
 ## Estructura del repositorio
 
