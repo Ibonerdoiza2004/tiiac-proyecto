@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { crearApiPorDefecto } from './api/elegir.js';
+import { crearApisPorDefecto } from './api/elegir.js';
 import Cabecera from './componentes/Cabecera.jsx';
 import ContextoEntorno from './componentes/ContextoEntorno.jsx';
 import SelectorEntorno from './componentes/SelectorEntorno.jsx';
@@ -22,15 +22,21 @@ const CONTENIDO = { laboratorio: Laboratorio, comparar: Comparar, biblioteca: Bi
  * @param {object} [props]
  * @param {string} [props.vistaInicial] Pestaña con la que arranca.
  * @param {string} [props.entornoInicial] Entorno con el que arranca.
- * @param {import('./api/laboratorio.js').ApiLaboratorio} [props.apiLaboratorio] Backend del
- *   Laboratorio (por defecto, el que indique VITE_API).
+ * @param {import('./api/laboratorio.js').ApiLaboratorio} [props.apiLaboratorio] Backend de
+ *   jugar y ver al agente (por defecto, el que indique VITE_API).
+ * @param {import('./api/entrenamiento.js').ApiEntrenamiento} [props.apiEntrenamiento] Backend
+ *   de los entrenamientos (por defecto, el que indique VITE_API).
  * @returns {JSX.Element} La aplicación.
  */
 export default function App({ vistaInicial = VISTA_INICIAL, entornoInicial = ENTORNO_INICIAL,
-  apiLaboratorio }) {
+  apiLaboratorio, apiEntrenamiento }) {
   const [vista, setVista] = useState(() => buscarVista(vistaInicial).id);
   const [entorno, setEntorno] = useState(() => buscarEntorno(entornoInicial).id);
-  const [api] = useState(() => apiLaboratorio ?? crearApiPorDefecto());
+  const [apis] = useState(() => {
+    const porDefecto = apiLaboratorio && apiEntrenamiento ? null : crearApisPorDefecto();
+    return { laboratorio: apiLaboratorio ?? porDefecto.laboratorio,
+      entrenamiento: apiEntrenamiento ?? porDefecto.entrenamiento };
+  });
   const [ocupado, setOcupado] = useState(false);
   const { titulo, subtitulo } = buscarVista(vista);
 
@@ -50,7 +56,8 @@ export default function App({ vistaInicial = VISTA_INICIAL, entornoInicial = ENT
           const Contenido = CONTENIDO[id];
           return (
             <div key={id} hidden={id !== vista}>
-              <Contenido entorno={entorno} api={api} alCambiarOcupado={setOcupado} />
+              <Contenido entorno={entorno} api={apis.laboratorio} apiEntrenamiento={apis.entrenamiento}
+                alCambiarOcupado={setOcupado} />
             </div>
           );
         })}

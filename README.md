@@ -405,12 +405,16 @@ dirección de `TIIAC_API_URL`. En producción, FastAPI sirve `web/dist/`.
 
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con
-contadores de partidas y pares y la revisión de qué partidas y pares guardar. Mientras no
-existe el backend, la interfaz usa uno simulado en el navegador (`web/src/simulado/`):
-CartPole y MountainCar con las ecuaciones de Gymnasium y animaciones de ejemplo en los
-demás; no entrena ni guarda nada de verdad. Con `VITE_API=real npm run dev` usa el backend
-real. Las rutas y los mensajes propuestos están en
-[`docs/contrato-api.md`](docs/contrato-api.md).
+contadores de partidas y pares y la revisión de qué partidas y pares guardar; y
+«Entrenar experto» y «Entrenar e imitar» (GAIL y BC): formulario con todos los
+hiperparámetros del perfil, elección de demostraciones, curvas en directo, vista de las
+partidas (experto y GAIL) y pausar, reanudar y finalizar. Mientras no existe el backend, la
+interfaz usa uno simulado en el navegador (`web/src/simulado/`): CartPole y MountainCar
+con las ecuaciones de Gymnasium, animaciones de ejemplo en los demás y curvas de
+entrenamiento inventadas; no entrena ni guarda nada de verdad. Los hiperparámetros del
+simulado salen de `configs/` con `npm run perfiles` (un test avisa si no están al día). Con
+`VITE_API=real npm run dev` usa el backend real. Las rutas y los mensajes propuestos están
+en [`docs/contrato-api.md`](docs/contrato-api.md).
 
 ## Estructura del repositorio
 

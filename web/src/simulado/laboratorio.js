@@ -8,6 +8,7 @@
 import { ErrorApi } from '../api/http.js';
 import { MODOS } from '../api/laboratorio.js';
 import { buscarEntorno } from '../entornos.js';
+import { crearAlmacen } from './almacen.js';
 import { CONFIGURACION_SIMULADA, crearAleatorio, crearSimulacion } from './entornos.js';
 
 const MAXIMO_PARTIDAS = 1000;
@@ -25,9 +26,11 @@ function rechazar(estado, mensaje) {
  * @param {(entorno: string, foto: object) => Promise<Blob>} [opciones.dibujar] Dibuja
  *   cada imagen (por defecto, dibujarFotograma de ./dibujo.js, que necesita un navegador).
  * @param {number} [opciones.semilla] Semilla base de las partidas.
+ * @param {import('./almacen.js').Almacen} [opciones.almacen] Biblioteca simulada donde se
+ *   guardan los conjuntos (la comparte con el entrenamiento simulado).
  * @returns {import('../api/laboratorio.js').ApiLaboratorio}
  */
-export function crearApiLaboratorioSimulada({ dibujar, semilla = 1000 } = {}) {
+export function crearApiLaboratorioSimulada({ dibujar, semilla = 1000, almacen = crearAlmacen() } = {}) {
   const sesiones = new Map();
   let contador = 0;
   const pintar = dibujar
@@ -200,6 +203,11 @@ export function crearApiLaboratorioSimulada({ dibujar, semilla = 1000 } = {}) {
         pares += fin - inicio;
       }
       sesiones.delete(id);
+      almacen.demostraciones.push({
+        id: almacen.nuevoId('demostraciones'), entorno: sesion.entorno, nombre: nombre.trim(),
+        tipo: 'conjunto', partidas: partidas.length, pares,
+        fuente: sesion.modo === MODOS.MANUAL ? 'humano' : 'experto',
+      });
       return Promise.resolve({ nombre: nombre.trim(), partidas: partidas.length, pares });
     },
 
