@@ -504,3 +504,80 @@ def test_esperar_con_plazo_lanza_timeout(crear_gestor) -> None:
     with pytest.raises(TimeoutError, match="en_marcha"):
         gestor.esperar(trabajo, 0.1)
     gestor.enviar_orden(trabajo, {"tipo": "fin"})
+
+
+# --- Suscripción (reconectarse a mitad) ------------------------------------------------
+
+@pytest.mark.parametrize("espera", [0.0, 0.05, 0.2])
+def test_suscribirse_a_mitad_no_pierde_ni_repite_progreso(crear_gestor, espera) -> None:
+    """Foto más eventos posteriores tiene que ser exactamente el historial completo.
+
+    Se suscribe mientras el trabajo manda progreso sin parar, en varios momentos, para
+    que haya eventos en la cola del repartidor justo al tomar la foto.
+    """
+    gestor = crear_gestor()
+    trabajo = contar(gestor)
+    time.sleep(espera)
+    recibidos = []
+    foto, dejar = gestor.suscribir(trabajo, recibidos.append)
+    assert foto["trabajo"]["estado"] == "en_marcha"
+    esperar_hasta(lambda: sum(e["tipo"] == "progreso" for e in recibidos) >= 5)
+    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.esperar(trabajo, LIMITE)
+    esperar_hasta(lambda: any(e["tipo"] == "estado" and e["trabajo"]["estado"] == "terminado"
+                              for e in recibidos))
+    dejar()
+    vistos = foto["historial"] + [e["medidas"] for e in recibidos if e["tipo"] == "progreso"]
+    assert vistos == gestor.historial(trabajo)
+    numeros = [e["n"] for e in recibidos]
+    assert numeros == list(range(numeros[0], numeros[0] + len(numeros)))
+
+
+def test_suscribirse_a_uno_acabado_da_la_foto_final_y_ningun_evento(crear_gestor) -> None:
+    gestor = crear_gestor()
+    trabajo = gestor.crear("entrenamiento", "tareas_app:mandar_imagenes", {"cuantas": 3})["id"]
+    gestor.esperar(trabajo, LIMITE)
+    esperar_hasta(lambda: gestor.ultima_imagen(trabajo) == b"imagen-2")
+    time.sleep(0.2)  # que el repartidor acabe con lo que tuviera de este trabajo
+    recibidos = []
+    foto, dejar = gestor.suscribir(trabajo, recibidos.append)
+    time.sleep(0.2)
+    dejar()
+    assert foto["trabajo"]["estado"] == "terminado"
+    assert foto["historial"] == [{"imagenes": 3}]
+    assert foto["imagen"] == b"imagen-2"
+    assert recibidos == []
+
+
+def test_la_suscripcion_solo_recibe_su_trabajo_y_se_puede_quitar(crear_gestor) -> None:
+    gestor = crear_gestor(2)
+    a, b = contar(gestor), contar(gestor)
+    recibidos = []
+    _, dejar = gestor.suscribir(a, recibidos.append)
+    esperar_hasta(lambda: len(recibidos) >= 3)
+    dejar()
+    dejar()
+    cuantos = len(recibidos)
+    time.sleep(0.2)
+    assert len(recibidos) <= cuantos + 1  # como mucho el que ya se estaba repartiendo
+    assert all(e["tipo"] == "progreso" for e in recibidos)
+    for trabajo in (a, b):
+        gestor.enviar_orden(trabajo, {"tipo": "fin"})
+
+
+def test_los_eventos_de_cada_trabajo_van_numerados_desde_1(crear_gestor) -> None:
+    gestor = crear_gestor()
+    numeros: dict[str, list[int]] = {}
+    gestor.observar(lambda id_, e: numeros.setdefault(id_, []).append(e["n"]))
+    ids = [gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1, 2]})["id"]
+           for _ in range(2)]
+    for id_ in ids:
+        gestor.esperar(id_, LIMITE)
+    # en_marcha, dos progresos y terminado
+    esperar_hasta(lambda: all(len(numeros.get(i, [])) == 4 for i in ids))
+    assert all(numeros[i] == [1, 2, 3, 4] for i in ids)
+
+
+def test_suscribirse_a_un_desconocido_falla(crear_gestor) -> None:
+    with pytest.raises(TrabajoDesconocido):
+        crear_gestor().suscribir("no-existe", lambda e: None)

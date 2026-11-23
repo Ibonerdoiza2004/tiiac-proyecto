@@ -7,13 +7,19 @@ FastAPI, ``{"detail": ...}``, que es el que lee el cliente del frontend.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from src.app.rutas_trabajos import crear_router_trabajos
+from src.app.trabajos import GestorTrabajos, OperacionNoValida, SinHueco, TrabajoDesconocido
 from src.utils.configuracion import (TipoEntorno, leer_configuracion_base,
                                      resolver_configuracion)
 from src.utils.validacion import es_entero, es_entero_positivo
@@ -37,6 +43,7 @@ class EstadoApi(BaseModel):
 
     entornos: list[EntornoApi]
     procesos: int
+    libres: int
 
 
 def config_aplicativo(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -86,14 +93,28 @@ def describir_entornos(ruta_config: Path) -> list[EntornoApi]:
             for tipo in TipoEntorno]
 
 
-def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO) -> FastAPI:
+def _respuesta_error(codigo: int) -> Any:
+    """Manejador que convierte una excepción en ``{"detail": mensaje}`` con ese código."""
+    async def manejar(request: Request, error: Exception) -> JSONResponse:
+        """Responde con el mensaje de la excepción."""
+        mensaje = error.args[0] if isinstance(error, KeyError) and error.args else str(error)
+        if isinstance(error, TrabajoDesconocido):
+            mensaje = f"No existe el trabajo {mensaje}"
+        return JSONResponse(status_code=codigo, content={"detail": mensaje})
+    return manejar
+
+
+def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
+              gestor: GestorTrabajos | None = None) -> FastAPI:
     """Crea la aplicación: la API bajo /api y, si está compilado, el frontend en /.
 
     La configuración se lee y se comprueba aquí, una vez: si no es válida, la
-    aplicación no se crea.
+    aplicación no se crea. El gestor de trabajos se cierra al apagar el servidor,
+    así que no quedan procesos sueltos.
 
     Args:
         ruta_config: Ruta al YAML base.
+        gestor: Gestor de trabajos (por defecto, uno nuevo con experimento.procesos).
 
     Returns:
         La aplicación FastAPI.
@@ -102,17 +123,30 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO) -> FastAPI:
         ValueError: Si la configuración base o algún perfil no son válidos.
     """
     aplicativo = config_aplicativo(leer_configuracion_base(ruta_config))
-    estado = EstadoApi(entornos=describir_entornos(ruta_config),
-                       procesos=aplicativo["procesos"])
+    entornos = describir_entornos(ruta_config)
+    gestor = gestor or GestorTrabajos(aplicativo["procesos"])
 
-    app = FastAPI(title="GAIL lab", description="API del dashboard de TIIAC.")
+    @asynccontextmanager
+    async def ciclo_de_vida(app: FastAPI) -> AsyncIterator[None]:
+        """Al apagar, cancela los trabajos y espera a sus procesos."""
+        yield
+        await asyncio.to_thread(gestor.cerrar)
+
+    app = FastAPI(title="GAIL lab", description="API del dashboard de TIIAC.",
+                  lifespan=ciclo_de_vida)
+    app.state.gestor = gestor
+    for excepcion, codigo in ((TrabajoDesconocido, 404), (OperacionNoValida, 409),
+                              (SinHueco, 503)):
+        app.add_exception_handler(excepcion, _respuesta_error(codigo))
+
     api = APIRouter(prefix=PREFIJO)
 
     @api.get("/estado", response_model=EstadoApi)
     def leer_estado() -> EstadoApi:
-        """Entornos disponibles y cuántos trabajos pueden correr a la vez."""
-        return estado
+        """Entornos, cuántos trabajos pueden correr a la vez y cuántos huecos quedan."""
+        return EstadoApi(entornos=entornos, procesos=gestor.procesos, libres=gestor.libres())
 
+    api.include_router(crear_router_trabajos(gestor))
     app.include_router(api)
 
     web = aplicativo["web"]

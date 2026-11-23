@@ -85,3 +85,20 @@ def hilos(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
 
 
 no_es_funcion = 3
+
+
+def imagenes_hasta_orden(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
+    """Manda una imagen numerada por paso, sin parar, hasta recibir {"tipo": "fin"}."""
+    paso = 0
+    while True:
+        if any(orden.get("tipo") == "fin" for orden in canal.ordenes()):
+            return {"imagenes": paso}
+        canal.imagen(f"imagen-{paso}".encode())
+        paso += 1
+        time.sleep(PAUSA)
+
+
+def progreso_no_finito(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
+    """Manda medidas que JSON no admite (NaN e infinito) y termina."""
+    canal.progreso({"nan": float("nan"), "infinito": float("inf"), "normal": 1.5})
+    return {"perdida": float("nan")}

@@ -222,6 +222,7 @@ class _Trabajo:
     error: str | None = None
     imagen: bytes | None = None
     cancelado: bool = False
+    eventos: int = 0  # cuántos eventos lleva; cada uno lleva su número en "n"
     proceso: Any = None
     ordenes: Connection | None = None
 
@@ -342,8 +343,8 @@ class GestorTrabajos:
         """Registra una función que recibe (id, evento) de todos los trabajos.
 
         Los eventos son ``{"tipo": "estado", "trabajo": datos públicos}``,
-        ``{"tipo": "progreso", "medidas": ...}`` e ``{"tipo": "imagen", "datos": bytes}``.
-        Se llaman desde un único hilo repartidor, en el orden en que ocurrieron y sin
+        ``{"tipo": "progreso", "medidas": ...}`` e ``{"tipo": "imagen", "datos": bytes}``,
+        y cada uno lleva ``"n"``: su número dentro del trabajo (1, 2, 3...). Se llaman desde un único hilo repartidor, en el orden en que ocurrieron y sin
         el cerrojo tomado: tienen que ser rápidos (si lanzan una excepción, se ignora).
 
         Returns:
@@ -351,21 +352,60 @@ class GestorTrabajos:
         """
         with self._cerrojo:
             self._observadores.append(observador)
+        return self._dejar_de_observar(observador)
 
+    def _dejar_de_observar(self, observador: Observador) -> Callable[[], None]:
+        """Devuelve una función que quita el observador (no falla si ya no estaba)."""
         def dejar() -> None:
-            """Quita el observador (no falla si ya no estaba)."""
+            """Quita el observador."""
             with self._cerrojo:
                 if observador in self._observadores:
                     self._observadores.remove(observador)
         return dejar
 
-    def _encolar(self, id_trabajo: str, evento: Evento) -> None:
-        """Deja el evento para el repartidor. Con el cerrojo tomado."""
-        self._eventos.put((id_trabajo, evento))
+    def suscribir(self, id_trabajo: str, observador: Callable[[Evento], None]
+                  ) -> tuple[dict[str, Any], Callable[[], None]]:
+        """Foto del trabajo y, desde ese momento, sus eventos: sin huecos ni repetidos.
+
+        Para reconectarse a mitad: la foto trae el estado, todo el progreso hasta
+        ahora y la última imagen, y el observador recibe solo los eventos posteriores
+        a la foto (los que ya estaban en la cola del repartidor se descartan por su
+        número). Así, foto más eventos es exactamente lo que ha pasado, sin repetir
+        ni perder ninguno.
+
+        Args:
+            id_trabajo: Trabajo.
+            observador: Recibe cada evento posterior del trabajo, desde el repartidor.
+
+        Returns:
+            ``({"trabajo", "historial", "imagen"}, dejar)``: la foto y la función que
+            deja de observar.
+
+        Raises:
+            TrabajoDesconocido: Si no existe.
+        """
+        with self._cerrojo:
+            trabajo = self._buscar(id_trabajo)
+            foto = {"trabajo": trabajo.describir(), "historial": list(trabajo.progreso),
+                    "imagen": trabajo.imagen}
+            visto = trabajo.eventos
+
+            def filtrar(id_evento: str, evento: Evento) -> None:
+                """Pasa solo los eventos de este trabajo posteriores a la foto."""
+                if id_evento == id_trabajo and evento["n"] > visto:
+                    observador(evento)
+
+            self._observadores.append(filtrar)
+        return foto, self._dejar_de_observar(filtrar)
+
+    def _encolar(self, trabajo: _Trabajo, evento: Evento) -> None:
+        """Numera el evento y lo deja para el repartidor. Con el cerrojo tomado."""
+        trabajo.eventos += 1
+        self._eventos.put((trabajo.id, {**evento, "n": trabajo.eventos}))
 
     def _encolar_estado(self, trabajo: _Trabajo) -> None:
         """Deja un evento con el estado actual del trabajo. Con el cerrojo tomado."""
-        self._encolar(trabajo.id, {"tipo": "estado", "trabajo": trabajo.describir()})
+        self._encolar(trabajo, {"tipo": "estado", "trabajo": trabajo.describir()})
 
     def _repartir(self) -> None:
         """Hilo repartidor: pasa cada evento a los observadores, en orden, sin el cerrojo."""
@@ -461,7 +501,7 @@ class GestorTrabajos:
                     return
                 with self._cerrojo:
                     trabajo.imagen = datos
-                    self._encolar(trabajo.id, {"tipo": "imagen", "datos": datos})
+                    self._encolar(trabajo, {"tipo": "imagen", "datos": datos})
         finally:
             lectura.close()
 
@@ -478,7 +518,7 @@ class GestorTrabajos:
                 if clase == "progreso":
                     with self._cerrojo:
                         trabajo.progreso.append(contenido)
-                        self._encolar(trabajo.id, {"tipo": "progreso", "medidas": contenido})
+                        self._encolar(trabajo, {"tipo": "progreso", "medidas": contenido})
                 elif clase == "resultado":
                     resultado = contenido
                 elif clase == "error":

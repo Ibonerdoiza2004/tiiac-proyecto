@@ -412,6 +412,22 @@ también el frontend en la raíz. En desarrollo, Vite reenvía `/api` (HTTP y We
 `http://127.0.0.1:8000`, o a la dirección de `TIIAC_API_URL`. El contrato de la API está en
 el código: con la API en marcha, la documentación de las rutas sale en `/docs`.
 
+Todo lo pesado (jugar, entrenar, comparar) corre como un *trabajo*, en su propio proceso,
+con como mucho `experimento.procesos` a la vez; los demás esperan en cola, salvo las
+sesiones de jugar, que sin hueco se rechazan (503). `GET /api/trabajos` los lista y
+`/api/trabajos/{id}` admite pausar, reanudar y cancelar. Para seguir uno en directo, el
+WebSocket `/api/trabajos/{id}`:
+
+| Sentido | Mensaje |
+|---|---|
+| Al conectar | `{"tipo": "estado", "trabajo"}`, `{"tipo": "historial", "progreso": [...]}` con todo lo anterior y la última imagen |
+| En directo | `{"tipo": "progreso", "medidas"}`, imágenes JPEG en binario (si el navegador va lento, solo la última) y `{"tipo": "estado", "trabajo"}` |
+| Al terminar | El último estado y cierre normal (1000); 4404 si el trabajo no existe |
+| Del navegador | `{"tipo": "pausar" \| "reanudar" \| "cancelar"}`; cualquier otro `tipo` llega al trabajo como orden |
+
+Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder ni repetir
+progreso; una sesión de jugar, en cambio, se descarta.
+
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con
 contadores de partidas y pares y la revisión de qué partidas y pares guardar; y
