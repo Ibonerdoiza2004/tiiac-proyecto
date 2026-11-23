@@ -16,8 +16,10 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
+from src.app.ajustes import cargar_dashboard
+from src.app.contrato import EntornoApi, EstadoApi
+from src.app.rutas_laboratorio import crear_router_laboratorio
 from src.app.rutas_trabajos import crear_router_trabajos
 from src.app.trabajos import GestorTrabajos, OperacionNoValida, SinHueco, TrabajoDesconocido
 from src.utils.configuracion import (TipoEntorno, leer_configuracion_base,
@@ -29,21 +31,8 @@ CONFIG_POR_DEFECTO = Path("configs/default.yaml")
 SIN_FRONTEND = ("El frontend no está compilado: ejecuta `npm ci` y `npm run build` "
                 "en web/, o usa `npm run dev` con la API en marcha.")
 PUERTO_MAXIMO = 65535
-
-
-class EntornoApi(BaseModel):
-    """Un entorno del dashboard: la clave de su perfil y su id de Gymnasium."""
-
-    id: str
-    gym: str
-
-
-class EstadoApi(BaseModel):
-    """Respuesta de GET /api/estado."""
-
-    entornos: list[EntornoApi]
-    procesos: int
-    libres: int
+# Textos, niveles y rangos del formulario, junto al YAML base.
+ARCHIVO_DASHBOARD = "dashboard.yaml"
 
 
 def config_aplicativo(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -108,8 +97,8 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
               gestor: GestorTrabajos | None = None) -> FastAPI:
     """Crea la aplicación: la API bajo /api y, si está compilado, el frontend en /.
 
-    La configuración se lee y se comprueba aquí, una vez: si no es válida, la
-    aplicación no se crea. El gestor de trabajos se cierra al apagar el servidor,
+    La configuración (y configs/dashboard.yaml, junto al YAML base) se lee y se
+    comprueba aquí, una vez: si no es válida, la aplicación no se crea. El gestor de trabajos se cierra al apagar el servidor,
     así que no quedan procesos sueltos.
 
     Args:
@@ -124,6 +113,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     """
     aplicativo = config_aplicativo(leer_configuracion_base(ruta_config))
     entornos = describir_entornos(ruta_config)
+    dashboard = cargar_dashboard(Path(ruta_config).parent / ARCHIVO_DASHBOARD)
     gestor = gestor or GestorTrabajos(aplicativo["procesos"])
 
     @asynccontextmanager
@@ -147,6 +137,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
         return EstadoApi(entornos=entornos, procesos=gestor.procesos, libres=gestor.libres())
 
     api.include_router(crear_router_trabajos(gestor))
+    api.include_router(crear_router_laboratorio(Path(ruta_config), dashboard, gestor))
     app.include_router(api)
 
     web = aplicativo["web"]

@@ -53,7 +53,7 @@ def app_y_gestor() -> Iterator[tuple[TestClient, GestorTrabajos]]:
 
 
 def contar(gestor: GestorTrabajos, interactivo: bool = False) -> str:
-    """Trabajo que cuenta hasta recibir {"tipo": "fin"}; espera a que avance si arranca."""
+    """Trabajo que cuenta hasta recibir {"tipo": "finalizar"}; espera a que avance si arranca."""
     trabajo = gestor.crear("sesion" if interactivo else "entrenamiento",
                            "tareas_app:contar_hasta_orden", interactivo=interactivo)
     if trabajo["estado"] == "en_marcha":
@@ -169,7 +169,7 @@ def test_pausar_uno_en_cola_da_409(app_y_gestor) -> None:
     assert respuesta.status_code == 409
     assert "en_cola" in respuesta.json()["detail"]
     for trabajo in ocupados:
-        gestor.enviar_orden(trabajo, {"tipo": "fin"})
+        gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
 
 
 def test_sin_hueco_da_503(app_y_gestor) -> None:
@@ -185,7 +185,7 @@ def test_estado_cuenta_los_huecos_libres(app_y_gestor) -> None:
     trabajo = contar(gestor)
     estado = cliente.get("/api/estado").json()
     assert (estado["procesos"], estado["libres"]) == (2, 1)
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
     gestor.esperar(trabajo, LIMITE)
     assert cliente.get("/api/estado").json()["libres"] == 2
 
@@ -220,7 +220,7 @@ def test_conectarse_a_uno_acabado_da_la_foto_y_cierra(app_y_gestor) -> None:
     assert codigo == 1000
     assert mensajes[0]["tipo"] == "estado"
     assert mensajes[0]["trabajo"]["estado"] == "terminado"
-    assert mensajes[1] == {"tipo": "historial", "progreso": [{"imagenes": 3}]}
+    assert mensajes[1] == {"tipo": "historial", "progreso": [{"imagenes": 3}], "eventos": []}
     assert mensajes[2:] == [b"imagen-2"]
 
 
@@ -232,12 +232,12 @@ def test_seguir_en_directo_hasta_el_final(app_y_gestor) -> None:
         assert estado["trabajo"]["estado"] == "en_marcha"
         assert historial["tipo"] == "historial"
         en_directo = leer_hasta(ws, lambda m: m["tipo"] == "progreso")
-        ws.send_json({"tipo": "fin"})  # una orden cualquiera pasa tal cual al trabajo
+        ws.send_json({"tipo": "finalizar"})  # una orden cualquiera pasa tal cual al trabajo
         resto, codigo = leer_hasta_cierre(ws)
     assert codigo == 1000
     mensajes = en_directo + resto
     assert es_estado("terminado")(mensajes[-1])
-    assert mensajes[-1]["trabajo"]["resultado"]["ordenes"] == [{"tipo": "fin"}]
+    assert mensajes[-1]["trabajo"]["resultado"]["ordenes"] == [{"tipo": "finalizar"}]
     progresos = [m["medidas"] for m in mensajes if m["tipo"] == "progreso"]
     # Foto más directo: exactamente todo el progreso, sin huecos ni repetidos.
     assert historial["progreso"] + progresos == gestor.historial(trabajo)
@@ -255,7 +255,7 @@ def test_reconectarse_a_mitad_recupera_todo(app_y_gestor) -> None:
     assert gestor.obtener(trabajo)["estado"] == "en_marcha"
     with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
         _, historial = leer(ws), leer(ws)
-        ws.send_json({"tipo": "fin"})
+        ws.send_json({"tipo": "finalizar"})
         resto, _ = leer_hasta_cierre(ws)
     progresos = [m["medidas"] for m in resto if m["tipo"] == "progreso"]
     assert historial["progreso"] + progresos == gestor.historial(trabajo)
@@ -293,7 +293,7 @@ def test_un_mensaje_que_no_vale_da_error_y_la_conexion_sigue(app_y_gestor, envia
         ws.send_text(enviado)
         respuesta = leer_hasta(ws, lambda m: m["tipo"] == "error")[-1]
         assert error in respuesta["mensaje"]
-        ws.send_json({"tipo": "fin"})
+        ws.send_json({"tipo": "finalizar"})
         leer_hasta_cierre(ws)
     assert gestor.obtener(trabajo)["estado"] == "terminado"
 
@@ -306,7 +306,7 @@ def test_un_control_que_no_vale_da_error_y_la_conexion_sigue(app_y_gestor) -> No
         ws.send_json({"tipo": "reanudar"})
         respuesta = leer_hasta(ws, lambda m: m["tipo"] == "error")[-1]
         assert "en_marcha" in respuesta["mensaje"]
-        ws.send_json({"tipo": "fin"})
+        ws.send_json({"tipo": "finalizar"})
         mensajes, codigo = leer_hasta_cierre(ws)
     assert codigo == 1000
     assert es_estado("terminado")(mensajes[-1])
@@ -338,7 +338,7 @@ def test_cerrar_la_conexion_de_un_entrenamiento_no_lo_para(app_y_gestor) -> None
     antes = len(gestor.historial(trabajo))
     esperar_hasta(lambda: len(gestor.historial(trabajo)) > antes + 3)
     assert gestor.obtener(trabajo)["estado"] == "en_marcha"
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
 
 
 def numero(imagen: bytes) -> int:
@@ -353,7 +353,7 @@ def test_las_imagenes_llegan_en_binario_y_en_orden(app_y_gestor) -> None:
     with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
         leer(ws), leer(ws)
         imagenes = leer_hasta(ws, lambda m: isinstance(m, bytes) and numero(m) >= 20)
-        ws.send_json({"tipo": "fin"})
+        ws.send_json({"tipo": "finalizar"})
         resto, _ = leer_hasta_cierre(ws)
     numeros = [numero(m) for m in imagenes + resto if isinstance(m, bytes)]
     # Pueden saltarse imágenes si el navegador va lento, pero nunca van hacia atrás.
@@ -416,3 +416,61 @@ def test_cola_envio_conserva_el_orden_de_los_eventos() -> None:
         return sacados + [vacia, await cola.sacar()]
 
     assert asyncio.run(probar()) == [b"imagen-1", progreso, estado, True, b"imagen-2"]
+
+
+# --- Protocolo único: eventos propios y órdenes por tipo ----------------------------------
+
+def test_los_eventos_propios_llegan_en_directo_y_al_reconectar(app_y_gestor) -> None:
+    cliente, gestor = app_y_gestor
+    trabajo = gestor.crear("sesion", "tareas_app:eventos_propios", interactivo=True)["id"]
+    esperar_hasta(lambda: len(gestor.eventos_propios(trabajo)) == 2)
+    with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
+        _, historial = leer(ws), leer(ws)
+        ws.send_json({"tipo": "finalizar"})
+        resto, codigo = leer_hasta_cierre(ws)
+    assert codigo == 1000
+    assert [e["partida"]["indice"] for e in historial["eventos"]] == [0, 1]
+    assert historial["eventos"][0] == {"tipo": "partida_terminada", "partida": {
+        "indice": 0, "pasos": 10, "retorno": 1.5, "semilla": 7}}
+    en_directo = [m for m in resto if m["tipo"] == "partida_terminada"]
+    # Llega tal cual, sin su número interno.
+    assert en_directo == [{"tipo": "partida_terminada", "partida": {
+        "indice": 2, "pasos": 3, "retorno": 0.0, "semilla": 8}}]
+    assert es_estado("terminado")(resto[-1])
+
+
+def test_una_sesion_acepta_acciones_y_un_entrenamiento_no(app_y_gestor) -> None:
+    cliente, gestor = app_y_gestor
+    sesion = contar(gestor, interactivo=True)
+    with cliente.websocket_connect(f"/api/trabajos/{sesion}") as ws:
+        leer(ws), leer(ws)
+        ws.send_json({"tipo": "accion", "accion": 1})
+        ws.send_json({"tipo": "accion", "accion": None})
+        ws.send_json({"tipo": "vista", "activa": True})  # no vale en una sesión
+        error = leer_hasta(ws, lambda m: m["tipo"] == "error")[-1]
+        assert "no válida para un trabajo de tipo sesion" in error["mensaje"]
+        ws.send_json({"tipo": "finalizar"})
+        resto, _ = leer_hasta_cierre(ws)
+    assert resto[-1]["trabajo"]["resultado"]["ordenes"] == [
+        {"tipo": "accion", "accion": 1}, {"tipo": "accion", "accion": None},
+        {"tipo": "finalizar"}]
+
+
+@pytest.mark.parametrize("orden, mensaje", [
+    ({"tipo": "accion", "accion": 1}, "no válida para un trabajo de tipo entrenamiento"),
+    ({"tipo": "vista"}, "activa"),
+    ({"tipo": "vista", "activa": "si"}, "activa"),
+])
+def test_una_orden_que_no_vale_no_llega_al_trabajo(app_y_gestor, orden, mensaje) -> None:
+    cliente, gestor = app_y_gestor
+    trabajo = contar(gestor)
+    with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
+        leer(ws), leer(ws)
+        ws.send_json(orden)
+        error = leer_hasta(ws, lambda m: m["tipo"] == "error")[-1]
+        assert mensaje in error["mensaje"]
+        ws.send_json({"tipo": "vista", "activa": True})
+        ws.send_json({"tipo": "finalizar"})
+        resto, _ = leer_hasta_cierre(ws)
+    assert resto[-1]["trabajo"]["resultado"]["ordenes"] == [
+        {"tipo": "vista", "activa": True}, {"tipo": "finalizar"}]

@@ -1,8 +1,9 @@
 """Rutas de los trabajos: listarlos, consultarlos, controlarlos y seguirlos en directo.
 
-No hay una ruta genérica para crear trabajos: los crean las rutas de cada
-funcionalidad (sesiones, entrenamientos, comparaciones), que deciden qué función
-ejecuta cada uno. Así el navegador nunca elige qué código importa el servidor.
+Es el protocolo único de todos los trabajos (ver contrato.py). No hay una ruta
+genérica para crearlos: los crean las rutas de cada funcionalidad (sesiones,
+entrenamientos, comparaciones), que deciden qué función ejecuta cada uno. Así el
+navegador nunca elige qué código importa el servidor.
 
 HTTP (prefijo /api):
 
@@ -18,17 +19,19 @@ sesión no encuentra hueco.
 WebSocket ``/api/trabajos/{id}``, para seguir un trabajo y reconectarse a mitad:
 
 - Al conectar, el servidor manda ``{"tipo": "estado", "trabajo": ...}``, después
-  ``{"tipo": "historial", "progreso": [...]}`` con todo el progreso hasta ese
-  momento y, si la hay, la última imagen. Con eso el navegador redibuja todo.
+  ``{"tipo": "historial", "progreso": [...], "eventos": [...]}`` con todo el progreso
+  y los eventos propios hasta ese momento y, si la hay, la última imagen. Con eso el
+  navegador redibuja todo.
 - Después, en directo: ``{"tipo": "progreso", "medidas": {...}}``, cada imagen como
-  mensaje binario (JPEG; si el navegador va lento, solo la más reciente) y
-  ``{"tipo": "estado", "trabajo": ...}`` en cada cambio de estado.
+  mensaje binario (JPEG; si el navegador va lento, solo la más reciente),
+  ``{"tipo": "estado", "trabajo": ...}`` en cada cambio de estado y los eventos propios
+  de la funcionalidad tal cual (por ejemplo ``{"tipo": "partida_terminada", ...}``).
 - Cuando el trabajo termina, falla o se cancela, manda ese último estado y cierra
   la conexión normalmente (código 1000).
 - Del navegador: ``{"tipo": "pausar"}``, ``{"tipo": "reanudar"}`` y
-  ``{"tipo": "cancelar"}``. Cualquier otro mensaje con ``tipo`` se pasa tal cual al
-  trabajo como orden (por ejemplo ``{"tipo": "vista", "activa": true}``,
-  ``{"tipo": "finalizar"}`` o la acción de una sesión de juego).
+  ``{"tipo": "cancelar"}`` para cualquier trabajo, y las órdenes de su tipo
+  (``ORDENES_POR_TIPO`` en contrato.py: ``accion`` y ``finalizar`` en una sesión,
+  ``vista`` y ``finalizar`` en un entrenamiento), que se validan y se pasan al trabajo.
 - Un mensaje que no vale recibe ``{"tipo": "error", "mensaje": ...}`` y la conexión
   sigue. Si el trabajo no existe, se manda ese error y se cierra con el código 4404.
 - Cerrar la conexión no afecta a un entrenamiento, que sigue y admite reconectarse;
@@ -46,14 +49,12 @@ import math
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
 
-from src.app.trabajos import (ESTADOS_FINALES, EstadoTrabajo, GestorTrabajos,
-                              OperacionNoValida, TrabajoDesconocido)
+from src.app.contrato import CONTROLES, TrabajoApi, validar_orden
+from src.app.trabajos import ESTADOS_FINALES, GestorTrabajos, OperacionNoValida, TrabajoDesconocido
 
 # Código de cierre del WebSocket cuando el trabajo no existe (4000-4999: de la aplicación).
 CIERRE_NO_EXISTE = 4404
-CONTROLES = ("pausar", "reanudar", "cancelar")
 _IMAGEN = object()  # marca en la cola de envío: «hay una imagen nueva»
 _FINALES = {estado.value for estado in ESTADOS_FINALES}
 
@@ -92,22 +93,6 @@ class ColaEnvio:
             self._imagen_pendiente = False
             return self._imagen
         return evento
-
-
-class TrabajoApi(BaseModel):
-    """Datos públicos de un trabajo."""
-
-    id: str
-    tipo: str
-    estado: EstadoTrabajo
-    argumentos: dict[str, Any]
-    interactivo: bool
-    creado: float
-    iniciado: float | None
-    terminado: float | None
-    progresos: int
-    resultado: dict[str, Any] | None
-    error: str | None
 
 
 def a_json_finito(valor: Any) -> Any:
@@ -212,7 +197,8 @@ async def seguir_trabajo(websocket: WebSocket, gestor: GestorTrabajos, id_trabaj
     acabado = False
     try:
         await _enviar_json(websocket, {"tipo": "estado", "trabajo": foto["trabajo"]})
-        await _enviar_json(websocket, {"tipo": "historial", "progreso": foto["historial"]})
+        await _enviar_json(websocket, {"tipo": "historial", "progreso": foto["historial"],
+                                       "eventos": foto["eventos"]})
         if foto["imagen"] is not None:
             await websocket.send_bytes(foto["imagen"])
         if foto["trabajo"]["estado"] in _FINALES:
@@ -220,7 +206,8 @@ async def seguir_trabajo(websocket: WebSocket, gestor: GestorTrabajos, id_trabaj
             await websocket.close()
             return
         enviar = asyncio.create_task(_enviar_eventos(websocket, cola))
-        recibir = asyncio.create_task(_recibir_controles(websocket, gestor, id_trabajo))
+        recibir = asyncio.create_task(_recibir_controles(websocket, gestor, id_trabajo,
+                                                         foto["trabajo"]["tipo"]))
         try:
             hechas, _ = await asyncio.wait({enviar, recibir},
                                            return_when=asyncio.FIRST_COMPLETED)
@@ -261,11 +248,17 @@ async def _enviar_eventos(websocket: WebSocket, cola: ColaEnvio) -> None:
             await _enviar_json(websocket, {"tipo": "estado", "trabajo": evento["trabajo"]})
             if evento["trabajo"]["estado"] in _FINALES:
                 return
+        else:  # evento propio de la funcionalidad, tal cual (sin su número interno)
+            await _enviar_json(websocket, {k: v for k, v in evento.items() if k != "n"})
 
 
 async def _recibir_controles(websocket: WebSocket, gestor: GestorTrabajos,
-                             id_trabajo: str) -> None:
-    """Atiende los mensajes del navegador hasta que cierra la conexión."""
+                             id_trabajo: str, tipo_trabajo: str) -> None:
+    """Atiende los mensajes del navegador hasta que cierra la conexión.
+
+    Los controles comunes van al gestor; las órdenes se validan con las de su tipo de
+    trabajo (validar_orden) y se pasan al trabajo.
+    """
     while True:
         try:
             texto = await websocket.receive_text()
@@ -285,6 +278,6 @@ async def _recibir_controles(websocket: WebSocket, gestor: GestorTrabajos,
             if tipo in CONTROLES:
                 getattr(gestor, tipo)(id_trabajo)
             else:
-                gestor.enviar_orden(id_trabajo, mensaje)
+                gestor.enviar_orden(id_trabajo, validar_orden(tipo_trabajo, mensaje))
         except (OperacionNoValida, TrabajoDesconocido, ValueError) as error:
             await _enviar_json(websocket, {"tipo": "error", "mensaje": str(error)})

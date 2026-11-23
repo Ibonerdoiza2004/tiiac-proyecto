@@ -414,16 +414,28 @@ el código: con la API en marcha, la documentación de las rutas sale en `/docs`
 
 Todo lo pesado (jugar, entrenar, comparar) corre como un *trabajo*, en su propio proceso,
 con como mucho `experimento.procesos` a la vez; los demás esperan en cola, salvo las
-sesiones de jugar, que sin hueco se rechazan (503). `GET /api/trabajos` los lista y
-`/api/trabajos/{id}` admite pausar, reanudar y cancelar. Para seguir uno en directo, el
-WebSocket `/api/trabajos/{id}`:
+sesiones de jugar, que sin hueco se rechazan (503). La API sigue una convención única
+(`src/app/contrato.py`): cada funcionalidad tiene su ruta para crear y todo lo demás es
+común a cualquier trabajo.
 
-| Sentido | Mensaje |
+| Ruta | Para qué |
 |---|---|
-| Al conectar | `{"tipo": "estado", "trabajo"}`, `{"tipo": "historial", "progreso": [...]}` con todo lo anterior y la última imagen |
-| En directo | `{"tipo": "progreso", "medidas"}`, imágenes JPEG en binario (si el navegador va lento, solo la última) y `{"tipo": "estado", "trabajo"}` |
-| Al terminar | El último estado y cierre normal (1000); 4404 si el trabajo no existe |
-| Del navegador | `{"tipo": "pausar" \| "reanudar" \| "cancelar"}`; cualquier otro `tipo` llega al trabajo como orden |
+| `GET /api/estado` | Entornos, trabajos a la vez y huecos libres |
+| `GET /api/laboratorio/{entorno}` | Velocidad del entorno, si se juega a mano y partidas por defecto |
+| `GET /api/laboratorio/{entorno}/ajustes/{metodo}` | Hiperparámetros del formulario (experto, bc o gail) con los valores del perfil; textos, nivel y rangos en `configs/dashboard.yaml` |
+| `POST /api/sesiones` | Jugar a mano o ver al experto (llega con `laboratorio-jugar-api`; hasta entonces valida y responde 501) |
+| `POST /api/sesiones/{id}/guardar` | Guardar partidas y tramos de una sesión y cerrarla (ídem) |
+| `POST /api/entrenamientos` | Entrenar un experto, BC o GAIL (llega con `laboratorio-entrenar-api`; ídem) |
+| `GET /api/trabajos`, `GET /api/trabajos/{id}` | Listar y consultar trabajos |
+| `POST /api/trabajos/{id}/pausar`, `/reanudar`, `/cancelar` | Controlar cualquier trabajo |
+| WebSocket `/api/trabajos/{id}` | Seguir cualquier trabajo en directo |
+
+| WebSocket | Mensaje |
+|---|---|
+| Al conectar | `{"tipo": "estado", "trabajo"}`, `{"tipo": "historial", "progreso": [...], "eventos": [...]}` con todo lo anterior y la última imagen |
+| En directo | `{"tipo": "progreso", "medidas"}`, imágenes JPEG en binario (si el navegador va lento, solo la última), `{"tipo": "estado", "trabajo"}` y los eventos propios de cada funcionalidad, como `{"tipo": "partida_terminada", "partida"}` |
+| Al terminar | El último estado, con el resultado, y cierre normal (1000); 4404 si el trabajo no existe |
+| Del navegador | `pausar`, `reanudar` y `cancelar` en cualquier trabajo; `accion` y `finalizar` en una sesión; `vista` y `finalizar` en un entrenamiento |
 
 Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder ni repetir
 progreso; una sesión de jugar, en cambio, se descarta.

@@ -110,7 +110,7 @@ def test_con_el_limite_lleno_los_demas_esperan_en_cola_por_orden(crear_gestor) -
     assert segundo["estado"] == tercero["estado"] == "en_cola"
     assert segundo["iniciado"] is None
     assert gestor.libres() == 0
-    gestor.enviar_orden(primero, {"tipo": "fin"})
+    gestor.enviar_orden(primero, {"tipo": "finalizar"})
     finales = [gestor.esperar(t, LIMITE) for t in (primero, segundo["id"], tercero["id"])]
     assert [f["estado"] for f in finales] == ["terminado"] * 3
     # Por orden de llegada: cada uno empieza cuando acaba el anterior.
@@ -125,10 +125,10 @@ def test_varios_a_la_vez_hasta_el_limite(crear_gestor) -> None:
     c = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
     assert [gestor.obtener(t)["estado"] for t in (a, b)] == ["en_marcha"] * 2
     assert c["estado"] == "en_cola"
-    gestor.enviar_orden(b, {"tipo": "fin"})
+    gestor.enviar_orden(b, {"tipo": "finalizar"})
     assert gestor.esperar(c["id"], LIMITE)["estado"] == "terminado"
     assert gestor.obtener(a)["estado"] == "en_marcha"
-    gestor.enviar_orden(a, {"tipo": "fin"})
+    gestor.enviar_orden(a, {"tipo": "finalizar"})
     gestor.esperar(a, LIMITE)
 
 
@@ -138,7 +138,7 @@ def test_un_interactivo_sin_hueco_se_rechaza_y_con_hueco_empieza(crear_gestor) -
     with pytest.raises(SinHueco, match="No hay núcleos libres"):
         gestor.crear("sesion", "tareas_app:sumar", {"numeros": [1]}, interactivo=True)
     assert len(gestor.listar()) == 1  # el rechazado no queda registrado
-    gestor.enviar_orden(entrenamiento, {"tipo": "fin"})
+    gestor.enviar_orden(entrenamiento, {"tipo": "finalizar"})
     gestor.esperar(entrenamiento, LIMITE)
     sesion = gestor.crear("sesion", "tareas_app:sumar", {"numeros": [1]}, interactivo=True)
     assert sesion["estado"] == "en_marcha"
@@ -150,7 +150,7 @@ def test_una_sesion_ocupa_hueco_y_los_entrenamientos_esperan(crear_gestor) -> No
     sesion = gestor.crear("sesion", "tareas_app:contar_hasta_orden", interactivo=True)
     entrenamiento = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
     assert entrenamiento["estado"] == "en_cola"
-    gestor.enviar_orden(sesion["id"], {"tipo": "fin"})
+    gestor.enviar_orden(sesion["id"], {"tipo": "finalizar"})
     assert gestor.esperar(entrenamiento["id"], LIMITE)["estado"] == "terminado"
 
 
@@ -166,7 +166,7 @@ def test_en_pausa_no_avanza_y_al_reanudar_sigue(crear_gestor) -> None:
     assert len(gestor.historial(trabajo)) == antes
     assert gestor.reanudar(trabajo)["estado"] == "en_marcha"
     esperar_hasta(lambda: len(gestor.historial(trabajo)) > antes + 2)
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
     assert gestor.esperar(trabajo, LIMITE)["estado"] == "terminado"
     # Sigue donde estaba: los pasos no se saltan ni se repiten.
     pasos = [p["paso"] for p in gestor.historial(trabajo)]
@@ -182,7 +182,7 @@ def test_en_pausa_sigue_ocupando_su_hueco(crear_gestor) -> None:
     with pytest.raises(SinHueco):
         gestor.crear("sesion", "tareas_app:sumar", {"numeros": [1]}, interactivo=True)
     gestor.reanudar(trabajo)
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
     assert gestor.esperar(otro["id"], LIMITE)["estado"] == "terminado"
 
 
@@ -191,12 +191,12 @@ def test_las_ordenes_esperan_mientras_esta_en_pausa(crear_gestor) -> None:
     trabajo = contar(gestor)
     gestor.pausar(trabajo)
     gestor.enviar_orden(trabajo, {"tipo": "vista", "activa": True})
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
     time.sleep(0.3)
     assert gestor.obtener(trabajo)["estado"] == "pausado"
     gestor.reanudar(trabajo)
     final = gestor.esperar(trabajo, LIMITE)
-    assert final["resultado"]["ordenes"] == [{"tipo": "vista", "activa": True}, {"tipo": "fin"}]
+    assert final["resultado"]["ordenes"] == [{"tipo": "vista", "activa": True}, {"tipo": "finalizar"}]
     # Al reanudar, una sola llamada a ordenes() devuelve todas las que esperaban.
     assert final["resultado"]["lotes"] == [2]
 
@@ -211,7 +211,7 @@ def test_pausar_o_reanudar_en_otro_estado_no_es_valido(crear_gestor, accion, est
     assert gestor.obtener(objetivo)["estado"] == estado
     with pytest.raises(OperacionNoValida, match=accion):
         getattr(gestor, accion)(objetivo)
-    gestor.enviar_orden(primero, {"tipo": "fin"})
+    gestor.enviar_orden(primero, {"tipo": "finalizar"})
 
 
 def test_pausar_dos_veces_no_es_valido(crear_gestor) -> None:
@@ -221,7 +221,7 @@ def test_pausar_dos_veces_no_es_valido(crear_gestor) -> None:
     with pytest.raises(OperacionNoValida, match="pausado"):
         gestor.pausar(trabajo)
     gestor.reanudar(trabajo)
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
 
 
 # --- Cancelar ----------------------------------------------------------------------
@@ -231,7 +231,7 @@ def test_cancelar_uno_en_cola_no_lo_arranca_nunca(crear_gestor) -> None:
     primero = contar(gestor)
     en_cola = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
     assert gestor.cancelar(en_cola["id"])["estado"] == "cancelado"
-    gestor.enviar_orden(primero, {"tipo": "fin"})
+    gestor.enviar_orden(primero, {"tipo": "finalizar"})
     gestor.esperar(primero, LIMITE)
     final = gestor.obtener(en_cola["id"])
     assert final["estado"] == "cancelado"
@@ -275,7 +275,7 @@ def test_cancelar_dos_veces_no_es_valido(crear_gestor) -> None:
     with pytest.raises(OperacionNoValida):
         gestor.pausar(trabajo)
     with pytest.raises(OperacionNoValida):
-        gestor.enviar_orden(trabajo, {"tipo": "fin"})
+        gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
 
 
 # --- Fallos ------------------------------------------------------------------------
@@ -313,7 +313,7 @@ def test_las_ordenes_llegan_en_orden(crear_gestor) -> None:
     gestor = crear_gestor()
     trabajo = contar(gestor)
     ordenes = [{"tipo": "vista", "activa": True}, {"tipo": "vista", "activa": False},
-               {"tipo": "fin"}]
+               {"tipo": "finalizar"}]
     for orden in ordenes:
         gestor.enviar_orden(trabajo, orden)
     assert gestor.esperar(trabajo, LIMITE)["resultado"]["ordenes"] == ordenes
@@ -324,13 +324,13 @@ def test_una_orden_a_un_trabajo_acabado_o_en_cola_no_es_valida(crear_gestor) -> 
     primero = contar(gestor)
     en_cola = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
     with pytest.raises(OperacionNoValida, match="en_cola"):
-        gestor.enviar_orden(en_cola["id"], {"tipo": "fin"})
+        gestor.enviar_orden(en_cola["id"], {"tipo": "finalizar"})
     with pytest.raises(ValueError, match="diccionario"):
         gestor.enviar_orden(primero, "fin")
-    gestor.enviar_orden(primero, {"tipo": "fin"})
+    gestor.enviar_orden(primero, {"tipo": "finalizar"})
     gestor.esperar(primero, LIMITE)
     with pytest.raises(OperacionNoValida, match="terminado"):
-        gestor.enviar_orden(primero, {"tipo": "fin"})
+        gestor.enviar_orden(primero, {"tipo": "finalizar"})
 
 
 def test_las_imagenes_llegan_y_se_guarda_la_ultima(crear_gestor) -> None:
@@ -408,7 +408,7 @@ def test_los_estados_de_cada_trabajo_llegan_en_orden(crear_gestor) -> None:
     esperar_hasta(lambda: len(gestor.historial(pausado)) >= 3)
     gestor.pausar(pausado)
     gestor.reanudar(pausado)
-    gestor.enviar_orden(pausado, {"tipo": "fin"})
+    gestor.enviar_orden(pausado, {"tipo": "finalizar"})
     for id_ in [*ids, pausado]:
         gestor.esperar(id_, LIMITE)
     esperar_hasta(lambda: all(estados.get(i, [""])[-1] == "terminado" for i in [*ids, pausado]))
@@ -495,7 +495,7 @@ def test_un_id_desconocido_da_trabajo_desconocido(crear_gestor, accion) -> None:
     with pytest.raises(TrabajoDesconocido):
         getattr(crear_gestor(), accion)("no-existe")
     with pytest.raises(TrabajoDesconocido):
-        crear_gestor().enviar_orden("no-existe", {"tipo": "fin"})
+        crear_gestor().enviar_orden("no-existe", {"tipo": "finalizar"})
 
 
 def test_esperar_con_plazo_lanza_timeout(crear_gestor) -> None:
@@ -503,7 +503,7 @@ def test_esperar_con_plazo_lanza_timeout(crear_gestor) -> None:
     trabajo = contar(gestor)
     with pytest.raises(TimeoutError, match="en_marcha"):
         gestor.esperar(trabajo, 0.1)
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
 
 
 # --- Suscripción (reconectarse a mitad) ------------------------------------------------
@@ -522,7 +522,7 @@ def test_suscribirse_a_mitad_no_pierde_ni_repite_progreso(crear_gestor, espera) 
     foto, dejar = gestor.suscribir(trabajo, recibidos.append)
     assert foto["trabajo"]["estado"] == "en_marcha"
     esperar_hasta(lambda: sum(e["tipo"] == "progreso" for e in recibidos) >= 5)
-    gestor.enviar_orden(trabajo, {"tipo": "fin"})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
     gestor.esperar(trabajo, LIMITE)
     esperar_hasta(lambda: any(e["tipo"] == "estado" and e["trabajo"]["estado"] == "terminado"
                               for e in recibidos))
@@ -562,7 +562,7 @@ def test_la_suscripcion_solo_recibe_su_trabajo_y_se_puede_quitar(crear_gestor) -
     assert len(recibidos) <= cuantos + 1  # como mucho el que ya se estaba repartiendo
     assert all(e["tipo"] == "progreso" for e in recibidos)
     for trabajo in (a, b):
-        gestor.enviar_orden(trabajo, {"tipo": "fin"})
+        gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
 
 
 def test_los_eventos_de_cada_trabajo_van_numerados_desde_1(crear_gestor) -> None:
@@ -581,3 +581,43 @@ def test_los_eventos_de_cada_trabajo_van_numerados_desde_1(crear_gestor) -> None
 def test_suscribirse_a_un_desconocido_falla(crear_gestor) -> None:
     with pytest.raises(TrabajoDesconocido):
         crear_gestor().suscribir("no-existe", lambda e: None)
+
+
+
+# --- Eventos propios de la tarea -----------------------------------------------------
+
+def test_los_eventos_propios_se_guardan_y_se_reparten(crear_gestor) -> None:
+    gestor = crear_gestor()
+    recibidos = []
+    gestor.observar(lambda id_, e: recibidos.append(e) if e["tipo"] == "partida_terminada"
+                    else None)
+    trabajo = gestor.crear("sesion", "tareas_app:eventos_propios")["id"]
+    esperar_hasta(lambda: len(gestor.eventos_propios(trabajo)) == 2)
+    foto, dejar = gestor.suscribir(trabajo, lambda e: None)
+    dejar()
+    assert [e["partida"]["indice"] for e in foto["eventos"]] == [0, 1]
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
+    assert gestor.esperar(trabajo, LIMITE)["resultado"] == {"partidas": 3}
+    esperar_hasta(lambda: len(recibidos) == 3)
+    assert [e["partida"]["indice"] for e in recibidos] == [0, 1, 2]
+    assert [e["partida"]["indice"] for e in gestor.eventos_propios(trabajo)] == [0, 1, 2]
+    assert gestor.historial(trabajo) == [{"paso": 1}]  # el progreso va aparte
+
+
+@pytest.mark.parametrize("tipo, datos, error", [
+    ("progreso", None, "Tipo de evento no válido"),
+    ("estado", None, "Tipo de evento no válido"),
+    ("historial", None, "Tipo de evento no válido"),
+    ("imagen", None, "Tipo de evento no válido"),
+    ("error", None, "Tipo de evento no válido"),
+    ("", None, "Tipo de evento no válido"),
+    (3, None, "Tipo de evento no válido"),
+    ("mio", {"tipo": "x"}, "claves «tipo» ni «n»"),
+    ("mio", {"n": 1}, "claves «tipo» ni «n»"),
+])
+def test_un_evento_que_no_vale_hace_fallar_la_tarea(crear_gestor, tipo, datos, error) -> None:
+    gestor = crear_gestor()
+    final = gestor.esperar(gestor.crear("entrenamiento", "tareas_app:evento_no_valido",
+                                        {"tipo": tipo, "datos": datos})["id"], LIMITE)
+    assert final["estado"] == "fallido"
+    assert error in final["error"]

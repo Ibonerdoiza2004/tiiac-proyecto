@@ -24,7 +24,7 @@ def sumar(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
 
 
 def contar_hasta_orden(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
-    """Cuenta pasos sin parar, con un progreso por paso, hasta recibir {"tipo": "fin"}."""
+    """Cuenta pasos sin parar, con un progreso por paso, hasta recibir {"tipo": "finalizar"}."""
     recibidas = []
     lotes = []  # cuántas órdenes devolvió cada llamada que trajo alguna
     paso = 0
@@ -34,7 +34,7 @@ def contar_hasta_orden(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]
             lotes.append(len(nuevas))
         for orden in nuevas:
             recibidas.append(orden)
-            if orden.get("tipo") == "fin":
+            if orden.get("tipo") == "finalizar":
                 return {"pasos": paso, "ordenes": recibidas, "lotes": lotes}
         canal.progreso({"paso": paso})
         paso += 1
@@ -88,10 +88,10 @@ no_es_funcion = 3
 
 
 def imagenes_hasta_orden(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
-    """Manda una imagen numerada por paso, sin parar, hasta recibir {"tipo": "fin"}."""
+    """Manda una imagen numerada por paso, sin parar, hasta recibir {"tipo": "finalizar"}."""
     paso = 0
     while True:
-        if any(orden.get("tipo") == "fin" for orden in canal.ordenes()):
+        if any(orden.get("tipo") == "finalizar" for orden in canal.ordenes()):
             return {"imagenes": paso}
         canal.imagen(f"imagen-{paso}".encode())
         paso += 1
@@ -102,3 +102,22 @@ def progreso_no_finito(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]
     """Manda medidas que JSON no admite (NaN e infinito) y termina."""
     canal.progreso({"nan": float("nan"), "infinito": float("inf"), "normal": 1.5})
     return {"perdida": float("nan")}
+
+
+def eventos_propios(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
+    """Emite dos partidas terminadas, un progreso y espera a {"tipo": "finalizar"}."""
+    for i in range(2):
+        canal.evento("partida_terminada", {"partida": {"indice": i, "pasos": 10 + i,
+                                                       "retorno": 1.5, "semilla": 7}})
+    canal.progreso({"paso": 1})
+    while not any(o.get("tipo") == "finalizar" for o in canal.ordenes()):
+        time.sleep(PAUSA)
+    canal.evento("partida_terminada", {"partida": {"indice": 2, "pasos": 3, "retorno": 0.0,
+                                                   "semilla": 8}})
+    return {"partidas": 3}
+
+
+def evento_no_valido(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
+    """Intenta emitir un evento con un tipo o unos datos que no valen."""
+    canal.evento(argumentos["tipo"], argumentos.get("datos"))
+    return {}

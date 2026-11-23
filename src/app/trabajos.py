@@ -58,6 +58,9 @@ from typing import Any
 VARIABLES_UN_HILO = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 # Segundos que se espera a que un proceso termine tras pedírselo antes de matarlo.
 ESPERA_TERMINAR = 5.0
+# Tipos de mensaje que usa el propio protocolo: una tarea no puede emitir eventos con
+# ellos (CanalTrabajo.evento).
+TIPOS_RESERVADOS = frozenset({"estado", "historial", "progreso", "imagen", "error"})
 
 
 class EstadoTrabajo(str, Enum):
@@ -115,6 +118,27 @@ class CanalTrabajo:
             medidas: Diccionario que se pueda pasar por una tubería (pickle).
         """
         self._mensajes.send(("progreso", dict(medidas)))
+
+    def evento(self, tipo: str, datos: Mapping[str, Any] | None = None) -> None:
+        """Envía un evento propio de la funcionalidad, como ``partida_terminada``.
+
+        Llega al navegador tal cual, ``{"tipo": tipo, **datos}``, y se guarda para
+        quien se reconecte.
+
+        Args:
+            tipo: Nombre del evento; no puede ser uno de TIPOS_RESERVADOS.
+            datos: Contenido; no puede usar las claves «tipo» ni «n».
+
+        Raises:
+            ValueError: Si el tipo o los datos no son válidos.
+        """
+        if not isinstance(tipo, str) or not tipo or tipo in TIPOS_RESERVADOS:
+            raise ValueError(f"Tipo de evento no válido: {tipo!r} (reservados: "
+                             f"{', '.join(sorted(TIPOS_RESERVADOS))})")
+        datos = dict(datos or {})
+        if {"tipo", "n"} & datos.keys():
+            raise ValueError("Los datos de un evento no pueden usar las claves «tipo» ni «n»")
+        self._mensajes.send(("evento", {"tipo": tipo, **datos}))
 
     def imagen(self, datos: bytes) -> None:
         """Envía una imagen del entorno (JPEG). La API se queda solo con la última.
@@ -218,11 +242,12 @@ class _Trabajo:
     iniciado: float | None = None
     terminado: float | None = None
     progreso: list[dict[str, Any]] = field(default_factory=list)
+    propios: list[dict[str, Any]] = field(default_factory=list)  # eventos de la tarea
     resultado: dict[str, Any] | None = None
     error: str | None = None
     imagen: bytes | None = None
     cancelado: bool = False
-    eventos: int = 0  # cuántos eventos lleva; cada uno lleva su número en "n"
+    ultimo_evento: int = 0  # cuántos eventos lleva; cada uno lleva su número en "n"
     proceso: Any = None
     ordenes: Connection | None = None
 
@@ -303,6 +328,15 @@ class GestorTrabajos:
         with self._cerrojo:
             return list(self._buscar(id_trabajo).progreso)
 
+    def eventos_propios(self, id_trabajo: str) -> list[dict[str, Any]]:
+        """Los eventos propios que ha emitido la tarea (CanalTrabajo.evento), en orden.
+
+        Raises:
+            TrabajoDesconocido: Si no existe.
+        """
+        with self._cerrojo:
+            return list(self._buscar(id_trabajo).propios)
+
     def ultima_imagen(self, id_trabajo: str) -> bytes | None:
         """La última imagen que envió el trabajo, o None.
 
@@ -343,8 +377,8 @@ class GestorTrabajos:
         """Registra una función que recibe (id, evento) de todos los trabajos.
 
         Los eventos son ``{"tipo": "estado", "trabajo": datos públicos}``,
-        ``{"tipo": "progreso", "medidas": ...}`` e ``{"tipo": "imagen", "datos": bytes}``,
-        y cada uno lleva ``"n"``: su número dentro del trabajo (1, 2, 3...). Se llaman desde un único hilo repartidor, en el orden en que ocurrieron y sin
+        ``{"tipo": "progreso", "medidas": ...}``, ``{"tipo": "imagen", "datos": bytes}``
+        y los propios de la tarea (``{"tipo": "partida_terminada", ...}``), y cada uno lleva ``"n"``: su número dentro del trabajo (1, 2, 3...). Se llaman desde un único hilo repartidor, en el orden en que ocurrieron y sin
         el cerrojo tomado: tienen que ser rápidos (si lanzan una excepción, se ignora).
 
         Returns:
@@ -378,7 +412,8 @@ class GestorTrabajos:
             observador: Recibe cada evento posterior del trabajo, desde el repartidor.
 
         Returns:
-            ``({"trabajo", "historial", "imagen"}, dejar)``: la foto y la función que
+            ``({"trabajo", "historial", "eventos", "imagen"}, dejar)``: la foto (con el
+            progreso y los eventos propios de la tarea hasta ahora) y la función que
             deja de observar.
 
         Raises:
@@ -387,8 +422,8 @@ class GestorTrabajos:
         with self._cerrojo:
             trabajo = self._buscar(id_trabajo)
             foto = {"trabajo": trabajo.describir(), "historial": list(trabajo.progreso),
-                    "imagen": trabajo.imagen}
-            visto = trabajo.eventos
+                    "eventos": list(trabajo.propios), "imagen": trabajo.imagen}
+            visto = trabajo.ultimo_evento
 
             def filtrar(id_evento: str, evento: Evento) -> None:
                 """Pasa solo los eventos de este trabajo posteriores a la foto."""
@@ -400,8 +435,8 @@ class GestorTrabajos:
 
     def _encolar(self, trabajo: _Trabajo, evento: Evento) -> None:
         """Numera el evento y lo deja para el repartidor. Con el cerrojo tomado."""
-        trabajo.eventos += 1
-        self._eventos.put((trabajo.id, {**evento, "n": trabajo.eventos}))
+        trabajo.ultimo_evento += 1
+        self._eventos.put((trabajo.id, {**evento, "n": trabajo.ultimo_evento}))
 
     def _encolar_estado(self, trabajo: _Trabajo) -> None:
         """Deja un evento con el estado actual del trabajo. Con el cerrojo tomado."""
@@ -519,6 +554,10 @@ class GestorTrabajos:
                     with self._cerrojo:
                         trabajo.progreso.append(contenido)
                         self._encolar(trabajo, {"tipo": "progreso", "medidas": contenido})
+                elif clase == "evento":
+                    with self._cerrojo:
+                        trabajo.propios.append(contenido)
+                        self._encolar(trabajo, contenido)
                 elif clase == "resultado":
                     resultado = contenido
                 elif clase == "error":
