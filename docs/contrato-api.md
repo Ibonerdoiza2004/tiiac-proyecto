@@ -57,3 +57,50 @@ Comportamiento acordado en el plan (sección 2 y rama 8):
 - Al jugar a mano, cuando acaba una partida empieza otra con una semilla nueva.
 - La partida en curso al finalizar no se guarda: el formato de las demostraciones exige
   que la última transición termine o se trunque.
+
+# Contrato de la API: entrenamiento
+
+Propuesta para acordar entre `laboratorio-entrenar-web` y `laboratorio-entrenar-api`, igual
+que la de arriba: el frontend la usa contra el backend simulado y todo está también en
+`web/src/api/entrenamiento.js`. Las rutas cuelgan de `/api`.
+
+## HTTP
+
+| Método y ruta | Cuerpo | Respuesta |
+|---|---|---|
+| `GET /laboratorio/{entorno}/ajustes/{metodo}` | | `{metodo, duracion: {unidad, total}, secciones}` |
+| `GET /biblioteca/demostraciones?entorno={entorno}` | | `[{id, nombre, tipo, partidas, pares, fuente}]` |
+| `POST /entrenamientos` | `{entorno, metodo, ajustes, datos?, vista, wandb}` | `{id, entorno, metodo, duracion: {unidad, total}}` |
+
+- `metodo` es `experto`, `bc` o `gail`.
+- `secciones` son los hiperparámetros del perfil resuelto: `[{clave, campos: [{clave, tipo,
+  valor, min?, opciones?, ayuda?}]}]`. La clave de la sección es su ruta en `configs/`
+  (`bc`, `trpo`, `gail`, `gail.discriminador`, `demostraciones`, `experto`, y
+  `experto.trpo` con los valores de `trpo` que usa el experto). `tipo` es `entero`, `real`,
+  `booleano`, `opcion` o `lista_enteros`, y `ayuda`, de dónde sale el valor.
+- `ajustes` lleva solo lo que cambia el usuario, anidado como en `configs/`, por ejemplo
+  `{"gail": {"discriminador": {"learning_rate": 0.02}}}`: es una capa más sobre el perfil.
+- `datos` son los `id` de los conjuntos y subconjuntos elegidos (obligatorio en BC y
+  GAIL); los pares repetidos se cuentan una vez.
+- `vista` solo se admite en experto y GAIL; `wandb` es `false` por defecto.
+- `duracion` es lo que mide el progreso: `pasos` en el experto, `epocas` en BC e
+  `iteraciones` en GAIL.
+
+## WebSocket `/entrenamientos/{id}`
+
+Del navegador al servidor (JSON): `{"tipo": "pausar"}`, `{"tipo": "reanudar"}`,
+`{"tipo": "vista", "activa": true}` y `{"tipo": "finalizar"}`.
+
+Del servidor al navegador:
+
+| Mensaje | Contenido |
+|---|---|
+| Binario | Imágenes en JPEG de las partidas del entrenamiento, solo con la vista encendida |
+| `{"tipo": "progreso", "paso", "medidas": {nombre: valor}}` | Tras cada iteración, época o evaluación; `paso` en la unidad de `duracion` |
+| `{"tipo": "estado", "estado"}` | `en_marcha` o `pausado`, al cambiar |
+| `{"tipo": "terminado", "modelo": {nombre, incompleto}, "resumen"}` | Al acabar o tras `finalizar` (`incompleto: true`); el modelo ya está en la biblioteca |
+| `{"tipo": "error", "mensaje"}` | Cualquier fallo |
+
+Comportamiento previsto en el plan (sección 3 y rama 10): un modelo por ejecución; pausar y
+reanudar no cambian el resultado; al finalizar antes de tiempo se guarda el modelo de ese
+momento, marcado como incompleto.

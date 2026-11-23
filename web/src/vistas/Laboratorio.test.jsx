@@ -1,14 +1,17 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ENTORNOS } from '../entornos.js';
 import { apiConSocket } from '../pruebas/apiConSocket.js';
+import { crearAlmacen } from '../simulado/almacen.js';
+import { INTERVALO_SIMULADO_MS, crearApiEntrenamientoSimulada } from '../simulado/entrenamiento.js';
 import Laboratorio from './Laboratorio.jsx';
 
 const IDS = ENTORNOS.map(({ id }) => id);
 // Dominio finito: los 20 cambios posibles entre los cinco entornos.
 const CAMBIOS = IDS.flatMap((origen) => IDS.filter((d) => d !== origen).map((destino) => [origen, destino]));
 const PARTIDA = { indice: 0, pasos: 10, retorno: 10, semilla: 1 };
+const ENTRENAMIENTO = crearApiEntrenamientoSimulada({ dibujar: async () => new Blob(['x']) });
 
 const valor = (nombre) => screen.getByText(nombre).nextElementSibling;
 const pulsar = (nombre) => act(async () => {
@@ -17,7 +20,7 @@ const pulsar = (nombre) => act(async () => {
 
 async function jugarUnaPartida(origen) {
   const doble = apiConSocket();
-  const vista = render(<Laboratorio entorno={origen} api={doble.api} />);
+  const vista = render(<Laboratorio entorno={origen} api={doble.api} apiEntrenamiento={ENTRENAMIENTO} />);
   await act(async () => {});
   await pulsar('Ver agente');
   await pulsar('Ver al experto');
@@ -49,7 +52,7 @@ describe('cambio de entorno', () => {
     expect(screen.getByText(/Guardado «mio»/)).toBeInTheDocument();
     expect(screen.getByAltText(/última imagen/)).toBeInTheDocument();
 
-    vista.rerender(<Laboratorio entorno={destino} api={api} />);
+    vista.rerender(<Laboratorio entorno={destino} api={api} apiEntrenamiento={ENTRENAMIENTO} />);
     await act(async () => {});
     esperarPanelLimpio();
     expect(screen.queryByText(/Guardado «mio»/)).not.toBeInTheDocument();
@@ -60,7 +63,7 @@ describe('cambio de entorno', () => {
     act(() => socket.caer());
     expect(screen.getByRole('alert')).toHaveTextContent('Se perdió la conexión');
 
-    vista.rerender(<Laboratorio entorno="reacher" api={api} />);
+    vista.rerender(<Laboratorio entorno="reacher" api={api} apiEntrenamiento={ENTRENAMIENTO} />);
     await act(async () => {});
     esperarPanelLimpio();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -68,13 +71,13 @@ describe('cambio de entorno', () => {
 
   it('si falla la configuración del nuevo, no hereda las partidas del anterior', async () => {
     const { api, http } = apiConSocket();
-    const vista = render(<Laboratorio entorno="cartpole" api={api} />);
+    const vista = render(<Laboratorio entorno="cartpole" api={api} apiEntrenamiento={ENTRENAMIENTO} />);
     await act(async () => {});
     await pulsar('Ver agente');
     expect(screen.getByRole('spinbutton')).toHaveValue(15);
 
     http.obtener.mockRejectedValueOnce(new Error('Perfil ilegible'));
-    vista.rerender(<Laboratorio entorno="reacher" api={api} />);
+    vista.rerender(<Laboratorio entorno="reacher" api={api} apiEntrenamiento={ENTRENAMIENTO} />);
     await act(async () => {});
     expect(screen.getByRole('spinbutton')).toHaveValue(null);
     expect(screen.getByRole('alert')).toHaveTextContent('Perfil ilegible');
@@ -87,10 +90,60 @@ describe('cambio de entorno', () => {
       responder = resolver;
     }));
     http.obtener.mockResolvedValueOnce({ fps: 50, partidas_experto: 30 });
-    const vista = render(<Laboratorio entorno="cartpole" api={api} />);
-    vista.rerender(<Laboratorio entorno="reacher" api={api} />);
+    const vista = render(<Laboratorio entorno="cartpole" api={api} apiEntrenamiento={ENTRENAMIENTO} />);
+    vista.rerender(<Laboratorio entorno="reacher" api={api} apiEntrenamiento={ENTRENAMIENTO} />);
     await act(async () => {});
     await act(async () => responder({ fps: 50, partidas_experto: 15 }));
     expect(screen.getByRole('spinbutton')).toHaveValue(30);
+  });
+});
+
+describe('entrenar en los dos paneles', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const avanzar = (ms) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const clic = async (elemento) => {
+    fireEvent.click(elemento);
+    await avanzar(0);
+  };
+  const panel = (titulo) => screen.getByRole('heading', { name: titulo }).closest('article');
+
+  it('el entorno sigue bloqueado mientras cualquiera de los dos entrena', async () => {
+    const almacen = crearAlmacen();
+    const entrenamiento = crearApiEntrenamientoSimulada({ almacen, dibujar: async () => new Blob(['x']) });
+    const ocupado = vi.fn();
+    render(<Laboratorio entorno="cartpole" api={apiConSocket().api} apiEntrenamiento={entrenamiento}
+      alCambiarOcupado={ocupado} />);
+    await avanzar(0);
+    const explorar = panel('Explorar y generar');
+    const imitar = panel('Entrenar e imitar');
+
+    await clic(within(explorar).getByRole('button', { name: 'Entrenar experto' }));
+    expect(within(explorar).getByRole('form', { name: 'Entrenar Experto (TRPO)' })).toBeInTheDocument();
+    await clic(within(explorar).getByRole('button', { name: 'Entrenar Experto (TRPO)' }));
+    expect(ocupado).toHaveBeenLastCalledWith(true);
+    for (const pestana of ['Jugar tú', 'Entrenar experto', 'Ver agente']) {
+      expect(within(explorar).getByRole('button', { name: pestana })).toBeDisabled();
+    }
+
+    // GAIL más corto que el experto: dos iteraciones.
+    fireEvent.click(within(imitar).getByRole('checkbox', { name: /experto congelado/ }));
+    fireEvent.change(within(imitar).getByLabelText('iteraciones'), { target: { value: '2' } });
+    await clic(within(imitar).getByRole('button', { name: 'Entrenar GAIL' }));
+    await avanzar(INTERVALO_SIMULADO_MS * 3);
+    expect(within(imitar).getByText(/gail_cartpole_1/)).toBeInTheDocument();
+    expect(within(explorar).getByRole('button', { name: 'Finalizar' })).toBeEnabled();
+    expect(ocupado).toHaveBeenLastCalledWith(true);
+
+    await clic(within(explorar).getByRole('button', { name: 'Finalizar' }));
+    expect(within(explorar).getByText(/experto_cartpole_1/)).toBeInTheDocument();
+    expect(ocupado).toHaveBeenLastCalledWith(false);
+    expect(almacen.modelos.map((m) => m.nombre).sort()).toEqual(['experto_cartpole_1', 'gail_cartpole_1']);
   });
 });

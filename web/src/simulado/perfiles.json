@@ -1,0 +1,2616 @@
+{
+  "acrobot": {
+    "experto": {
+      "metodo": "experto",
+      "duracion": {
+        "unidad": "pasos",
+        "total": 1000000
+      },
+      "secciones": [
+        {
+          "clave": "experto",
+          "campos": [
+            {
+              "clave": "pasos_totales",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 1000000,
+              "ayuda": "Elección propia: tope del entrenamiento, que para al alcanzar el objetivo. Con el umbral de Gymnasium como objetivo, el experto lo alcanzaba en 100 000 pasos y 34 s."
+            },
+            {
+              "clave": "retorno_objetivo",
+              "tipo": "real",
+              "valor": -70,
+              "ayuda": "Elección propia: algo por encima del experto del paper (tabla 1: −75,25 ± 10,94, en Acrobot-v0) y más exigente que el umbral de Gymnasium (−100), con el que el experto paraba justo al cruzarlo."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 2,
+              "ayuda": "Cada cuantas iteraciones se evalua y con cuantos episodios. Se evalua la politica estocastica, la que graba las demostraciones; se guarda la mejor y se para al alcanzar retorno_objetivo (eleccion propia: el original usa un snapshot fijo)."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 50,
+              "ayuda": "50 partidas por evaluación, como las estadísticas del paper: con 10, la mejor de muchas evaluaciones es optimista y el experto paraba antes de tiempo."
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": false
+            }
+          ]
+        },
+        {
+          "clave": "experto.trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5000,
+              "ayuda": "Código original (min_total_sa)."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como el original."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 5000 pasos de cada iteración."
+            }
+          ]
+        }
+      ]
+    },
+    "bc": {
+      "metodo": "bc",
+      "duracion": {
+        "unidad": "epocas",
+        "total": 500
+      },
+      "secciones": [
+        {
+          "clave": "bc",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Acciones continuas: log de la desviacion tipica inicial de la gaussiana (eleccion propia; 0.0 es el valor por defecto de las politicas de SB3)."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Normalizacion de observaciones con media y desviacion de train. Componentes con desviacion <= epsilon solo se centran."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam",
+                "rmsprop",
+                "sgd"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original). Las epocas maximas y la paciencia son eleccion propia: el original entrena un numero fijo de iteraciones y se queda con el mejor snapshot."
+            },
+            {
+              "clave": "batch_size",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 128
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "epocas_maximas",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 500
+            },
+            {
+              "clave": "paciencia",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5,
+              "ayuda": "Código original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    },
+    "gail": {
+      "metodo": "gail",
+      "duracion": {
+        "unidad": "iteraciones",
+        "total": 300
+      },
+      "secciones": [
+        {
+          "clave": "gail",
+          "campos": [
+            {
+              "clave": "iteraciones",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 300,
+              "ayuda": "Paper, tabla 2 (el código original usa max_iter 301)."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia; la evaluación final usa 50."
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como evalúa el original las políticas aprendidas."
+            },
+            {
+              "clave": "recompensa",
+              "tipo": "opcion",
+              "opciones": [
+                "log_d",
+                "menos_log_uno_menos_d"
+              ],
+              "valor": "log_d",
+              "ayuda": "Código original: log D, porque las partidas terminan al levantar el brazo (cuts_off_on_success: true en im_classic_pipeline.yaml)."
+            }
+          ]
+        },
+        {
+          "clave": "gail.discriminador",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Misma arquitectura que la politica (paper, seccion 6)."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con learning rate 0.01, un paso por iteracion y peso 0.001 de la entropia en la perdida (codigo original de GAIL)."
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.01
+            },
+            {
+              "clave": "pasos_adam",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 1
+            },
+            {
+              "clave": "peso_entropia",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "normalizar_entrada",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Eleccion propia: normalizacion fija con los pares expertos de train. El original la actualiza en cada iteracion tambien con pares del agente."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            }
+          ]
+        },
+        {
+          "clave": "trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5000,
+              "ayuda": "Código original (min_total_sa)."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como el original."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 5000 pasos de cada iteración."
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5,
+              "ayuda": "Código original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "cartpole": {
+    "experto": {
+      "metodo": "experto",
+      "duracion": {
+        "unidad": "pasos",
+        "total": 100000
+      },
+      "secciones": [
+        {
+          "clave": "experto",
+          "campos": [
+            {
+              "clave": "pasos_totales",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 100000,
+              "ayuda": "Presupuesto máximo elegido; el congelado llegó a 500 en 60 000."
+            },
+            {
+              "clave": "retorno_objetivo",
+              "tipo": "real",
+              "valor": 500,
+              "ayuda": "Elección propia: máximo de CartPole-v1 (el umbral de Gymnasium es 475), como el experto perfecto del paper (200 ± 0 en CartPole-v0, tabla 1)."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 2,
+              "ayuda": "Cada cuantas iteraciones se evalua y con cuantos episodios. Se evalua la politica estocastica, la que graba las demostraciones; se guarda la mejor y se para al alcanzar retorno_objetivo (eleccion propia: el original usa un snapshot fijo)."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": false
+            }
+          ]
+        },
+        {
+          "clave": "experto.trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5000,
+              "ayuda": "Paper Ho y Ermon (2016), tabla 2."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia: 10 partidas a la vez de 500 pasos por iteración; mismo número de pasos que con una, unas 2,7 veces más rápido (medido). Afecta también al experto."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": false,
+              "ayuda": "Elección propia: en CartPole no hace falta."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 5000 pasos de cada iteración."
+            }
+          ]
+        }
+      ]
+    },
+    "bc": {
+      "metodo": "bc",
+      "duracion": {
+        "unidad": "epocas",
+        "total": 500
+      },
+      "secciones": [
+        {
+          "clave": "bc",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Acciones continuas: log de la desviacion tipica inicial de la gaussiana (eleccion propia; 0.0 es el valor por defecto de las politicas de SB3)."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Normalizacion de observaciones con media y desviacion de train. Componentes con desviacion <= epsilon solo se centran."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam",
+                "rmsprop",
+                "sgd"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original). Las epocas maximas y la paciencia son eleccion propia: el original entrena un numero fijo de iteraciones y se queda con el mejor snapshot."
+            },
+            {
+              "clave": "batch_size",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 128
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "epocas_maximas",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 500
+            },
+            {
+              "clave": "paciencia",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Código original de GAIL para CartPole (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    },
+    "gail": {
+      "metodo": "gail",
+      "duracion": {
+        "unidad": "iteraciones",
+        "total": 20
+      },
+      "secciones": [
+        {
+          "clave": "gail",
+          "campos": [
+            {
+              "clave": "iteraciones",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20,
+              "ayuda": "Elección propia por regla 5/20; el paper usa 300 (tabla 2) y el original, 301."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia: validaciones en 10 y 20 iteraciones."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia; la evaluación final usa 50."
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como evalúa el original las políticas aprendidas."
+            },
+            {
+              "clave": "recompensa",
+              "tipo": "opcion",
+              "opciones": [
+                "log_d",
+                "menos_log_uno_menos_d"
+              ],
+              "valor": "menos_log_uno_menos_d",
+              "ayuda": "Código original de GAIL: −log(1 − D), porque las partidas terminan al fallar (cuts_off_on_success: false en im_classic_pipeline.yaml)."
+            }
+          ]
+        },
+        {
+          "clave": "gail.discriminador",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Misma arquitectura que la politica (paper, seccion 6)."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con learning rate 0.01, un paso por iteracion y peso 0.001 de la entropia en la perdida (codigo original de GAIL)."
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.01
+            },
+            {
+              "clave": "pasos_adam",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 1
+            },
+            {
+              "clave": "peso_entropia",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "normalizar_entrada",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Eleccion propia: normalizacion fija con los pares expertos de train. El original la actualiza en cada iteracion tambien con pares del agente."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            }
+          ]
+        },
+        {
+          "clave": "trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5000,
+              "ayuda": "Paper Ho y Ermon (2016), tabla 2."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia: 10 partidas a la vez de 500 pasos por iteración; mismo número de pasos que con una, unas 2,7 veces más rápido (medido). Afecta también al experto."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": false,
+              "ayuda": "Elección propia: en CartPole no hace falta."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 5000 pasos de cada iteración."
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Código original de GAIL para CartPole (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "halfcheetah": {
+    "experto": {
+      "metodo": "experto",
+      "duracion": {
+        "unidad": "pasos",
+        "total": 25000000
+      },
+      "secciones": [
+        {
+          "clave": "experto",
+          "campos": [
+            {
+              "clave": "pasos_totales",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 25000000,
+              "ayuda": "25 M pasos, el presupuesto de antes (500 iteraciones de 50 000, como el snapshot del experto original, iter0000500). Con iteraciones de 2048 no es múltiplo: para en la primera que lo supera (12 208 iteraciones, 25 001 984 pasos)."
+            },
+            {
+              "clave": "retorno_objetivo",
+              "tipo": "real",
+              "valor": 5000,
+              "ayuda": "Elección propia: por encima del experto del paper (tabla 1: 4463,46 ± 105,83, en HalfCheetah-v1) y del umbral de Gymnasium (4800)."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 50,
+              "ayuda": "Cada 50 iteraciones, unos 100 000 pasos, como antes (2 iteraciones de 50 000)."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": false
+            }
+          ]
+        },
+        {
+          "clave": "experto.trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                64,
+                64
+              ],
+              "ayuda": "MlpPolicy por defecto de sb3 (RL Zoo no da policy_kwargs)."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.99
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.95
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.04,
+              "ayuda": "La única clave propia de HalfCheetah-v4 en RL Zoo."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 2048,
+              "ayuda": "n_steps 1024 × n_envs 2."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 2
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 25,
+              "ayuda": "cg_max_steps."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "learning_rate (el del crítico en sb3-contrib)."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20,
+              "ayuda": "n_critic_updates."
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 128,
+              "ayuda": "batch_size."
+            }
+          ]
+        }
+      ]
+    },
+    "bc": {
+      "metodo": "bc",
+      "duracion": {
+        "unidad": "epocas",
+        "total": 500
+      },
+      "secciones": [
+        {
+          "clave": "bc",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Acciones continuas: log de la desviacion tipica inicial de la gaussiana (eleccion propia; 0.0 es el valor por defecto de las politicas de SB3)."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Normalizacion de observaciones con media y desviacion de train. Componentes con desviacion <= epsilon solo se centran."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam",
+                "rmsprop",
+                "sgd"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original). Las epocas maximas y la paciencia son eleccion propia: el original entrena un numero fijo de iteraciones y se queda con el mejor snapshot."
+            },
+            {
+              "clave": "batch_size",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 128
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "epocas_maximas",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 500
+            },
+            {
+              "clave": "paciencia",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20,
+              "ayuda": "Código original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    },
+    "gail": {
+      "metodo": "gail",
+      "duracion": {
+        "unidad": "iteraciones",
+        "total": 500
+      },
+      "secciones": [
+        {
+          "clave": "gail",
+          "campos": [
+            {
+              "clave": "iteraciones",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 500,
+              "ayuda": "Código original (max_iter 501)."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia; la evaluación final usa 50."
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como evalúa el original las políticas aprendidas."
+            },
+            {
+              "clave": "recompensa",
+              "tipo": "opcion",
+              "opciones": [
+                "log_d",
+                "menos_log_uno_menos_d"
+              ],
+              "valor": "menos_log_uno_menos_d",
+              "ayuda": "Código original: −log(1 − D), porque las partidas no terminan al tener éxito (cuts_off_on_success: false en im_pipeline.yaml)."
+            }
+          ]
+        },
+        {
+          "clave": "gail.discriminador",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Misma arquitectura que la politica (paper, seccion 6)."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con learning rate 0.01, un paso por iteracion y peso 0.001 de la entropia en la perdida (codigo original de GAIL)."
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.01
+            },
+            {
+              "clave": "pasos_adam",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 1
+            },
+            {
+              "clave": "peso_entropia",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "normalizar_entrada",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Eleccion propia: normalizacion fija con los pares expertos de train. El original la actualiza en cada iteracion tambien con pares del agente."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            }
+          ]
+        },
+        {
+          "clave": "trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 50000,
+              "ayuda": "Código original (min_total_sa)."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como el original; en MuJoCo hace falta."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 50 000 pasos de cada iteración."
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20,
+              "ayuda": "Código original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "mountaincar": {
+    "experto": {
+      "metodo": "experto",
+      "duracion": {
+        "unidad": "pasos",
+        "total": 1000000
+      },
+      "secciones": [
+        {
+          "clave": "experto",
+          "campos": [
+            {
+              "clave": "pasos_totales",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 1000000,
+              "ayuda": "Elección propia: tope del entrenamiento, que para al alcanzar el objetivo. Con el umbral de Gymnasium como objetivo, el experto lo alcanzaba en 150 000 pasos y 40 s."
+            },
+            {
+              "clave": "retorno_objetivo",
+              "tipo": "real",
+              "valor": -90,
+              "ayuda": "Elección propia: algo por encima del experto del paper (tabla 1: −98,75 ± 8,71) y más exigente que el umbral de Gymnasium (−110), con el que el experto paraba justo al cruzarlo."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 2,
+              "ayuda": "Cada cuantas iteraciones se evalua y con cuantos episodios. Se evalua la politica estocastica, la que graba las demostraciones; se guarda la mejor y se para al alcanzar retorno_objetivo (eleccion propia: el original usa un snapshot fijo)."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 50,
+              "ayuda": "50 partidas por evaluación, como las estadísticas del paper: con 10, la mejor de muchas evaluaciones es optimista y el experto paraba antes de tiempo."
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": false
+            }
+          ]
+        },
+        {
+          "clave": "experto.trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5000,
+              "ayuda": "Código original (min_total_sa)."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como el original."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 5000 pasos de cada iteración."
+            }
+          ]
+        }
+      ]
+    },
+    "bc": {
+      "metodo": "bc",
+      "duracion": {
+        "unidad": "epocas",
+        "total": 500
+      },
+      "secciones": [
+        {
+          "clave": "bc",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Acciones continuas: log de la desviacion tipica inicial de la gaussiana (eleccion propia; 0.0 es el valor por defecto de las politicas de SB3)."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Normalizacion de observaciones con media y desviacion de train. Componentes con desviacion <= epsilon solo se centran."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam",
+                "rmsprop",
+                "sgd"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original). Las epocas maximas y la paciencia son eleccion propia: el original entrena un numero fijo de iteraciones y se queda con el mejor snapshot."
+            },
+            {
+              "clave": "batch_size",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 128
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "epocas_maximas",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 500
+            },
+            {
+              "clave": "paciencia",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5,
+              "ayuda": "Código original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    },
+    "gail": {
+      "metodo": "gail",
+      "duracion": {
+        "unidad": "iteraciones",
+        "total": 300
+      },
+      "secciones": [
+        {
+          "clave": "gail",
+          "campos": [
+            {
+              "clave": "iteraciones",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 300,
+              "ayuda": "Paper, tabla 2 (el código original usa max_iter 301)."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia; la evaluación final usa 50."
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como evalúa el original las políticas aprendidas."
+            },
+            {
+              "clave": "recompensa",
+              "tipo": "opcion",
+              "opciones": [
+                "log_d",
+                "menos_log_uno_menos_d"
+              ],
+              "valor": "log_d",
+              "ayuda": "Código original: log D, porque las partidas terminan al llegar a la meta (cuts_off_on_success: true en im_classic_pipeline.yaml)."
+            }
+          ]
+        },
+        {
+          "clave": "gail.discriminador",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Misma arquitectura que la politica (paper, seccion 6)."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con learning rate 0.01, un paso por iteracion y peso 0.001 de la entropia en la perdida (codigo original de GAIL)."
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.01
+            },
+            {
+              "clave": "pasos_adam",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 1
+            },
+            {
+              "clave": "peso_entropia",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "normalizar_entrada",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Eleccion propia: normalizacion fija con los pares expertos de train. El original la actualiza en cada iteracion tambien con pares del agente."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            }
+          ]
+        },
+        {
+          "clave": "trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5000,
+              "ayuda": "Código original (min_total_sa)."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como el original."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 5000 pasos de cada iteración."
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 5,
+              "ayuda": "Código original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "reacher": {
+    "experto": {
+      "metodo": "experto",
+      "duracion": {
+        "unidad": "pasos",
+        "total": 25000000
+      },
+      "secciones": [
+        {
+          "clave": "experto",
+          "campos": [
+            {
+              "clave": "pasos_totales",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 25000000,
+              "ayuda": "25 M pasos, el presupuesto de antes (500 iteraciones de 50 000, como los snapshots de los expertos MuJoCo originales, iter0000500). Con iteraciones de 2048 no es múltiplo: para en la primera que lo supera (12 208 iteraciones, 25 001 984 pasos)."
+            },
+            {
+              "clave": "retorno_objetivo",
+              "tipo": "real",
+              "valor": -3.5,
+              "ayuda": "Elección propia: por encima del experto del paper (tabla 1: −4,09) y del umbral de Gymnasium (reward_threshold de Reacher-v5, −3,75)."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 50,
+              "ayuda": "Cada 50 iteraciones, unos 100 000 pasos, como antes (2 iteraciones de 50 000)."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": false
+            }
+          ]
+        },
+        {
+          "clave": "experto.trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                256,
+                256
+              ],
+              "ayuda": "policy_kwargs: net_arch pi y vf [256, 256]."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "relu",
+              "ayuda": "policy_kwargs: activation_fn nn.ReLU."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.99
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.95
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "RL Zoo no lo fija: el valor por defecto de sb3-contrib."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 2048,
+              "ayuda": "n_steps 1024 × n_envs 2."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 2
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": -1,
+              "ayuda": "policy_kwargs: log_std_init -1."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": false,
+              "ayuda": "policy_kwargs: ortho_init False."
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 25,
+              "ayuda": "cg_max_steps."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "learning_rate (el del crítico en sb3-contrib)."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20,
+              "ayuda": "n_critic_updates."
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 128,
+              "ayuda": "batch_size."
+            }
+          ]
+        }
+      ]
+    },
+    "bc": {
+      "metodo": "bc",
+      "duracion": {
+        "unidad": "epocas",
+        "total": 500
+      },
+      "secciones": [
+        {
+          "clave": "bc",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Politica de BC del paper: 2 capas ocultas de 100 neuronas con tanh."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Acciones continuas: log de la desviacion tipica inicial de la gaussiana (eleccion propia; 0.0 es el valor por defecto de las politicas de SB3)."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Normalizacion de observaciones con media y desviacion de train. Componentes con desviacion <= epsilon solo se centran."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam",
+                "rmsprop",
+                "sgd"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con minibatches de 128 (paper) y learning rate 1e-3 (codigo original). Las epocas maximas y la paciencia son eleccion propia: el original entrena un numero fijo de iteraciones y se queda con el mejor snapshot."
+            },
+            {
+              "clave": "batch_size",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 128
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "epocas_maximas",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 500
+            },
+            {
+              "clave": "paciencia",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20,
+              "ayuda": "Como los MuJoCo del original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    },
+    "gail": {
+      "metodo": "gail",
+      "duracion": {
+        "unidad": "iteraciones",
+        "total": 500
+      },
+      "secciones": [
+        {
+          "clave": "gail",
+          "campos": [
+            {
+              "clave": "iteraciones",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 500,
+              "ayuda": "Como los MuJoCo del original (max_iter 501)."
+            },
+            {
+              "clave": "evaluar_cada",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole."
+            },
+            {
+              "clave": "episodios_evaluacion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia; la evaluación final usa 50."
+            },
+            {
+              "clave": "evaluacion_determinista",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como evalúa el original las políticas aprendidas."
+            },
+            {
+              "clave": "recompensa",
+              "tipo": "opcion",
+              "opciones": [
+                "log_d",
+                "menos_log_uno_menos_d"
+              ],
+              "valor": "menos_log_uno_menos_d",
+              "ayuda": "Como los MuJoCo del original: −log(1 − D). Las partidas duran siempre 50 pasos: no terminan al tener éxito (cuts_off_on_success: false en im_pipeline.yaml)."
+            }
+          ]
+        },
+        {
+          "clave": "gail.discriminador",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Misma arquitectura que la politica (paper, seccion 6)."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh"
+            },
+            {
+              "clave": "optimizador",
+              "tipo": "opcion",
+              "opciones": [
+                "adam"
+              ],
+              "valor": "adam",
+              "ayuda": "Adam con learning rate 0.01, un paso por iteracion y peso 0.001 de la entropia en la perdida (codigo original de GAIL)."
+            },
+            {
+              "clave": "learning_rate",
+              "tipo": "real",
+              "valor": 0.01
+            },
+            {
+              "clave": "pasos_adam",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 1
+            },
+            {
+              "clave": "peso_entropia",
+              "tipo": "real",
+              "valor": 0.001
+            },
+            {
+              "clave": "normalizar_entrada",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Eleccion propia: normalizacion fija con los pares expertos de train. El original la actualiza en cada iteracion tambien con pares del agente."
+            },
+            {
+              "clave": "epsilon_normalizacion",
+              "tipo": "real",
+              "valor": 0.000001
+            }
+          ]
+        },
+        {
+          "clave": "trpo",
+          "campos": [
+            {
+              "clave": "capas_ocultas",
+              "tipo": "lista_enteros",
+              "min": 1,
+              "valor": [
+                100,
+                100
+              ],
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "activacion",
+              "tipo": "opcion",
+              "opciones": [
+                "relu",
+                "tanh"
+              ],
+              "valor": "tanh",
+              "ayuda": "Paper Ho y Ermon (2016), sección 6."
+            },
+            {
+              "clave": "gamma",
+              "tipo": "real",
+              "valor": 0.995,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "gae_lambda",
+              "tipo": "real",
+              "valor": 0.97,
+              "ayuda": "Paper Ho y Ermon (2016), apéndice B."
+            },
+            {
+              "clave": "target_kl",
+              "tipo": "real",
+              "valor": 0.01,
+              "ayuda": "Código original de GAIL (max_kl)."
+            },
+            {
+              "clave": "cg_damping",
+              "tipo": "real",
+              "valor": 0.1,
+              "ayuda": "Código original de GAIL."
+            },
+            {
+              "clave": "pasos_por_iteracion",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 50000,
+              "ayuda": "Como los MuJoCo del original (min_total_sa)."
+            },
+            {
+              "clave": "n_entornos",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10,
+              "ayuda": "Elección propia, como en CartPole: 10 partidas a la vez, mismos pasos por iteración."
+            },
+            {
+              "clave": "normalizar_observaciones",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Como el original; en MuJoCo hace falta."
+            },
+            {
+              "clave": "limite_normalizacion",
+              "tipo": "real",
+              "valor": 10,
+              "ayuda": "recorte tras normalizar (valor de sb3)"
+            },
+            {
+              "clave": "normalizar_ventajas",
+              "tipo": "booleano",
+              "valor": true,
+              "ayuda": "Ventajas estandarizadas antes del paso de la politica, como el original."
+            },
+            {
+              "clave": "log_std_inicial",
+              "tipo": "real",
+              "valor": 0,
+              "ayuda": "Politica: log de la desviacion tipica inicial de la gaussiana (acciones continuas) e inicializacion ortogonal de los pesos; valores por defecto de sb3."
+            },
+            {
+              "clave": "inicializacion_ortogonal",
+              "tipo": "booleano",
+              "valor": true
+            },
+            {
+              "clave": "pasos_gradiente_conjugado",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 15,
+              "ayuda": "Paso de la politica (valores por defecto de sb3-contrib)."
+            },
+            {
+              "clave": "busqueda_lineal_factor",
+              "tipo": "real",
+              "valor": 0.8
+            },
+            {
+              "clave": "busqueda_lineal_maximo",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "learning_rate_valor",
+              "tipo": "real",
+              "valor": 0.001,
+              "ayuda": "Red de valor: el original da un paso de region de confianza; sb3 usa Adam por minibatches (diferencia documentada). batch_size_valor debe dividir los pasos de cada iteracion: 250 divide 5000."
+            },
+            {
+              "clave": "pasos_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 10
+            },
+            {
+              "clave": "batch_size_valor",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 250,
+              "ayuda": "Divide los 50 000 pasos de cada iteración."
+            }
+          ]
+        },
+        {
+          "clave": "demostraciones",
+          "campos": [
+            {
+              "clave": "frecuencia_pares",
+              "tipo": "entero",
+              "min": 1,
+              "valor": 20,
+              "ayuda": "Como los MuJoCo del original (data_subsamp_freq)."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

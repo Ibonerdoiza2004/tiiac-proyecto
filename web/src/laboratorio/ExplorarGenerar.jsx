@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 
 import { MODOS } from '../api/laboratorio.js';
+import { METODOS } from '../api/entrenamiento.js';
 import { buscarEntorno } from '../entornos.js';
+import PanelEntrenamiento from '../entrenamiento/PanelEntrenamiento.jsx';
 import { contar } from './revision.js';
 import RevisarPartidas from './RevisarPartidas.jsx';
 import { accionDeTeclas, accionesBotones, ayudaTeclado, esTeclaDeJuego,
@@ -10,6 +12,8 @@ import useSesionJuego, { FASES, FASES_OCUPADAS } from './useSesionJuego.js';
 import VistaEntorno from './VistaEntorno.jsx';
 
 const MAXIMO_PARTIDAS = 1000;
+// Tercera pestaña del panel, junto a los modos de una sesión de juego.
+const ENTRENAR = 'entrenar';
 const ETIQUETAS = {
   [FASES.INACTIVA]: 'Preparado', [FASES.PREPARANDO]: 'Preparando…', [FASES.TERMINANDO]: 'Terminando…',
   [FASES.REVISION]: 'Terminada', [FASES.GUARDANDO]: 'Guardando…', [FASES.GUARDADA]: 'Guardada',
@@ -23,17 +27,19 @@ function partidasValidas(texto) {
 }
 
 /**
- * Panel «Explorar y generar» del Laboratorio: jugar a mano (CartPole y MountainCar) o ver
- * al experto, contar partidas y pares, y revisar y guardar las partidas en la biblioteca.
+ * Panel «Explorar y generar» del Laboratorio: jugar a mano (CartPole y MountainCar), entrenar
+ * un experto o verlo jugar, contar partidas y pares, y revisar y guardar las partidas.
  *
  * @param {object} props
  * @param {string} props.entorno Clave del entorno elegido.
  * @param {import('../api/laboratorio.js').ApiLaboratorio} props.api Backend real o simulado.
+ * @param {import('../api/entrenamiento.js').ApiEntrenamiento} props.apiEntrenamiento Backend
+ *   de «Entrenar experto».
  * @param {(ocupado: boolean) => void} [props.alCambiarOcupado] Avisa de si hay una sesión
  *   abierta, para no cambiar de entorno a mitad.
  * @returns {JSX.Element}
  */
-export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
+export default function ExplorarGenerar({ entorno, api, apiEntrenamiento, alCambiarOcupado }) {
   const { nombre, jugarAMano } = buscarEntorno(entorno);
   const juego = useSesionJuego(api);
   const { fase, estado, sesion } = juego;
@@ -41,8 +47,10 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
   const [partidas, setPartidas] = useState('');
   const [errorPartidas, setErrorPartidas] = useState(null);
   const [errorConfiguracion, setErrorConfiguracion] = useState(null);
-  const ocupado = FASES_OCUPADAS.has(fase);
+  const [entrenando, setEntrenando] = useState(false);
+  const ocupado = FASES_OCUPADAS.has(fase) || entrenando;
   const manual = modo === MODOS.MANUAL;
+  const entrenar = modo === ENTRENAR;
   const jugando = fase === FASES.JUGANDO;
 
   useEffect(() => {
@@ -137,9 +145,16 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
       <div className="pestanas" role="group" aria-label="Modo de interacción">
         <button type="button" aria-pressed={manual} disabled={!jugarAMano || ocupado}
           onClick={() => setModo(MODOS.MANUAL)}>Jugar tú</button>
-        <button type="button" aria-pressed={!manual} disabled={ocupado}
+        <button type="button" aria-pressed={entrenar} disabled={ocupado}
+          onClick={() => setModo(ENTRENAR)}>Entrenar experto</button>
+        <button type="button" aria-pressed={modo === MODOS.EXPERTO} disabled={ocupado}
           onClick={() => setModo(MODOS.EXPERTO)}>Ver agente</button>
       </div>
+      {entrenar ? (
+        <PanelEntrenamiento entorno={entorno} api={apiEntrenamiento} metodos={[METODOS.EXPERTO]}
+          alCambiarOcupado={setEntrenando} />
+      ) : (
+      <>
       {jugarAMano ? null : (
         <p className="nota">En {nombre} solo se puede ver al experto y grabar partidas con él.</p>
       )}
@@ -208,6 +223,8 @@ export default function ExplorarGenerar({ entorno, api, alCambiarOcupado }) {
           Guardado «{juego.guardado.nombre}»: {contar(juego.guardado.partidas, 'partida', 'partidas')} y {contar(juego.guardado.pares, 'par', 'pares')}.
         </p>
       ) : null}
+      </>
+      )}
       {juego.error ? <p className="error" role="alert">{juego.error}</p> : null}
     </article>
   );
