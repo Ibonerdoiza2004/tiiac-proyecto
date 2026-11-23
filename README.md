@@ -400,8 +400,17 @@ exactas de las dependencias están en `web/package-lock.json`. Desde `web/`:
 | Tests de punta a punta | `npm run e2e` |
 | Compilar para producción (`web/dist/`) | `npm run build` |
 
-En desarrollo, Vite reenvía `/api` (HTTP y WebSocket) a `http://127.0.0.1:8000`, o a la
-dirección de `TIIAC_API_URL`. En producción, FastAPI sirve `web/dist/`.
+El backend es una API FastAPI (`src/app/`). Desde la raíz, con el entorno de Python:
+
+```bash
+python -m src.app
+```
+
+Escucha en la dirección y el puerto de la sección `aplicativo` de `configs/default.yaml`
+(por defecto `http://127.0.0.1:8000`) y, si existe `web/dist/` (`npm run build`), sirve
+también el frontend en la raíz. En desarrollo, Vite reenvía `/api` (HTTP y WebSocket) a
+`http://127.0.0.1:8000`, o a la dirección de `TIIAC_API_URL`. El contrato de la API está en
+el código: con la API en marcha, la documentación de las rutas sale en `/docs`.
 
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con
@@ -413,8 +422,7 @@ interfaz usa uno simulado en el navegador (`web/src/simulado/`): CartPole y Moun
 con las ecuaciones de Gymnasium, animaciones de ejemplo en los demás y curvas de
 entrenamiento inventadas; no entrena ni guarda nada de verdad. Los hiperparámetros del
 simulado salen de `configs/` con `npm run perfiles` (un test avisa si no están al día). Con
-`VITE_API=real npm run dev` usa el backend real. Las rutas y los mensajes propuestos están
-en [`docs/contrato-api.md`](docs/contrato-api.md).
+`VITE_API=real npm run dev` usa el backend real.
 
 ## Estructura del repositorio
 
@@ -425,7 +433,7 @@ src/data/               entornos, demostraciones, splits por trayectoria y loade
 src/models/factory.py   política de BC y discriminador
 src/training/           TRPO y experto, BC, GAIL, barridos, evaluación y flujo de run.py
 src/utils/              configuración, semillas, seguimiento W&B, archivos y validación
-src/app/                esqueleto del aplicativo (E2)
+src/app/                API FastAPI del aplicativo (E2): python -m src.app
 web/                    frontend del aplicativo (React con Vite) y sus tests
 scripts/                cada etapa por separado
 tests/                  tests (pytest)

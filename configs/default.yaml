@@ -29,9 +29,13 @@ datos:
   artefacto_demostraciones: null
   artefacto_experto: null
 
-# Solo lo usa el esqueleto del aplicativo (src/app/serve.py) hasta la E2.
-modelo:
-  nombre: mi_modelo
+# Aplicativo (src/app): dirección en la que escucha la API y carpeta del frontend
+# compilado (npm run build en web/). El límite de trabajos a la vez es
+# experimento.procesos.
+aplicativo:
+  host: 127.0.0.1
+  puerto: 8000  # El que espera el proxy de Vite (web/vite.config.js).
+  web: web/dist
 
 entorno:
   id: null
