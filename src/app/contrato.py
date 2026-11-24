@@ -41,6 +41,8 @@ Positivo = Annotated[int, Field(strict=True, ge=1)]
 Booleano = Annotated[bool, Field(strict=True)]
 # Nombre que pone el usuario a algo de la biblioteca: con algún carácter visible.
 NombreUsuario = Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
+# Grupo de W&B: letras, números, guiones, puntos y guiones bajos.
+GrupoWandb = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")]
 
 
 class _Estricto(BaseModel):
@@ -58,12 +60,20 @@ class EntornoApi(BaseModel):
     gym: str
 
 
+class WandbApi(BaseModel):
+    """Si se puede registrar en W&B (hay sesión válida)."""
+
+    disponible: bool | None = Field(description="None mientras se comprueba al arrancar.")
+    motivo: str | None = Field(description="Por qué no está disponible.")
+
+
 class EstadoApi(BaseModel):
     """Respuesta de GET /api/estado."""
 
     entornos: list[EntornoApi]
     procesos: int
     libres: int
+    wandb: WandbApi
 
 
 class TrabajoApi(BaseModel):
@@ -353,6 +363,9 @@ class EntrenamientoCrear(_Estricto):
     semilla: Natural | None = Field(None, description="Por defecto, la del esquema de ajustes.")
     vista: Booleano = Field(False, description="Dibujar las partidas (solo experto y GAIL).")
     wandb: Booleano = Field(False, description="Registrar también en W&B.")
+    grupo: GrupoWandb | None = Field(
+        None, description="Grupo de W&B (solo con wandb); por defecto, el de "
+                          "configs/dashboard.yaml, «dashboard-<entorno>».")
 
     @model_validator(mode="after")
     def _segun_metodo(self) -> EntrenamientoCrear:
@@ -365,6 +378,8 @@ class EntrenamientoCrear(_Estricto):
             raise ValueError("Hay conjuntos repetidos en datos")
         if self.metodo == "bc" and self.vista:
             raise ValueError("BC no juega partidas mientras entrena: no admite vista")
+        if self.grupo is not None and not self.wandb:
+            raise ValueError("El grupo de W&B solo tiene sentido con wandb: true")
         return self
 
 

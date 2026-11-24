@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -36,17 +37,19 @@ def esperar_hasta(condicion: Callable[[], bool], limite: float = LIMITE) -> None
         time.sleep(0.02)
 
 
+def _sin_hueco() -> None:
+    """Ruta de prueba para el manejador de SinHueco."""
+    raise SinHueco("No hay núcleos libres")
+
+
 @pytest.fixture
 def app_y_gestor() -> Iterator[tuple[TestClient, GestorTrabajos]]:
     """Aplicación con un gestor de dos procesos; al salir se apaga y lo cierra."""
     gestor = GestorTrabajos(2)
     app = crear_app(CONFIG, gestor)
-
-    @app.get("/api/prueba-sin-hueco")
-    def sin_hueco() -> None:
-        """Ruta de prueba para el manejador de SinHueco."""
-        raise SinHueco("No hay núcleos libres")
-
+    # Delante de las demás rutas: si existe web/dist, la raíz atiende todo lo que quede
+    # detrás, también esta ruta de prueba.
+    app.router.routes.insert(0, APIRoute("/api/prueba-sin-hueco", _sin_hueco))
     with TestClient(app) as cliente:
         yield cliente, gestor
     gestor.cerrar()

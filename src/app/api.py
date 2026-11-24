@@ -18,7 +18,9 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.app.ajustes import cargar_dashboard
-from src.app.contrato import EntornoApi, EstadoApi
+from src.app.contrato import EntornoApi, EstadoApi, WandbApi
+from src.app import estado_wandb as modulo_wandb
+from src.app.estado_wandb import Comprobacion, EstadoWandb
 from src.app.rutas_biblioteca import crear_router_biblioteca
 from src.app.rutas_laboratorio import crear_router_laboratorio
 from src.app.rutas_trabajos import crear_router_trabajos
@@ -100,7 +102,8 @@ def _respuesta_error(codigo: int) -> Any:
 
 
 def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
-              gestor: GestorTrabajos | None = None) -> FastAPI:
+              gestor: GestorTrabajos | None = None,
+              comprobar_wandb: Comprobacion | None = None) -> FastAPI:
     """Crea la aplicación: la API bajo /api y, si está compilado, el frontend en /.
 
     La configuración (y configs/dashboard.yaml, junto al YAML base) se lee y se
@@ -110,6 +113,9 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     Args:
         ruta_config: Ruta al YAML base.
         gestor: Gestor de trabajos (por defecto, uno nuevo con experimento.procesos).
+        comprobar_wandb: Comprueba si W&B se puede usar (None si sí; si no, el motivo);
+            por defecto, comprobar_sesion_wandb. Se llama al arrancar, en segundo plano, y
+            al pedirlo por la API.
 
     Returns:
         La aplicación FastAPI.
@@ -122,17 +128,22 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     dashboard = cargar_dashboard(Path(ruta_config).parent / ARCHIVO_DASHBOARD)
     gestor = gestor or GestorTrabajos(aplicativo["procesos"])
     biblioteca = Biblioteca(aplicativo["biblioteca"], {e.id: e.gym for e in entornos})
+    estado_wandb = EstadoWandb(comprobar_wandb or modulo_wandb.comprobar_sesion_wandb)
 
     @asynccontextmanager
     async def ciclo_de_vida(app: FastAPI) -> AsyncIterator[None]:
-        """Al apagar, cancela los trabajos y espera a sus procesos."""
+        """Al arrancar, comprueba W&B en segundo plano; al apagar, cancela los trabajos."""
+        comprobacion = asyncio.create_task(asyncio.to_thread(estado_wandb.comprobar))
         yield
         await asyncio.to_thread(gestor.cerrar)
+        if not comprobacion.done():
+            comprobacion.cancel()
 
     app = FastAPI(title="GAIL lab", description="API del dashboard de TIIAC.",
                   lifespan=ciclo_de_vida)
     app.state.gestor = gestor
     app.state.biblioteca = biblioteca
+    app.state.estado_wandb = estado_wandb
     for excepcion, codigo in ((TrabajoDesconocido, 404), (OperacionNoValida, 409),
                               (SinHueco, 503)):
         app.add_exception_handler(excepcion, _respuesta_error(codigo))
@@ -141,11 +152,18 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
 
     @api.get("/estado", response_model=EstadoApi)
     def leer_estado() -> EstadoApi:
-        """Entornos, cuántos trabajos pueden correr a la vez y cuántos huecos quedan."""
-        return EstadoApi(entornos=entornos, procesos=gestor.procesos, libres=gestor.libres())
+        """Entornos, trabajos a la vez, huecos libres y si se puede usar W&B."""
+        return EstadoApi(entornos=entornos, procesos=gestor.procesos, libres=gestor.libres(),
+                         wandb=WandbApi(**estado_wandb.describir()))
+
+    @api.post("/wandb/comprobar", response_model=WandbApi, tags=["wandb"])
+    async def comprobar_wandb_ahora() -> dict[str, Any]:
+        """Vuelve a comprobar la sesión de W&B (por ejemplo, tras hacer wandb login)."""
+        return await asyncio.to_thread(estado_wandb.comprobar)
 
     api.include_router(crear_router_trabajos(gestor))
-    api.include_router(crear_router_laboratorio(Path(ruta_config), dashboard, gestor))
+    api.include_router(crear_router_laboratorio(Path(ruta_config), dashboard, gestor,
+                                                estado_wandb))
     api.include_router(crear_router_biblioteca(biblioteca))
     app.include_router(api)
 

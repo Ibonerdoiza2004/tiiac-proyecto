@@ -420,12 +420,13 @@ común a cualquier trabajo.
 
 | Ruta | Para qué |
 |---|---|
-| `GET /api/estado` | Entornos, trabajos a la vez y huecos libres |
+| `GET /api/estado` | Entornos, trabajos a la vez, huecos libres y si se puede usar W&B |
+| `POST /api/wandb/comprobar` | Vuelve a comprobar la sesión de W&B (tras `wandb login`, sin reiniciar) |
 | `GET /api/laboratorio/{entorno}` | Velocidad del entorno, si se juega a mano y partidas por defecto |
 | `GET /api/laboratorio/{entorno}/ajustes/{metodo}` | Hiperparámetros del formulario (experto, bc o gail) con los valores del perfil; textos, nivel y rangos en `configs/dashboard.yaml` |
 | `POST /api/sesiones` | Jugar a mano o ver al experto (llega con `laboratorio-jugar-api`; hasta entonces valida y responde 501) |
 | `POST /api/sesiones/{id}/guardar` | Guardar partidas y tramos de una sesión y cerrarla (ídem) |
-| `POST /api/entrenamientos` | Entrenar un experto, BC o GAIL (llega con `laboratorio-entrenar-api`; ídem) |
+| `POST /api/entrenamientos` | Entrenar un experto, BC o GAIL, con nombre opcional para la biblioteca y W&B opcional (llega con `laboratorio-entrenar-api`; ídem) |
 | `GET /api/trabajos`, `GET /api/trabajos/{id}` | Listar y consultar trabajos |
 | `POST /api/trabajos/{id}/pausar`, `/reanudar`, `/cancelar` | Controlar cualquier trabajo |
 | WebSocket `/api/trabajos/{id}` | Seguir cualquier trabajo en directo |
@@ -440,6 +441,11 @@ común a cualquier trabajo.
 
 Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder ni repetir
 progreso; una sesión de jugar, en cambio, se descarta.
+
+W&B es opcional en cada entrenamiento y está apagado por defecto. La API comprueba la
+sesión al arrancar y lo dice en `/api/estado`; pedir un entrenamiento con W&B sin sesión
+da 503. Sus runs van al grupo `dashboard-<entorno>` (`configs/dashboard.yaml`) o al que
+se indique en la petición.
 
 La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `biblioteca/`, no se versiona), con una carpeta por elemento

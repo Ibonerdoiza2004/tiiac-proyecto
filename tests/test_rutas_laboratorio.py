@@ -213,7 +213,7 @@ def test_guardar_con_un_cuerpo_que_no_vale(cliente_y_gestor, cuerpo) -> None:
 
 @pytest.mark.parametrize("cuerpo", [
     {"entorno": "cartpole", "metodo": "experto"},
-    {"entorno": "cartpole", "metodo": "experto", "vista": True, "wandb": True, "semilla": 4,
+    {"entorno": "cartpole", "metodo": "experto", "vista": True, "semilla": 4,
      "ajustes": {"experto": {"pasos_totales": 2048, "trpo": {"gamma": 0.95}}}},
     {"entorno": "acrobot", "metodo": "bc", "datos": ["a", "b"],
      "ajustes": {"bc": {"learning_rate": 0.01}}},
@@ -308,3 +308,133 @@ def test_nombre_del_modelo_el_del_usuario_o_uno_generado() -> None:
     assert nombre_por_defecto("bc", "HalfCheetah-v5", momento) == "BC · HalfCheetah · 24/11 18:30"
     assert nombre_por_defecto("experto", "MountainCar-v0", momento) == \
         "Experto · MountainCar · 24/11 18:30"
+
+
+# --- W&B ---------------------------------------------------------------------------------------
+
+class ComprobacionFalsa:
+    """Comprobación de W&B que devuelve lo que se le diga y cuenta las llamadas."""
+
+    def __init__(self, motivo: str | None = None):
+        self.motivo, self.llamadas = motivo, 0
+
+    def __call__(self) -> str | None:
+        self.llamadas += 1
+        return self.motivo
+
+
+def _cliente_wandb(comprobacion) -> tuple[TestClient, GestorTrabajos]:
+    """App con una comprobación de W&B dada (hay que cerrar el gestor)."""
+    gestor = GestorTrabajos(1)
+    return TestClient(crear_app(CONFIG, gestor, comprobacion)), gestor
+
+
+def _esperar_comprobado(cliente: TestClient) -> dict:
+    """Espera a que termine la comprobación de W&B del arranque."""
+    import time
+
+    for _ in range(200):
+        estado = cliente.get("/api/estado").json()["wandb"]
+        if estado["disponible"] is not None:
+            return estado
+        time.sleep(0.02)
+    pytest.fail("no terminó la comprobación de W&B")
+
+
+def test_al_arrancar_se_comprueba_wandb_y_se_puede_repetir() -> None:
+    comprobacion = ComprobacionFalsa("no hay sesión")
+    cliente, gestor = _cliente_wandb(comprobacion)
+    with cliente:
+        assert _esperar_comprobado(cliente) == {"disponible": False, "motivo": "no hay sesión"}
+        comprobacion.motivo = None  # el usuario hace wandb login
+        assert cliente.post("/api/wandb/comprobar").json() == {"disponible": True,
+                                                              "motivo": None}
+        assert cliente.get("/api/estado").json()["wandb"]["disponible"] is True
+    gestor.cerrar()
+    assert comprobacion.llamadas == 2
+
+
+ENTRENAR_CON_WANDB = {"entorno": "cartpole", "metodo": "experto", "wandb": True}
+
+
+def test_entrenar_con_wandb_sin_sesion_da_503_con_el_motivo() -> None:
+    cliente, gestor = _cliente_wandb(ComprobacionFalsa("la clave no vale"))
+    with cliente:
+        _esperar_comprobado(cliente)
+        respuesta = cliente.post("/api/entrenamientos", json=ENTRENAR_CON_WANDB)
+        assert respuesta.status_code == 503
+        assert "la clave no vale" in respuesta.json()["detail"]
+        assert "wandb login" in respuesta.json()["detail"]
+        # Sin W&B no hace falta sesión.
+        assert cliente.post("/api/entrenamientos",
+                            json={**ENTRENAR_CON_WANDB, "wandb": False}).status_code == 501
+    gestor.cerrar()
+
+
+def test_entrenar_con_wandb_con_sesion_sigue_adelante() -> None:
+    cliente, gestor = _cliente_wandb(ComprobacionFalsa(None))
+    with cliente:
+        _esperar_comprobado(cliente)
+        for cuerpo in (ENTRENAR_CON_WANDB, {**ENTRENAR_CON_WANDB, "grupo": "mis-pruebas.1"}):
+            assert cliente.post("/api/entrenamientos", json=cuerpo).status_code == 501
+    gestor.cerrar()
+
+
+@pytest.mark.parametrize("cuerpo", [
+    {"entorno": "cartpole", "metodo": "experto", "grupo": "a"},  # grupo sin wandb
+    {**ENTRENAR_CON_WANDB, "grupo": ""},
+    {**ENTRENAR_CON_WANDB, "grupo": "con espacios"},
+    {**ENTRENAR_CON_WANDB, "grupo": "a/b"},
+    {**ENTRENAR_CON_WANDB, "grupo": "x" * 129},
+    {**ENTRENAR_CON_WANDB, "grupo": 3},
+])
+def test_grupos_que_no_valen(cliente, cuerpo) -> None:
+    assert cliente.post("/api/entrenamientos", json=cuerpo).status_code == 422
+
+
+def test_config_wandb_de_un_entrenamiento() -> None:
+    from src.app.contrato import EntrenamientoCrear
+    from src.app.rutas_laboratorio import config_wandb
+
+    sin = EntrenamientoCrear(entorno="cartpole", metodo="experto")
+    assert config_wandb(sin, DASHBOARD) == {"activo": False, "grupo": None}
+    por_defecto = EntrenamientoCrear(entorno="halfcheetah", metodo="experto", wandb=True)
+    assert config_wandb(por_defecto, DASHBOARD) == {"activo": True,
+                                                    "grupo": "dashboard-halfcheetah"}
+    propio = EntrenamientoCrear(entorno="cartpole", metodo="gail", datos=["a"], wandb=True,
+                                grupo="x" * 128)
+    assert config_wandb(propio, DASHBOARD)["grupo"] == "x" * 128
+
+
+def test_estado_wandb() -> None:
+    from src.app.estado_wandb import EstadoWandb
+
+    comprobacion = ComprobacionFalsa(None)
+    estado = EstadoWandb(comprobacion)
+    assert estado.describir() == {"disponible": None, "motivo": None}
+    estado.exigir()  # sin comprobar todavía: comprueba ahora
+    assert comprobacion.llamadas == 1
+    estado.exigir()  # ya comprobado: no vuelve a hacerlo
+    assert comprobacion.llamadas == 1
+
+    def rota() -> str | None:
+        raise ConnectionError("sin red")
+
+    roto = EstadoWandb(rota)
+    with pytest.raises(RuntimeError, match="no se pudo comprobar W&B"):
+        roto.exigir()
+    assert roto.describir()["disponible"] is False
+
+
+def test_comprobar_sesion_wandb_devuelve_el_motivo(monkeypatch) -> None:
+    from src.app import estado_wandb
+
+    monkeypatch.undo()  # quita la comprobación falsa de conftest.py
+
+    def sin_sesion(cfg, exigir_sesion=False):
+        raise RuntimeError("no hay una sesión válida de W&B")
+
+    monkeypatch.setattr(estado_wandb, "comprobar_wandb", sin_sesion)
+    assert estado_wandb.comprobar_sesion_wandb() == "no hay una sesión válida de W&B"
+    monkeypatch.setattr(estado_wandb, "comprobar_wandb", lambda cfg, exigir_sesion=False: None)
+    assert estado_wandb.comprobar_sesion_wandb() is None

@@ -1,6 +1,6 @@
 /**
  * Pestañas principales del dashboard, con el título y el subtítulo de cada una
- * (textos del prototipo `docs/gail-lab.html`).
+ * (textos del prototipo del dashboard).
  *
  * @typedef {object} Vista
  * @property {'laboratorio' | 'comparar' | 'biblioteca'} id Clave de la pestaña.

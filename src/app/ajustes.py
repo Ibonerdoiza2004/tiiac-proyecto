@@ -10,6 +10,7 @@ mismas comprobaciones que los scripts.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,15 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
         raise ValueError(f"{ruta}: laboratorio.jugar_a_mano solo admite {sorted(validos)}")
     if not es_entero(laboratorio.get("partidas_maximas")) or laboratorio["partidas_maximas"] < 1:
         raise ValueError(f"{ruta}: laboratorio.partidas_maximas debe ser un entero positivo")
+    grupo = datos.get("wandb", {}).get("grupo") if isinstance(datos.get("wandb"), dict) else None
+    try:
+        valido = isinstance(grupo, str) and bool(re.fullmatch(r"[A-Za-z0-9_.-]+",
+                                                              grupo.format(entorno="x")))
+    except (KeyError, IndexError, ValueError):
+        valido = False
+    if not valido:
+        raise ValueError(f"{ruta}: wandb.grupo debe ser un nombre de grupo de W&B, con "
+                         "{entorno} si se quiere el del entorno")
     for seccion, campos in datos["campos"].items():
         if seccion not in datos["secciones"]:
             raise ValueError(f"{ruta}: la sección {seccion} no tiene título en secciones")

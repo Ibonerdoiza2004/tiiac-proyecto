@@ -245,6 +245,10 @@ def _dashboard_con(tmp_path: Path, cambiar) -> Path:
     (lambda d: d["campos"]["bc"]["batch_size"].update(tipo="texto"), "tipo"),
     (lambda d: d["campos"]["bc"]["batch_size"].update(min="uno"), "min"),
     (lambda d: d["campos"]["bc"]["batch_size"].update(otra=1), "solo admite"),
+    (lambda d: d.pop("wandb"), "wandb.grupo"),
+    (lambda d: d["wandb"].update(grupo="con espacios"), "wandb.grupo"),
+    (lambda d: d["wandb"].update(grupo="dashboard-{otro}"), "wandb.grupo"),
+    (lambda d: d["wandb"].update(grupo=3), "wandb.grupo"),
 ])
 def test_dashboard_que_no_vale(tmp_path, cambiar, mensaje) -> None:
     with pytest.raises(ValueError, match=mensaje):

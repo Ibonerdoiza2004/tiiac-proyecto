@@ -20,6 +20,7 @@ from src.app.ajustes import comprobar_ajustes, esquema_ajustes
 from src.app.contrato import (ConfiguracionJuegoApi, EntrenamientoCrear, EsquemaAjustesApi,
                               MetodoEntrenamiento, ResultadoGuardadoApi, SesionCrear,
                               SesionGuardar, TrabajoApi)
+from src.app.estado_wandb import EstadoWandb
 from src.app.trabajos import GestorTrabajos, OperacionNoValida
 from src.data.biblioteca import nombre_por_defecto
 from src.utils.configuracion import TipoEntorno, resolver_configuracion
@@ -70,14 +71,32 @@ def nombre_modelo(peticion: EntrenamientoCrear, gym: str) -> str:
                                                                                gym)
 
 
+def config_wandb(peticion: EntrenamientoCrear, dashboard: dict[str, Any]) -> dict[str, Any]:
+    """Cómo registra en W&B un entrenamiento: si lo hace y en qué grupo.
+
+    Args:
+        peticion: Petición de entrenamiento ya validada.
+        dashboard: Contenido de configs/dashboard.yaml.
+
+    Returns:
+        ``{"activo": bool, "grupo": str | None}``: el grupo pedido o el de
+        dashboard.yaml para el entorno (``dashboard-<entorno>``); None sin W&B.
+    """
+    if not peticion.wandb:
+        return {"activo": False, "grupo": None}
+    grupo = peticion.grupo or dashboard["wandb"]["grupo"].format(entorno=peticion.entorno.value)
+    return {"activo": True, "grupo": grupo}
+
+
 def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
-                             gestor: GestorTrabajos) -> APIRouter:
+                             gestor: GestorTrabajos, estado_wandb: EstadoWandb) -> APIRouter:
     """Rutas del Laboratorio.
 
     Args:
         ruta_config: Ruta al YAML base.
         dashboard: Contenido de configs/dashboard.yaml (cargar_dashboard).
         gestor: Gestor de trabajos (para comprobar las sesiones al guardar).
+        estado_wandb: Si se puede registrar en W&B (para los entrenamientos con W&B).
 
     Returns:
         Un router con las rutas de /laboratorio, /sesiones y /entrenamientos.
@@ -135,7 +154,14 @@ def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
                                     peticion.ajustes, dashboard)
         except ValueError as error:
             raise no_valida(str(error)) from error
-        nombre_modelo(peticion, cfg["entorno"]["id"])  # lo recibirá el trabajador
+        if peticion.wandb:
+            try:
+                estado_wandb.exigir()
+            except RuntimeError as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+        # Lo recibirá el trabajador.
+        nombre_modelo(peticion, cfg["entorno"]["id"])
+        config_wandb(peticion, dashboard)
         raise HTTPException(status_code=501, detail=PENDIENTE_ENTRENAR)
 
     return router
