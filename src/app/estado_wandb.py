@@ -32,7 +32,11 @@ def comprobar_sesion_wandb() -> str | None:
 
 
 class EstadoWandb:
-    """Último resultado de comprobar W&B, seguro entre hilos."""
+    """Último resultado de comprobar W&B, seguro entre hilos.
+
+    Si dos comprobaciones se solapan (la del arranque, lenta, y otra pedida después),
+    se queda el resultado de la que empezó más tarde, aunque acabe antes.
+    """
 
     def __init__(self, comprobar: Comprobacion = comprobar_sesion_wandb):
         """Prepara el estado sin comprobar todavía (``disponible`` es None).
@@ -44,6 +48,8 @@ class EstadoWandb:
         self._cerrojo = threading.Lock()
         self._disponible: bool | None = None
         self._motivo: str | None = None
+        self._pedidas = 0  # comprobaciones empezadas
+        self._guardada = 0  # número de la comprobación cuyo resultado está guardado
 
     def describir(self) -> dict[str, Any]:
         """``{"disponible", "motivo"}``; disponible es None mientras no se ha comprobado."""
@@ -54,14 +60,21 @@ class EstadoWandb:
         """Comprueba W&B ahora, guarda el resultado y lo devuelve.
 
         Un error inesperado de la comprobación cuenta como no disponible, con su motivo.
+        Si mientras tanto empezó y acabó otra más reciente, su resultado no se pisa y
+        se devuelve ese.
         """
+        with self._cerrojo:
+            self._pedidas += 1
+            numero = self._pedidas
         try:
             motivo = self._comprobar()
         except Exception as error:  # noqa: BLE001 - cualquier fallo es «no disponible»
             motivo = f"no se pudo comprobar W&B: {error!r}"
         with self._cerrojo:
-            self._disponible, self._motivo = motivo is None, motivo
-        return self.describir()
+            if numero > self._guardada:
+                self._disponible, self._motivo = motivo is None, motivo
+                self._guardada = numero
+            return {"disponible": self._disponible, "motivo": self._motivo}
 
     def exigir(self) -> None:
         """Comprueba que W&B se puede usar; si aún no se había comprobado, lo hace ahora.

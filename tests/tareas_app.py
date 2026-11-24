@@ -121,3 +121,20 @@ def evento_no_valido(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     """Intenta emitir un evento con un tipo o unos datos que no valen."""
     canal.evento(argumentos["tipo"], argumentos.get("datos"))
     return {}
+
+
+def ignorar_terminar(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
+    """Ignora SIGTERM y cuenta sin parar, como una tarea que no se deja terminar."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    paso = 0
+    while True:
+        canal.progreso({"paso": paso})
+        paso += 1
+        time.sleep(PAUSA)
+
+
+def imagenes_y_terminar(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
+    """Manda unas imágenes numeradas y termina enseguida."""
+    for i in range(argumentos["cuantas"]):
+        canal.imagen(f"imagen-{i}".encode())
+    return {"enviadas": argumentos["cuantas"]}

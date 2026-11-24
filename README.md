@@ -423,7 +423,7 @@ común a cualquier trabajo.
 | `GET /api/estado` | Entornos, trabajos a la vez, huecos libres y si se puede usar W&B |
 | `POST /api/wandb/comprobar` | Vuelve a comprobar la sesión de W&B (tras `wandb login`, sin reiniciar) |
 | `GET /api/laboratorio/{entorno}` | Velocidad del entorno, si se juega a mano y partidas por defecto |
-| `GET /api/laboratorio/{entorno}/ajustes/{metodo}` | Hiperparámetros del formulario (experto, bc o gail) con los valores del perfil; textos, nivel y rangos en `configs/dashboard.yaml` |
+| `GET /api/laboratorio/{entorno}/ajustes/{metodo}` | Hiperparámetros del formulario (experto, bc o gail) con los valores del perfil; textos, nivel y rangos en `configs/dashboard.yaml` (un límite que no existe no aparece) |
 | `POST /api/sesiones` | Jugar a mano o ver al experto (llega con `laboratorio-jugar-api`; hasta entonces valida y responde 501) |
 | `POST /api/sesiones/{id}/guardar` | Guardar partidas y tramos de una sesión y cerrarla (ídem) |
 | `POST /api/entrenamientos` | Entrenar un experto, BC o GAIL, con nombre opcional para la biblioteca y W&B opcional (llega con `laboratorio-entrenar-api`; ídem) |
@@ -437,10 +437,16 @@ común a cualquier trabajo.
 | Al conectar | `{"tipo": "estado", "trabajo"}`, `{"tipo": "historial", "progreso": [...], "eventos": [...]}` con todo lo anterior y la última imagen |
 | En directo | `{"tipo": "progreso", "medidas"}`, imágenes JPEG en binario (si el navegador va lento, solo la última), `{"tipo": "estado", "trabajo"}` y los eventos propios de cada funcionalidad, como `{"tipo": "partida_terminada", "partida"}` |
 | Al terminar | El último estado, con el resultado, y cierre normal (1000); 4404 si el trabajo no existe |
-| Del navegador | `pausar`, `reanudar` y `cancelar` en cualquier trabajo; `accion` y `finalizar` en una sesión; `vista` y `finalizar` en un entrenamiento |
+| Del navegador | Texto JSON: `pausar`, `reanudar` y `cancelar` en cualquier trabajo; `accion` y `finalizar` en una sesión; `vista` y `finalizar` en un entrenamiento (`finalizar` en pausa reanuda para poder terminar). Lo que no vale, también un mensaje binario, recibe `{"tipo": "error", "mensaje"}` |
 
 Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder ni repetir
-progreso; una sesión de jugar, en cambio, se descarta.
+progreso; una sesión de jugar, en cambio, se descarta al cerrarse la última pestaña que
+la seguía.
+
+Al pedir un entrenamiento, la API comprueba los ajustes con las mismas reglas que los
+entrenadores (`src/utils/reglas_config.py`), también las que combinan campos, y que el
+experto o las demostraciones elegidos existan en la biblioteca, sean de su tipo y
+entorno y estén completos; si algo no vale, responde 422 antes de encolarlo.
 
 W&B es opcional en cada entrenamiento y está apagado por defecto. La API comprueba la
 sesión al arrancar y lo dice en `/api/estado`; pedir un entrenamiento con W&B sin sesión
@@ -459,9 +465,10 @@ python scripts/preparar_biblioteca.py
 ```
 
 Descarga de los cinco entornos unos 42 MB en un minuto y medio (medido el 2026-11-24 en
-este portátil) y comprueba las huellas de los congelados. Se puede repetir: lo que ya
-está no se descarga otra vez. `--entorno` elige entornos y `--sin-entrega` deja solo los
-congelados.
+este portátil) y comprueba las huellas de los congelados y, en cada BC y GAIL, la del
+NPZ con el que se entrenó, tanto la del artefacto como la de sus propios metadatos. Se
+puede repetir: lo que ya está y es válido no se descarga otra vez (lo roto, sí), y dos a
+la vez se turnan. `--entorno` elige entornos y `--sin-entrega` deja solo los congelados.
 
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con

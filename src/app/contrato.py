@@ -180,7 +180,8 @@ class OrdenVista(_Estricto):
 
 class OrdenFinalizar(_Estricto):
     """Termina antes de tiempo guardando lo hecho (sesión: sus partidas completas;
-    entrenamiento: el modelo de ese momento, marcado como incompleto)."""
+    entrenamiento: el modelo de ese momento, marcado como incompleto). Si el trabajo
+    está en pausa, se reanuda para poder terminar."""
 
     tipo: Literal["finalizar"]
 
@@ -193,6 +194,9 @@ ORDENES_POR_TIPO: dict[str, tuple[type[BaseModel], ...]] = {
     "entrenamiento": (OrdenVista, OrdenFinalizar),
     "comparacion": (OrdenVista, OrdenFinalizar),
 }
+# Órdenes que reanudan el trabajo si está en pausa: un trabajo detenido no puede
+# terminar, y se quedaría en pausa ocupando su hueco.
+ORDENES_QUE_REANUDAN = frozenset({"finalizar"})
 
 
 def validar_orden(tipo_trabajo: str, mensaje: Any) -> dict[str, Any]:

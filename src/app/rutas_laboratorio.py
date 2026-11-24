@@ -22,7 +22,7 @@ from src.app.contrato import (ConfiguracionJuegoApi, EntrenamientoCrear, Esquema
                               SesionGuardar, TrabajoApi)
 from src.app.estado_wandb import EstadoWandb
 from src.app.trabajos import GestorTrabajos, OperacionNoValida
-from src.data.biblioteca import nombre_por_defecto
+from src.data.biblioteca import Biblioteca, nombre_por_defecto
 from src.utils.configuracion import TipoEntorno, resolver_configuracion
 
 PENDIENTE_JUGAR = ("Todavía no implementado: las sesiones llegan con la rama "
@@ -88,8 +88,34 @@ def config_wandb(peticion: EntrenamientoCrear, dashboard: dict[str, Any]) -> dic
     return {"activo": True, "grupo": grupo}
 
 
+def comprobar_referencia(biblioteca: Biblioteca, id_elemento: str, tipo: str,
+                         entorno: TipoEntorno) -> None:
+    """Comprueba que un id de la petición sea un elemento válido, de su tipo y entorno.
+
+    Args:
+        biblioteca: Índice de la biblioteca.
+        id_elemento: Id que manda el navegador.
+        tipo: Tipo que tiene que tener (experto o demostraciones).
+        entorno: Entorno de la petición.
+
+    Raises:
+        ValueError: Con el motivo si no existe, es de otro tipo o entorno o no es válido.
+    """
+    try:
+        elemento = biblioteca.obtener(id_elemento)
+    except KeyError:
+        raise ValueError(f"No hay ningún elemento {id_elemento!r} en la biblioteca") from None
+    if elemento["tipo"] != tipo:
+        raise ValueError(f"{id_elemento} es de tipo {elemento['tipo']}, no {tipo}")
+    if elemento["entorno"] != entorno.value:
+        raise ValueError(f"{id_elemento} es de {elemento['entorno']}, no de {entorno.value}")
+    if not elemento["valido"]:
+        raise ValueError(f"{id_elemento} no es válido: {elemento['motivo']}")
+
+
 def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
-                             gestor: GestorTrabajos, estado_wandb: EstadoWandb) -> APIRouter:
+                             gestor: GestorTrabajos, estado_wandb: EstadoWandb,
+                             biblioteca: Biblioteca) -> APIRouter:
     """Rutas del Laboratorio.
 
     Args:
@@ -97,6 +123,7 @@ def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
         dashboard: Contenido de configs/dashboard.yaml (cargar_dashboard).
         gestor: Gestor de trabajos (para comprobar las sesiones al guardar).
         estado_wandb: Si se puede registrar en W&B (para los entrenamientos con W&B).
+        biblioteca: Índice de la biblioteca (para comprobar el experto y los datos).
 
     Returns:
         Un router con las rutas de /laboratorio, /sesiones y /entrenamientos.
@@ -121,10 +148,15 @@ def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
                 "partidas_maximas": laboratorio["partidas_maximas"],
                 "semilla": demostraciones["semilla"]}
 
+    # Sin las claves que no tienen valor (min, max, paso, opciones): el formulario no
+    # tiene que distinguir entre «sin mínimo» y un mínimo null.
     @router.get("/laboratorio/{entorno}/ajustes/{metodo}", response_model=EsquemaAjustesApi,
-                tags=["laboratorio"])
+                response_model_exclude_none=True, tags=["laboratorio"])
     def ajustes(entorno: TipoEntorno, metodo: MetodoEntrenamiento) -> dict[str, Any]:
-        """Hiperparámetros del método con los valores del perfil, para el formulario."""
+        """Hiperparámetros del método con los valores del perfil, para el formulario.
+
+        Los límites y las opciones solo aparecen si el campo los tiene.
+        """
         return esquema_ajustes(ruta_config, entorno, metodo, dashboard)
 
     @router.post("/sesiones", response_model=TrabajoApi, status_code=201, tags=["sesiones"])
@@ -135,6 +167,11 @@ def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
                             f"{', '.join(laboratorio['jugar_a_mano'])}")
         if peticion.partidas is not None and peticion.partidas > laboratorio["partidas_maximas"]:
             raise no_valida(f"Como mucho {laboratorio['partidas_maximas']} partidas")
+        if peticion.experto is not None:
+            try:
+                comprobar_referencia(biblioteca, peticion.experto, "experto", peticion.entorno)
+            except ValueError as error:
+                raise no_valida(f"experto: {error}") from error
         raise HTTPException(status_code=501, detail=PENDIENTE_JUGAR)
 
     @router.post("/sesiones/{id_trabajo}/guardar", response_model=ResultadoGuardadoApi,
@@ -154,6 +191,11 @@ def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
                                     peticion.ajustes, dashboard)
         except ValueError as error:
             raise no_valida(str(error)) from error
+        for id_datos in peticion.datos:
+            try:
+                comprobar_referencia(biblioteca, id_datos, "demostraciones", peticion.entorno)
+            except ValueError as error:
+                raise no_valida(f"datos: {error}") from error
         if peticion.wandb:
             try:
                 estado_wandb.exigir()

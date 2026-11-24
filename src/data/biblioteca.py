@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.archivos import escribir_carpeta_nueva
+from src.utils.configuracion import TipoEntorno
 
 FORMATO_FICHA = "tiiac-biblioteca"
 VERSION_FICHA = 1
@@ -135,6 +136,9 @@ def comprobar_ficha(ficha: Any, entorno: str | None = None, tipo: str | None = N
     for campo in ("entorno", "nombre", "creado"):
         if not isinstance(ficha.get(campo), str) or not ficha[campo].strip():
             raise ValueError(f"falta {campo}")
+    entornos = [t.value for t in TipoEntorno]
+    if ficha["entorno"] not in entornos:
+        raise ValueError(f"entorno no válido: {ficha['entorno']!r}; opciones: {entornos}")
     if "fuente" in ficha and ficha["fuente"] not in FUENTES:
         raise ValueError(f"fuente no válida: {ficha['fuente']!r}")
     for campo, esperado in (("entorno", entorno), ("tipo", tipo), ("id", id_elemento)):
@@ -148,7 +152,8 @@ def _id_en_uso(raiz: Path, id_elemento: str) -> bool:
     if not raiz.is_dir():
         return False
     return any((entorno / tipo / id_elemento).exists()
-               for entorno in raiz.iterdir() if entorno.is_dir() and not entorno.name.startswith(".")
+               for entorno in raiz.iterdir()
+               if entorno.is_dir() and not entorno.name.startswith(".")
                for tipo in TIPOS)
 
 
@@ -257,9 +262,17 @@ def _leer_json(ruta: Path) -> Any:
         raise ValueError(f"no se pudo leer {ruta.name}: {error}") from error
 
 
+def _objeto(valor: Any, donde: str) -> dict[str, Any]:
+    """El valor si es un objeto JSON (diccionario); si no, ValueError con dónde está."""
+    if not isinstance(valor, dict):
+        raise ValueError(f"{donde} no es un objeto JSON")
+    return valor
+
+
 def _detalles_experto(carpeta: Path, gym: str) -> dict[str, Any]:
     """Lo principal de experto.json."""
-    resumen = _leer_json(carpeta / "experto.json").get("resumen", {})
+    datos = _objeto(_leer_json(carpeta / "experto.json"), "experto.json")
+    resumen = _objeto(datos.get("resumen", {}), "el resumen de experto.json")
     if resumen.get("entorno") != gym:
         raise ValueError(f"experto.json es de {resumen.get('entorno')!r}, no de {gym}")
     return {clave: resumen.get(clave) for clave in
@@ -269,14 +282,15 @@ def _detalles_experto(carpeta: Path, gym: str) -> dict[str, Any]:
 
 def _detalles_gail(carpeta: Path, gym: str) -> dict[str, Any]:
     """Lo principal de gail.json."""
-    datos = _leer_json(carpeta / "gail.json")
-    resumen = datos.get("resumen", {})
+    datos = _objeto(_leer_json(carpeta / "gail.json"), "gail.json")
+    resumen = _objeto(datos.get("resumen", {}), "el resumen de gail.json")
+    procedencia = _objeto(datos.get("datos", {}), "los datos de gail.json")
     if resumen.get("entorno") != gym:
         raise ValueError(f"gail.json es de {resumen.get('entorno')!r}, no de {gym}")
     return {"cantidad": resumen.get("cantidad"), "repeticion": resumen.get("repeticion"),
             "iteraciones": resumen.get("iteraciones"), "pasos": resumen.get("pasos"),
             "segundos": resumen.get("segundos"),
-            "huella_dataset": datos.get("datos", {}).get("huella_dataset")}
+            "huella_dataset": procedencia.get("huella_dataset")}
 
 
 def _detalles_bc(carpeta: Path, gym: str) -> dict[str, Any]:
@@ -292,7 +306,8 @@ def _detalles_bc(carpeta: Path, gym: str) -> dict[str, Any]:
         raise ValueError("politica.pt no tiene metadatos")
     if metadatos.get("entorno") != gym:
         raise ValueError(f"politica.pt es de {metadatos.get('entorno')!r}, no de {gym}")
-    resumen = metadatos.get("adicional", {}).get("resumen", {})
+    adicional = _objeto(metadatos.get("adicional", {}), "adicional de politica.pt")
+    resumen = _objeto(adicional.get("resumen", {}), "el resumen de politica.pt")
     return {"subconjunto": metadatos.get("subconjunto"), "semilla": metadatos.get("semilla"),
             "repeticion": resumen.get("repeticion"), "segundos": resumen.get("segundos"),
             "huella_dataset": metadatos.get("huella_dataset")}
@@ -351,6 +366,8 @@ class Biblioteca:
             elemento["valido"] = True
         except ValueError as error:
             elemento["motivo"] = str(error)
+        except Exception as error:  # noqa: BLE001 - un elemento roto no tumba el índice
+            elemento["motivo"] = f"no se pudo leer: {error!r}"
         return elemento
 
     def listar(self, entorno: str | None = None,

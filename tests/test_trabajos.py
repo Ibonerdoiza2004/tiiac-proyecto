@@ -7,6 +7,7 @@ con los entrenamientos.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -14,6 +15,7 @@ from collections.abc import Callable, Iterator
 import numpy as np
 import pytest
 
+from src.app import trabajos
 from src.app.trabajos import (ESTADOS_FINALES, GestorTrabajos, OperacionNoValida, SinHueco,
                               TrabajoDesconocido, comprobar_ruta_tarea, resolver_tarea)
 
@@ -196,9 +198,34 @@ def test_las_ordenes_esperan_mientras_esta_en_pausa(crear_gestor) -> None:
     assert gestor.obtener(trabajo)["estado"] == "pausado"
     gestor.reanudar(trabajo)
     final = gestor.esperar(trabajo, LIMITE)
-    assert final["resultado"]["ordenes"] == [{"tipo": "vista", "activa": True}, {"tipo": "finalizar"}]
+    assert final["resultado"]["ordenes"] == [{"tipo": "vista", "activa": True},
+                                             {"tipo": "finalizar"}]
     # Al reanudar, una sola llamada a ordenes() devuelve todas las que esperaban.
     assert final["resultado"]["lotes"] == [2]
+
+
+def test_una_orden_que_reanuda_saca_al_trabajo_de_la_pausa(crear_gestor) -> None:
+    """Regresión: finalizar en pausa dejaba el trabajo pausado, ocupando su hueco, hasta
+    que alguien lo reanudaba (y el frontend deshabilita Reanudar tras Finalizar)."""
+    gestor = crear_gestor(1)
+    estados = []
+    gestor.observar(lambda id_, e: estados.append(e["trabajo"]["estado"])
+                    if e["tipo"] == "estado" else None)
+    trabajo = contar(gestor)
+    gestor.pausar(trabajo)
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"}, reanudar=True)
+    final = gestor.esperar(trabajo, LIMITE)
+    assert final["estado"] == "terminado"
+    assert final["resultado"]["ordenes"] == [{"tipo": "finalizar"}]
+    esperar_hasta(lambda: "terminado" in estados)
+    assert estados == ["en_marcha", "pausado", "en_marcha", "terminado"]
+
+
+def test_reanudar_con_la_orden_no_hace_nada_si_ya_estaba_en_marcha(crear_gestor) -> None:
+    gestor = crear_gestor(1)
+    trabajo = contar(gestor)
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"}, reanudar=True)
+    assert gestor.esperar(trabajo, LIMITE)["estado"] == "terminado"
 
 
 @pytest.mark.parametrize("accion, estado", [("pausar", "en_cola"), ("reanudar", "en_cola"),
@@ -448,6 +475,102 @@ def test_cerrar_cancela_todo_y_no_deja_procesos(crear_gestor) -> None:
     assert not any(p.is_alive() for p in procesos)
     with pytest.raises(RuntimeError, match="cerrado"):
         gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
+
+
+def test_cerrar_mata_a_los_que_no_terminan_por_las_buenas(crear_gestor, monkeypatch) -> None:
+    """Regresión: si un proceso seguía vivo al acabar el plazo, cerrar volvía con él
+    vivo y el trabajo en_marcha."""
+    monkeypatch.setattr(trabajos, "ESPERA_TERMINAR", 60.0)  # que no lo mate el temporizador
+    gestor = crear_gestor(1)
+    terco = gestor.crear("entrenamiento", "tareas_app:ignorar_terminar")["id"]
+    esperar_hasta(lambda: len(gestor.historial(terco)) >= 3)
+    proceso = gestor._trabajos[terco].proceso
+    inicio = time.monotonic()
+    gestor.cerrar(timeout=0.3)
+    assert time.monotonic() - inicio < 10
+    assert not proceso.is_alive()
+    assert gestor.obtener(terco)["estado"] == "cancelado"
+
+
+# --- Procesos que no arrancan o no se dejan terminar ----------------------------------
+
+def test_un_trabajo_que_no_arranca_falla_y_la_cola_sigue(crear_gestor) -> None:
+    """Regresión: si el proceso no llegaba a arrancar (argumentos que no se pueden pasar
+    por pickle), el trabajo se quedaba en_cola para siempre, el hilo que lo lanzaba
+    moría y los siguientes de la cola no empezaban nunca."""
+    gestor = crear_gestor(1)
+    primero = contar(gestor)
+    roto = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": lambda: 1})["id"]
+    siguiente = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [2, 3]})["id"]
+    gestor.enviar_orden(primero, {"tipo": "finalizar"})
+    final = gestor.esperar(roto, LIMITE)
+    assert final["estado"] == "fallido"
+    assert "No se pudo arrancar el proceso" in final["error"]
+    assert final["terminado"] is not None
+    assert gestor.esperar(siguiente, LIMITE)["resultado"] == {"suma": 5}
+    assert gestor.libres() == 1
+
+
+def test_un_trabajo_que_no_arranca_con_hueco_libre_falla_al_crearlo(crear_gestor) -> None:
+    gestor = crear_gestor(1)
+    roto = gestor.crear("sesion", "tareas_app:sumar", {"numeros": lambda: 1}, interactivo=True)
+    assert roto["estado"] == "fallido" and "No se pudo arrancar" in roto["error"]
+    assert gestor.libres() == 1
+    assert gestor.esperar(gestor.crear("entrenamiento", "tareas_app:sumar",
+                                       {"numeros": [1]})["id"], LIMITE)["estado"] == "terminado"
+
+
+def test_cancelar_mata_a_un_proceso_que_ignora_sigterm(crear_gestor, monkeypatch) -> None:
+    monkeypatch.setattr(trabajos, "ESPERA_TERMINAR", 0.5)
+    gestor = crear_gestor(1)
+    terco = gestor.crear("entrenamiento", "tareas_app:ignorar_terminar")["id"]
+    esperar_hasta(lambda: len(gestor.historial(terco)) >= 3)
+    gestor.cancelar(terco)
+    assert gestor.esperar(terco, LIMITE)["estado"] == "cancelado"
+    assert not gestor._trabajos[terco].proceso.is_alive()
+    assert gestor.libres() == 1
+
+
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="pidfd solo existe en Linux")
+def test_las_senales_van_por_el_pidfd_y_no_por_el_numero(crear_gestor, monkeypatch) -> None:
+    """Las señales no usan el número del proceso, que el sistema puede reutilizar en
+    cuanto el proceso termina: van por su pidfd."""
+    gestor = crear_gestor(1)
+    trabajo = contar(gestor)
+    monkeypatch.setattr(trabajos.os, "kill",
+                        lambda *a: pytest.fail("no debería usar os.kill"))
+    gestor.pausar(trabajo)
+    gestor.reanudar(trabajo)
+    gestor.cancelar(trabajo)
+    assert gestor.esperar(trabajo, LIMITE)["estado"] == "cancelado"
+    # Acabado, su pidfd está cerrado y ya no se le puede mandar nada.
+    assert gestor._trabajos[trabajo].pidfd is None
+    with pytest.raises(OperacionNoValida):
+        gestor.pausar(trabajo)
+
+
+def test_la_ultima_imagen_llega_antes_que_el_estado_final(crear_gestor, monkeypatch) -> None:
+    """Regresión: con el lector de imágenes retrasado, el estado terminado se avisaba
+    antes que la última imagen (y el WebSocket ya podía haberse cerrado)."""
+    leer = GestorTrabajos._leer_imagenes
+
+    def lento(self, trabajo, lectura):
+        time.sleep(0.5)
+        leer(self, trabajo, lectura)
+
+    monkeypatch.setattr(GestorTrabajos, "_leer_imagenes", lento)
+    gestor = crear_gestor(1)
+    eventos = []
+    gestor.observar(lambda id_, e: eventos.append(e))
+    trabajo = gestor.crear("entrenamiento", "tareas_app:imagenes_y_terminar", {"cuantas": 3})
+    final = gestor.esperar(trabajo["id"], LIMITE)
+    assert final["estado"] == "terminado"
+    assert gestor.ultima_imagen(trabajo["id"]) == b"imagen-2"
+    esperar_hasta(lambda: any(e["tipo"] == "estado" and e["trabajo"]["estado"] == "terminado"
+                              for e in eventos))
+    tipos = [e["tipo"] if e["tipo"] != "estado" else e["trabajo"]["estado"] for e in eventos]
+    assert tipos[-1] == "terminado"
+    assert tipos.count("imagen") == 3
 
 
 # --- Validación ----------------------------------------------------------------------

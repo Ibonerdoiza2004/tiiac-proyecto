@@ -119,6 +119,8 @@ def test_crear_ficha_valida() -> None:
     ({"entorno": ""}, "falta entorno"),
     ({"creado": None}, "falta creado"),
     ({"fuente": "robot"}, "fuente no válida"),
+    ({"entorno": "cartpoel"}, "entorno no válido"),
+    ({"entorno": "CartPole-v1"}, "entorno no válido"),
 ])
 def test_fichas_que_no_valen(cambio, motivo) -> None:
     ficha = {**crear_ficha("0" * 12, "cartpole", "bc", "BC", "dashboard"), **cambio}
@@ -150,7 +152,8 @@ def test_agregar_sin_los_archivos_del_tipo_no_deja_nada(biblioteca) -> None:
     with pytest.raises(ValueError, match="Faltan archivos"):
         agregar(biblioteca.raiz, ficha, lambda c: (c / "modelo.zip").write_bytes(b"x"))
     assert biblioteca.listar() == []
-    assert not any(p.name.startswith(".") for p in (biblioteca.raiz / "cartpole" / "gail").iterdir())
+    carpeta = biblioteca.raiz / "cartpole" / "gail"
+    assert not any(p.name.startswith(".") for p in carpeta.iterdir())
 
 
 def test_agregar_si_falla_al_escribir_no_deja_nada(biblioteca) -> None:
@@ -347,6 +350,60 @@ def test_otros_elementos_rotos(biblioteca, tipo, estropear, motivo) -> None:
     assert elemento["valido"] is False and motivo in elemento["motivo"]
 
 
+def _json(carpeta: Path, nombre: str, contenido: Any) -> None:
+    """Sustituye un JSON de un elemento."""
+    (carpeta / nombre).write_text(json.dumps(contenido), encoding="utf-8")
+
+
+@pytest.mark.parametrize("tipo, estropear, motivo", [
+    ("experto", lambda c: _json(c, "experto.json", [1, 2]), "experto.json no es un objeto"),
+    ("experto", lambda c: _json(c, "experto.json", {"resumen": [1]}),
+     "el resumen de experto.json no es un objeto"),
+    ("gail", lambda c: _json(c, "gail.json", {"resumen": {"entorno": "CartPole-v1"}, "datos": []}),
+     "los datos de gail.json no es un objeto"),
+    ("gail", lambda c: _json(c, "gail.json", "texto"), "gail.json no es un objeto"),
+    ("bc", lambda c: torch.save({"metadatos": {"entorno": "CartPole-v1", "adicional": [1]}},
+                                c / "politica.pt"), "adicional de politica.pt no es un objeto"),
+    ("bc", lambda c: torch.save({"metadatos": {"entorno": "CartPole-v1",
+                                               "adicional": {"resumen": 3}}}, c / "politica.pt"),
+     "el resumen de politica.pt no es un objeto"),
+])
+def test_metadatos_que_no_son_objetos_no_tumban_el_indice(biblioteca, tipo, estropear,
+                                                          motivo) -> None:
+    """Regresión: un gail.json con "datos": [] o un experto.json que es una lista daban
+    AttributeError y fallaba el listado entero. Ahora ese elemento sale como no válido y
+    los demás siguen."""
+    bueno = nuevo(biblioteca.raiz, "demostraciones")
+    roto = nuevo(biblioteca.raiz, tipo)
+    estropear(biblioteca.ruta(roto))
+    elementos = {e["id"]: e for e in biblioteca.listar()}
+    assert elementos[bueno]["valido"] is True
+    assert elementos[roto]["valido"] is False and motivo in elementos[roto]["motivo"]
+
+
+def test_un_fallo_inesperado_al_leer_un_elemento_no_tumba_el_indice(biblioteca,
+                                                                   monkeypatch) -> None:
+    bueno = nuevo(biblioteca.raiz, "experto")
+    roto = nuevo(biblioteca.raiz, "gail")
+
+    def falla(carpeta: Path, gym: str) -> dict:
+        raise RuntimeError("fallo raro")
+
+    monkeypatch.setitem(modulo_biblioteca.DETALLES, "gail", falla)
+    elementos = {e["id"]: e for e in biblioteca.listar()}
+    assert elementos[bueno]["valido"] is True
+    assert not elementos[roto]["valido"] and "fallo raro" in elementos[roto]["motivo"]
+
+
+def test_no_se_guarda_un_elemento_de_un_entorno_desconocido(biblioteca) -> None:
+    """Regresión: agregar_nuevo aceptaba «cartpoel», escribía la carpeta y el índice, que
+    solo mira los entornos conocidos, no la mostraba nunca."""
+    with pytest.raises(ValueError, match="entorno no válido"):
+        agregar_nuevo(biblioteca.raiz, "cartpoel", "experto", "E", "dashboard",
+                      lambda c: escribir_archivos(c, "experto"))
+    assert not biblioteca.raiz.exists() or not (biblioteca.raiz / "cartpoel").exists()
+
+
 def test_demostraciones_de_otro_entorno(biblioteca) -> None:
     ficha = crear_ficha(nuevo_id(), "reacher", "demostraciones", "D", "dashboard")
     agregar(biblioteca.raiz, ficha, lambda c: escribir_archivos(c, "demostraciones"))
@@ -447,7 +504,8 @@ def test_precargar_congelados_si_no_valen_no_anade_nada(biblioteca, monkeypatch)
     with pytest.raises(ValueError, match="no coincide"):
         precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None)
     assert biblioteca.listar() == []
-    assert [p.name for p in biblioteca.raiz.iterdir()] == []  # sin temporales
+    # Sin temporales: solo queda el cerrojo de las precargas.
+    assert [p.name for p in biblioteca.raiz.iterdir()] == [precarga.ARCHIVO_CERROJO]
 
 
 def test_precargar_congelados_con_el_perfil_pendiente(biblioteca) -> None:
@@ -458,29 +516,42 @@ def test_precargar_congelados_con_el_perfil_pendiente(biblioteca) -> None:
 
 
 class ArtefactoFalso:
-    """Lo que usa la precarga de un artefacto de W&B."""
+    """Lo que usa la precarga de un artefacto de W&B.
+
+    ``huella`` es la que anuncia el artefacto en sus metadatos; ``interna``, la que
+    guarda el propio modelo (por defecto, la misma).
+    """
 
     def __init__(self, nombre: str, tipo: str, huella: str, cantidad: int = 4,
-                 repeticion: int = 0, pesos: int = 1):
+                 repeticion: int = 0, pesos: int = 1, interna: str | None = None):
         self.name, self.type = nombre, tipo
         self.metadata = {"huella_dataset": huella, "cantidad": cantidad,
                          "repeticion": repeticion}
         self.pesos = pesos
+        self.interna = huella if interna is None else interna
+        self.descargas = 0
 
     def download(self, root: str) -> str:
+        self.descargas += 1
         carpeta = Path(root)
         if self.type == "gail":
             escribir_archivos(carpeta, "gail")
+            datos = json.loads((carpeta / "gail.json").read_text(encoding="utf-8"))
+            datos["datos"]["huella_dataset"] = self.interna
+            _json(carpeta, "gail.json", datos)
         else:
             for i in range(self.pesos):
                 escribir_archivos(carpeta, "bc")
-                shutil.move(carpeta / "politica.pt", carpeta / f"repeticion_{i}.pt")
+                carga = torch.load(carpeta / "politica.pt", weights_only=True)
+                carga["metadatos"]["huella_dataset"] = self.interna
+                torch.save(carga, carpeta / f"repeticion_{i}.pt")
+                (carpeta / "politica.pt").unlink()
         return str(carpeta)
 
 
 def test_precargar_entrega(biblioteca, congelados_falsos) -> None:
     precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None)
-    huella = precarga.huella_demostraciones_congeladas(biblioteca, "cartpole")
+    huella = precarga.huella_demostraciones_congeladas(_cfg(), biblioteca)
     lineas = []
     artefactos = [ArtefactoFalso("bc-a:v0", "bc", huella, 7, 2),
                   ArtefactoFalso("gail-a:v0", "gail", huella, 4, 1),
@@ -501,6 +572,91 @@ def test_precargar_entrega(biblioteca, congelados_falsos) -> None:
 def test_precargar_entrega_sin_congelados_falla(biblioteca) -> None:
     with pytest.raises(ValueError, match="faltan las demostraciones congeladas"):
         precarga.precargar_entrega(_cfg(), biblioteca, [], lambda _: None)
+
+
+def test_un_modelo_cuya_huella_interna_no_coincide_se_omite(biblioteca,
+                                                           congelados_falsos) -> None:
+    """Regresión: bastaba con la huella que anuncia el artefacto en W&B; ahora también
+    tiene que coincidir la que guarda el propio modelo."""
+    precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None)
+    huella = precarga.huella_demostraciones_congeladas(_cfg(), biblioteca)
+    lineas = []
+    artefactos = [ArtefactoFalso("gail-x:v0", "gail", huella, interna="b" * 64),
+                  ArtefactoFalso("bc-x:v0", "bc", huella, interna="c" * 64),
+                  ArtefactoFalso("bc-bueno:v0", "bc", huella)]
+    anadidos = precarga.precargar_entrega(_cfg(), biblioteca, artefactos, lineas.append)
+    assert [e["artefacto"] for e in biblioteca.listar(tipos=("bc", "gail"))] == ["bc-bueno:v0"]
+    assert len(anadidos) == 1
+    assert sum("no con las demostraciones congeladas" in l for l in lineas) == 2
+    # Los omitidos liberan su id: quedan los 2 congelados y el BC bueno.
+    assert len(list((biblioteca.raiz / CARPETA_IDS).iterdir())) == 3
+
+
+def test_la_huella_es_la_del_congelado_del_perfil(biblioteca, congelados_falsos) -> None:
+    """Regresión: con dos congelados del mismo entorno se usaba el más antiguo, aunque el
+    perfil citara el otro, y se descartaban los modelos buenos."""
+    viejo = _cfg()
+    viejo["datos"]["artefacto_demostraciones"] = "demos-viejo"
+    precarga.precargar_congelados(viejo, biblioteca, _descargar, lambda _: None)
+    # El congelado actual del perfil, con otro NPZ (otra huella).
+    def descargar_actual(nombre: str, carpeta: Path) -> Path:
+        _descargar(nombre, carpeta)
+        if not nombre.startswith("experto"):
+            guardar = carpeta / "demostraciones.npz"
+            guardar.unlink()
+            guardar_demostraciones(guardar, [_trayectoria(0, 9)],
+                                   {"entorno": "CartPole-v1", "experto": "y", "procedencia": {},
+                                    "configuracion_experto": {}},
+                                   spaces.Box(-np.inf, np.inf, (4,), np.float32),
+                                   spaces.Discrete(2))
+        return carpeta
+    precarga.precargar_congelados(_cfg(), biblioteca, descargar_actual, lambda _: None)
+    huella_vieja = precarga.huella_demostraciones_congeladas(viejo, biblioteca)
+    huella = precarga.huella_demostraciones_congeladas(_cfg(), biblioteca)
+    assert huella and huella_vieja and huella != huella_vieja
+    anadidos = precarga.precargar_entrega(_cfg(), biblioteca,
+                                          [ArtefactoFalso("bc-a:v0", "bc", huella)],
+                                          lambda _: None)
+    assert len(anadidos) == 1
+
+
+def test_un_elemento_presente_pero_roto_se_vuelve_a_descargar(biblioteca,
+                                                             congelados_falsos) -> None:
+    """Regresión: si faltaba modelo.zip, la precarga decía que el experto ya estaba."""
+    precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None)
+    experto = biblioteca.experto_por_defecto("cartpole")
+    (biblioteca.ruta(experto["id"]) / "modelo.zip").unlink()
+    lineas = []
+    anadidos = precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lineas.append)
+    assert len(anadidos) == 1
+    nuevo_experto = biblioteca.experto_por_defecto("cartpole")
+    assert nuevo_experto["valido"] and nuevo_experto["id"] != experto["id"]
+
+
+def test_dos_precargas_a_la_vez_no_duplican(biblioteca, congelados_falsos) -> None:
+    """Regresión: dos precargas simultáneas creaban cuatro fichas para dos artefactos."""
+    import threading
+    import time
+
+    def lenta(nombre: str, carpeta: Path) -> Path:
+        time.sleep(0.3)
+        return _descargar(nombre, carpeta)
+
+    errores = []
+
+    def precargar() -> None:
+        try:
+            precarga.precargar_congelados(_cfg(), biblioteca, lenta, lambda _: None)
+        except Exception as error:  # noqa: BLE001
+            errores.append(error)
+
+    hilos = [threading.Thread(target=precargar) for _ in range(2)]
+    for hilo in hilos:
+        hilo.start()
+    for hilo in hilos:
+        hilo.join(30)
+    assert errores == []
+    assert sorted(e["tipo"] for e in biblioteca.listar()) == ["demostraciones", "experto"]
 
 
 # --- Rutas ---------------------------------------------------------------------------------

@@ -79,8 +79,8 @@ describe('perfiles.json', () => {
       .matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
     expect(OPCIONES.activacion).toEqual(claves(leer('src/models/factory.py'), 'ACTIVACIONES'));
     expect(OPCIONES['bc.optimizador']).toEqual(claves(leer('src/training/bc.py'), 'OPTIMIZADORES'));
-    expect(OPCIONES.recompensa).toEqual(claves(leer('src/training/gail.py'), 'MODOS_RECOMPENSA'));
-    expect(leer('src/training/gail.py')).toContain('if dcfg["optimizador"] != "adam":');
+    expect(OPCIONES.recompensa).toEqual(claves(leer('src/utils/reglas_config.py'), 'MODOS_RECOMPENSA'));
+    expect(leer('src/utils/reglas_config.py')).toContain('OPTIMIZADORES_DISCRIMINADOR = ("adam",)');
     expect(OPCIONES['gail.discriminador.optimizador']).toEqual(['adam']);
     expect(campo('cartpole', 'bc', 'bc', 'optimizador').opciones).toEqual(['adam', 'rmsprop', 'sgd']);
     expect(campo('cartpole', 'gail', 'gail.discriminador', 'optimizador').opciones).toEqual(['adam']);

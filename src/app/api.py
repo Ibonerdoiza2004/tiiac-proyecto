@@ -17,7 +17,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.app.ajustes import cargar_dashboard
+from src.app.ajustes import cargar_dashboard, comprobar_esquemas
 from src.app.contrato import EntornoApi, EstadoApi, WandbApi
 from src.app import estado_wandb as modulo_wandb
 from src.app.estado_wandb import Comprobacion, EstadoWandb
@@ -107,8 +107,9 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     """Crea la aplicación: la API bajo /api y, si está compilado, el frontend en /.
 
     La configuración (y configs/dashboard.yaml, junto al YAML base) se lee y se
-    comprueba aquí, una vez: si no es válida, la aplicación no se crea. El gestor de trabajos se cierra al apagar el servidor,
-    así que no quedan procesos sueltos.
+    comprueba aquí, una vez, con el formulario de cada entorno y método: si algo no
+    vale, la aplicación no se crea. El gestor de trabajos se cierra al apagar el
+    servidor, así que no quedan procesos sueltos.
 
     Args:
         ruta_config: Ruta al YAML base.
@@ -126,6 +127,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     aplicativo = config_aplicativo(leer_configuracion_base(ruta_config))
     entornos = describir_entornos(ruta_config)
     dashboard = cargar_dashboard(Path(ruta_config).parent / ARCHIVO_DASHBOARD)
+    comprobar_esquemas(Path(ruta_config), dashboard)
     gestor = gestor or GestorTrabajos(aplicativo["procesos"])
     biblioteca = Biblioteca(aplicativo["biblioteca"], {e.id: e.gym for e in entornos})
     estado_wandb = EstadoWandb(comprobar_wandb or modulo_wandb.comprobar_sesion_wandb)
@@ -163,7 +165,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
 
     api.include_router(crear_router_trabajos(gestor))
     api.include_router(crear_router_laboratorio(Path(ruta_config), dashboard, gestor,
-                                                estado_wandb))
+                                                estado_wandb, biblioteca))
     api.include_router(crear_router_biblioteca(biblioteca))
     app.include_router(api)
 

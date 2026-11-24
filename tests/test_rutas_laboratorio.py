@@ -6,17 +6,21 @@ sesiones y entrenamientos (que validan y responden 501 hasta sus ramas -api).
 from __future__ import annotations
 
 import itertools
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
+from test_biblioteca import escribir_archivos
 
 from src.app.ajustes import METODOS, cargar_dashboard, esquema_ajustes
 from src.app.api import crear_app
 from src.app.contrato import ORDENES_POR_TIPO, validar_orden
 from src.app.rutas_laboratorio import PENDIENTE_ENTRENAR, PENDIENTE_JUGAR, fps_entorno
 from src.app.trabajos import GestorTrabajos
+from src.data.biblioteca import ARCHIVOS, agregar, crear_ficha, nuevo_id
 from src.utils.configuracion import TipoEntorno, resolver_configuracion
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -24,13 +28,40 @@ CONFIG = CONFIGS / "default.yaml"
 DASHBOARD = cargar_dashboard(CONFIGS / "dashboard.yaml")
 ENTORNOS = [t.value for t in TipoEntorno]
 FPS = {"cartpole": 50, "mountaincar": 30, "acrobot": 15, "reacher": 50, "halfcheetah": 20}
+GYM = {entorno: resolver_configuracion(CONFIG, entorno)["entorno"]["id"] for entorno in ENTORNOS}
+
+
+def configs_con_biblioteca(tmp_path: Path) -> Path:
+    """Copia configs/ con la biblioteca en tmp_path/biblioteca; devuelve el YAML base."""
+    copia = tmp_path / "configs"
+    shutil.copytree(CONFIGS, copia)
+    base = copia / "default.yaml"
+    cfg = yaml.safe_load(base.read_text(encoding="utf-8"))
+    cfg["aplicativo"]["biblioteca"] = str(tmp_path / "biblioteca")
+    base.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return base
+
+
+def elemento(raiz: Path, tipo: str, entorno: str, valido: bool = True) -> str:
+    """Añade a la biblioteca un elemento del tipo y entorno (roto si no es válido)."""
+    ficha = crear_ficha(nuevo_id(), entorno, tipo, f"{tipo} de prueba", "dashboard")
+    carpeta = agregar(raiz, ficha, lambda c: escribir_archivos(c, tipo, GYM[entorno]))
+    if not valido:
+        (carpeta / ARCHIVOS[tipo][0]).unlink()
+    return ficha["id"]
 
 
 @pytest.fixture
-def cliente_y_gestor() -> Iterator[tuple[TestClient, GestorTrabajos]]:
-    """Aplicación con un gestor pequeño; se cierra al acabar."""
+def raiz(tmp_path: Path) -> Path:
+    """Carpeta de la biblioteca de la aplicación de los tests."""
+    return tmp_path / "biblioteca"
+
+
+@pytest.fixture
+def cliente_y_gestor(tmp_path: Path) -> Iterator[tuple[TestClient, GestorTrabajos]]:
+    """Aplicación con un gestor pequeño y una biblioteca vacía propia; se cierra al acabar."""
     gestor = GestorTrabajos(1)
-    with TestClient(crear_app(CONFIG, gestor)) as cliente:
+    with TestClient(crear_app(configs_con_biblioteca(tmp_path), gestor)) as cliente:
         yield cliente, gestor
     gestor.cerrar()
 
@@ -118,7 +149,23 @@ def test_entorno_desconocido_da_422(cliente) -> None:
 def test_esquema_de_ajustes(cliente, entorno, metodo) -> None:
     respuesta = cliente.get(f"/api/laboratorio/{entorno}/ajustes/{metodo}")
     assert respuesta.status_code == 200
-    assert respuesta.json() == esquema_ajustes(CONFIG, entorno, metodo, DASHBOARD)
+    esperado = esquema_ajustes(CONFIG, entorno, metodo, DASHBOARD)
+    for seccion in esperado["secciones"]:
+        seccion["campos"] = [{k: v for k, v in campo.items() if v is not None}
+                             for campo in seccion["campos"]]
+    assert respuesta.json() == esperado
+
+
+@pytest.mark.parametrize("entorno, metodo", list(itertools.product(ENTORNOS, METODOS)))
+def test_el_esquema_no_manda_limites_ni_opciones_nulos(cliente, entorno, metodo) -> None:
+    """Regresión: min: null hacía que el formulario rechazara retorno_objetivo −90 («como
+    mínimo null»). Un límite que no existe no aparece."""
+    esquema = cliente.get(f"/api/laboratorio/{entorno}/ajustes/{metodo}").json()
+    campos = [c for s in esquema["secciones"] for c in s["campos"]]
+    assert all(None not in campo.values() for campo in campos)
+    objetivo = [c for c in campos if c["clave"] == "retorno_objetivo"]
+    if metodo == "experto":
+        assert objetivo and "min" not in objetivo[0] and "max" not in objetivo[0]
 
 
 def test_metodo_desconocido_da_422(cliente) -> None:
@@ -131,9 +178,11 @@ def test_metodo_desconocido_da_422(cliente) -> None:
     {"entorno": "cartpole", "modo": "manual"},
     {"entorno": "mountaincar", "modo": "manual", "semilla": 5},
     {"entorno": "halfcheetah", "modo": "experto"},
-    {"entorno": "reacher", "modo": "experto", "partidas": 1000, "experto": "abc", "semilla": 0},
+    {"entorno": "reacher", "modo": "experto", "partidas": 1000, "experto": "@", "semilla": 0},
 ])
-def test_una_sesion_valida_responde_501_hasta_su_rama(cliente, cuerpo) -> None:
+def test_una_sesion_valida_responde_501_hasta_su_rama(cliente, raiz, cuerpo) -> None:
+    if cuerpo.get("experto") == "@":
+        cuerpo = {**cuerpo, "experto": elemento(raiz, "experto", cuerpo["entorno"])}
     respuesta = cliente.post("/api/sesiones", json=cuerpo)
     assert respuesta.status_code == 501
     assert respuesta.json() == {"detail": PENDIENTE_JUGAR}
@@ -215,15 +264,18 @@ def test_guardar_con_un_cuerpo_que_no_vale(cliente_y_gestor, cuerpo) -> None:
     {"entorno": "cartpole", "metodo": "experto"},
     {"entorno": "cartpole", "metodo": "experto", "vista": True, "semilla": 4,
      "ajustes": {"experto": {"pasos_totales": 2048, "trpo": {"gamma": 0.95}}}},
-    {"entorno": "acrobot", "metodo": "bc", "datos": ["a", "b"],
+    {"entorno": "acrobot", "metodo": "bc", "datos": ["@", "@"],
      "ajustes": {"bc": {"learning_rate": 0.01}}},
-    {"entorno": "halfcheetah", "metodo": "gail", "datos": ["a"], "vista": True,
+    {"entorno": "halfcheetah", "metodo": "gail", "datos": ["@"], "vista": True,
      "ajustes": {"gail": {"iteraciones": 3, "discriminador": {"learning_rate": 0.1}}}},
     {"entorno": "cartpole", "metodo": "experto", "nombre": "Mi experto"},
     {"entorno": "cartpole", "metodo": "experto", "nombre": "x" * 100},
     {"entorno": "cartpole", "metodo": "experto", "nombre": None},
 ])
-def test_un_entrenamiento_valido_responde_501_hasta_su_rama(cliente, cuerpo) -> None:
+def test_un_entrenamiento_valido_responde_501_hasta_su_rama(cliente, raiz, cuerpo) -> None:
+    if "datos" in cuerpo:
+        cuerpo = {**cuerpo, "datos": [elemento(raiz, "demostraciones", cuerpo["entorno"])
+                                      for _ in cuerpo["datos"]]}
     respuesta = cliente.post("/api/entrenamientos", json=cuerpo)
     assert respuesta.status_code == 501
     assert respuesta.json() == {"detail": PENDIENTE_ENTRENAR}
@@ -241,6 +293,59 @@ def test_entrenamiento_con_ajustes_que_no_valen(cliente, cuerpo, mensaje) -> Non
     respuesta = cliente.post("/api/entrenamientos", json=cuerpo)
     assert respuesta.status_code == 422
     assert mensaje in respuesta.json()["detail"]
+
+
+@pytest.mark.parametrize("entorno, metodo, ajustes, mensaje", [
+    # Cada campo en su rango, pero el entrenador lo rechaza (regresión: llegaban al 501).
+    ("cartpole", "bc", {"bc": {"learning_rate": 0}}, "bc.learning_rate debe ser un real positivo"),
+    ("cartpole", "gail", {"trpo": {"gamma": 0}}, "trpo.gamma no es válido"),
+    ("cartpole", "gail", {"trpo": {"n_entornos": 3}},
+     "trpo.pasos_por_iteracion debe ser divisible por trpo.n_entornos"),
+    ("cartpole", "gail", {"trpo": {"batch_size_valor": 300}},
+     "trpo.batch_size_valor debe dividir trpo.pasos_por_iteracion"),
+    ("cartpole", "gail", {"gail": {"discriminador": {"learning_rate": 0}}},
+     "gail.discriminador.learning_rate debe ser positivo"),
+    ("reacher", "experto", {"experto": {"trpo": {"n_entornos": 7}}},
+     "trpo.pasos_por_iteracion debe ser divisible por trpo.n_entornos"),
+])
+def test_entrenamiento_que_el_entrenador_rechazaria(cliente, raiz, entorno, metodo, ajustes,
+                                                    mensaje) -> None:
+    datos = [elemento(raiz, "demostraciones", entorno)] if metodo != "experto" else []
+    respuesta = cliente.post("/api/entrenamientos", json={
+        "entorno": entorno, "metodo": metodo, "datos": datos, "ajustes": ajustes})
+    assert respuesta.status_code == 422
+    assert mensaje in respuesta.json()["detail"]
+
+
+# --- Referencias a la biblioteca -------------------------------------------------------------
+
+def _referencias(raiz: Path, tipo: str) -> list[tuple[str, str]]:
+    """Ids que no valen como tipo en cartpole, con el motivo esperado."""
+    otro_tipo = "demostraciones" if tipo == "experto" else "experto"
+    return [("0" * 12, "No hay ningún elemento"),
+            ("no-es-un-id", "No hay ningún elemento"),
+            (elemento(raiz, otro_tipo, "cartpole"), f"es de tipo {otro_tipo}"),
+            (elemento(raiz, "bc", "cartpole"), "es de tipo bc"),
+            (elemento(raiz, tipo, "mountaincar"), "es de mountaincar, no de cartpole"),
+            (elemento(raiz, tipo, "cartpole", valido=False), "no es válido: faltan")]
+
+
+def test_ver_un_experto_que_no_vale_da_422(cliente, raiz) -> None:
+    for id_experto, motivo in _referencias(raiz, "experto"):
+        respuesta = cliente.post("/api/sesiones", json={"entorno": "cartpole", "modo": "experto",
+                                                        "experto": id_experto})
+        assert respuesta.status_code == 422, id_experto
+        assert motivo in respuesta.json()["detail"], respuesta.json()
+
+
+@pytest.mark.parametrize("metodo", ["bc", "gail"])
+def test_entrenar_con_datos_que_no_valen_da_422(cliente, raiz, metodo) -> None:
+    bueno = elemento(raiz, "demostraciones", "cartpole")
+    for id_datos, motivo in _referencias(raiz, "demostraciones"):
+        respuesta = cliente.post("/api/entrenamientos", json={
+            "entorno": "cartpole", "metodo": metodo, "datos": [bueno, id_datos]})
+        assert respuesta.status_code == 422, id_datos
+        assert motivo in respuesta.json()["detail"], respuesta.json()
 
 
 @pytest.mark.parametrize("cuerpo", [
@@ -279,9 +384,35 @@ def test_la_documentacion_tiene_todo_el_contrato(cliente) -> None:
         assert modelo in esquema["components"]["schemas"], modelo
 
 
-def test_un_dashboard_que_no_vale_impide_crear_la_app(tmp_path) -> None:
-    import shutil
+@pytest.mark.parametrize("cambio, mensaje", [
+    (lambda d: d["campos"]["bc"].pop("learning_rate"), "no describe bc.learning_rate"),
+    (lambda d: d["campos"]["trpo"].pop("gamma"), "no describe experto.trpo.gamma"),
+    (lambda d: d["laboratorio"].update(jugar_a_mano="cartpole"), "jugar_a_mano"),
+    (lambda d: d["laboratorio"].update(jugar_a_mano=["pong"]), "jugar_a_mano"),
+    (lambda d: d["laboratorio"].update(jugar_a_mano=5), "jugar_a_mano"),
+])
+def test_un_formulario_roto_impide_crear_la_app(tmp_path, cambio, mensaje) -> None:
+    """Regresión: sin la descripción de un campo, la app arrancaba y ese formulario daba
+    500; con jugar_a_mano que no es una lista, TypeError en lugar de ValueError."""
+    base = configs_con_biblioteca(tmp_path)
+    ruta = base.parent / "dashboard.yaml"
+    datos = yaml.safe_load(ruta.read_text(encoding="utf-8"))
+    cambio(datos)
+    ruta.write_text(yaml.safe_dump(datos, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(ValueError, match=mensaje):
+        crear_app(base, GestorTrabajos(1))
 
+
+def test_jugar_a_mano_puede_ir_vacio(tmp_path) -> None:
+    base = configs_con_biblioteca(tmp_path)
+    ruta = base.parent / "dashboard.yaml"
+    datos = yaml.safe_load(ruta.read_text(encoding="utf-8"))
+    datos["laboratorio"]["jugar_a_mano"] = []
+    ruta.write_text(yaml.safe_dump(datos, allow_unicode=True), encoding="utf-8")
+    assert cargar_dashboard(ruta)["laboratorio"]["jugar_a_mano"] == []
+
+
+def test_un_dashboard_que_no_vale_impide_crear_la_app(tmp_path) -> None:
     copia = tmp_path / "configs"
     shutil.copytree(CONFIGS, copia)
     (copia / "dashboard.yaml").write_text("laboratorio: {}\n", encoding="utf-8")
@@ -404,6 +535,35 @@ def test_config_wandb_de_un_entrenamiento() -> None:
     propio = EntrenamientoCrear(entorno="cartpole", metodo="gail", datos=["a"], wandb=True,
                                 grupo="x" * 128)
     assert config_wandb(propio, DASHBOARD)["grupo"] == "x" * 128
+
+
+def test_una_comprobacion_antigua_no_pisa_a_una_mas_reciente() -> None:
+    """Regresión: la comprobación lenta del arranque (sin sesión) acababa después de otra
+    pedida más tarde (con sesión) y la sobrescribía."""
+    import threading
+
+    from src.app.estado_wandb import EstadoWandb
+
+    dentro, soltar = threading.Event(), threading.Event()
+    respuestas = iter(["sin sesión todavía", None])
+
+    def comprobacion() -> str | None:
+        respuesta = next(respuestas)
+        if respuesta is not None:  # la primera, lenta
+            dentro.set()
+            soltar.wait(5)
+        return respuesta
+
+    estado = EstadoWandb(comprobacion)
+    resultados = []
+    lenta = threading.Thread(target=lambda: resultados.append(estado.comprobar()))
+    lenta.start()
+    assert dentro.wait(5)
+    assert estado.comprobar() == {"disponible": True, "motivo": None}
+    soltar.set()
+    lenta.join(5)
+    assert estado.describir() == {"disponible": True, "motivo": None}
+    assert resultados == [{"disponible": True, "motivo": None}]
 
 
 def test_estado_wandb() -> None:

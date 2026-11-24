@@ -7,6 +7,7 @@ permite ejecutar tests y smoke sin importar el paquete.
 from __future__ import annotations
 
 import copy
+import os
 import sys
 import time
 import uuid
@@ -38,6 +39,22 @@ def _wandb_activo(cfg: dict) -> bool:
     return cfg.get("wandb", {}).get("modo", "online") != "disabled"
 
 
+def _hay_credenciales_wandb() -> bool:
+    """Si hay una clave de W&B en WANDB_API_KEY, en la configuración del SDK o en netrc.
+
+    Solo mira si existe, sin validarla ni pedir nada; si el SDK no deja saberlo, cuenta
+    como que no hay (mejor un aviso claro que una petición por la terminal).
+    """
+    if os.environ.get("WANDB_API_KEY"):
+        return True
+    try:
+        from wandb.sdk.lib import apikey  # noqa: PLC0415 - solo si se usa W&B
+
+        return bool(apikey.api_key())
+    except Exception:  # noqa: BLE001 - interno del SDK: si cambia, no hay forma de saberlo
+        return False
+
+
 def comprobar_wandb(cfg: dict, exigir_sesion: bool = False) -> Any | None:
     """Carga W&B si está activo y, cuando se pide, valida la sesión sin prompt.
 
@@ -58,6 +75,11 @@ def comprobar_wandb(cfg: dict, exigir_sesion: bool = False) -> Any | None:
     except ImportError as error:
         raise RuntimeError("wandb está activo, pero el paquete wandb no está instalado") from error
     if exigir_sesion and cfg.get("wandb", {}).get("modo", "online") == "online":
+        # Sin credenciales, wandb.login las pediría por la terminal (y se quedaría
+        # esperando en un servidor): se comprueba antes que haya alguna.
+        if not _hay_credenciales_wandb():
+            raise RuntimeError("no hay credenciales de W&B: ejecuta wandb login o define "
+                               "WANDB_API_KEY")
         try:
             sesion = wandb.login(anonymous="never", timeout=ESPERA_SESION, verify=True)
         except Exception as error:  # noqa: BLE001 - W&B envuelve errores de red y credenciales

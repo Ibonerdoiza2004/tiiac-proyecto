@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from stable_baselines3.common.vec_env import VecEnv
 
-from src.utils.validacion import es_entero, es_entero_positivo
+from src.utils.validacion import es_entero, es_entero_positivo, es_semilla
 
 
 def fijar_seed(seed: int, determinista: bool = True) -> None:
@@ -49,7 +49,7 @@ def validar_semilla(semilla: object) -> int:
     Raises:
         ValueError: Si no es un entero no negativo.
     """
-    if not es_entero(semilla) or semilla < 0:
+    if not es_semilla(semilla):
         raise ValueError(f"La semilla debe ser un entero no negativo, no {semilla!r}")
     return int(semilla)
 

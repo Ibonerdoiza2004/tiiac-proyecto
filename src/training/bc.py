@@ -41,7 +41,8 @@ from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, val
 from src.utils.tracking import (abrir_run_barrido, nombre_artefacto, registrar,
                                 registrar_resumen, subir_artefacto, terminar_run,
                                 usar_artefacto)
-from src.utils.validacion import es_entero_positivo, es_real_finito
+from src.utils.reglas_config import config_bc
+from src.utils.validacion import es_entero_positivo
 
 OPTIMIZADORES = {
     "adam": torch.optim.Adam,
@@ -51,14 +52,6 @@ OPTIMIZADORES = {
 
 _FORMATO_BC = "tiiac-politica-bc"
 _VERSION_BC = 1
-
-
-def _entero_positivo_de_cfg(bcfg: dict, clave: str) -> int:
-    """Lee bc.clave y comprueba que es un entero positivo."""
-    valor = bcfg.get(clave)
-    if not es_entero_positivo(valor):
-        raise ValueError(f"bc.{clave} debe ser un entero positivo, no {valor!r}")
-    return int(valor)
 
 
 def _indices_de_train(loader: DataLoader) -> list[int]:
@@ -89,31 +82,6 @@ def _indices_de_train(loader: DataLoader) -> list[int]:
         return [int(i) for i in muestreador.indices]
     raise ValueError(f"No se puede normalizar con el sampler {type(muestreador).__name__}: "
                      "usa SequentialSampler, RandomSampler o SubsetRandomSampler")
-
-
-def config_bc(cfg: dict) -> dict:
-    """Devuelve la sección bc comprobada: lo que necesita entrenar_bc.
-
-    Raises:
-        ValueError: Si falta la sección o epocas_maximas, paciencia,
-            optimizador, learning_rate o normalizar_observaciones no son válidos.
-    """
-    bcfg = cfg.get("bc") if isinstance(cfg, dict) else None
-    if not isinstance(bcfg, dict):
-        raise ValueError("La configuración necesita la sección bc")
-    _entero_positivo_de_cfg(bcfg, "epocas_maximas")
-    _entero_positivo_de_cfg(bcfg, "paciencia")
-    optimizador = bcfg.get("optimizador")
-    if not isinstance(optimizador, str) or optimizador not in OPTIMIZADORES:
-        raise ValueError(f"bc.optimizador desconocido: {optimizador!r}; "
-                         f"opciones: {sorted(OPTIMIZADORES)}")
-    learning_rate = bcfg.get("learning_rate")
-    if not es_real_finito(learning_rate) or learning_rate <= 0:
-        raise ValueError(f"bc.learning_rate debe ser un real positivo, no {learning_rate!r}")
-    normalizar = bcfg.get("normalizar_observaciones")
-    if not isinstance(normalizar, (bool, np.bool_)):
-        raise ValueError(f"bc.normalizar_observaciones debe ser booleano, no {normalizar!r}")
-    return bcfg
 
 
 @torch.no_grad()

@@ -3,9 +3,11 @@
 El esquema sale de la configuración resuelta del entorno (valores del perfil) y de
 ``configs/dashboard.yaml`` (textos, nivel, rangos y opciones). Los ajustes que manda
 el formulario son una capa más sobre el perfil, anidada como en ``configs/``: aquí se
-comprueba que solo toquen campos del método y que sus valores valgan, y después se
-resuelve la configuración con ellos (``resolver_configuracion``), que aplica las
-mismas comprobaciones que los scripts.
+comprueba que solo toquen campos del método y que cada valor tenga su tipo y su
+rango; después se resuelve la configuración con ellos (``resolver_configuracion``) y
+se le aplican las reglas del entrenador (``comprobar_config_metodo``), las mismas que
+comprueban los scripts antes de entrenar, como que los entornos repartan los pasos de
+cada iteración.
 """
 
 from __future__ import annotations
@@ -15,9 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.configuracion import TipoEntorno, leer_configuracion_base, resolver_configuracion
+from src.utils.reglas_config import METODOS, comprobar_config_metodo
 from src.utils.validacion import es_entero, es_real_finito
 
-METODOS = ("experto", "bc", "gail")
 NIVELES = ("basico", "avanzado")
 TIPOS = ("entero", "real", "booleano", "opcion", "lista_enteros")
 # Claves de cada sección que no son hiperparámetros del método o se ajustan aparte
@@ -47,7 +49,9 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
             raise ValueError(f"{ruta}: falta la sección {clave}")
     laboratorio = datos["laboratorio"]
     validos = {t.value for t in TipoEntorno}
-    if not set(laboratorio.get("jugar_a_mano", [None])) <= validos:
+    jugar_a_mano = laboratorio.get("jugar_a_mano")
+    if (not isinstance(jugar_a_mano, list)
+            or not all(isinstance(e, str) and e in validos for e in jugar_a_mano)):
         raise ValueError(f"{ruta}: laboratorio.jugar_a_mano solo admite {sorted(validos)}")
     if not es_entero(laboratorio.get("partidas_maximas")) or laboratorio["partidas_maximas"] < 1:
         raise ValueError(f"{ruta}: laboratorio.partidas_maximas debe ser un entero positivo")
@@ -105,7 +109,8 @@ def secciones_de_metodo(cfg: dict[str, Any], metodo: str) -> list[tuple[str, dic
 
     frecuencia = {"frecuencia_pares": cfg["demostraciones"]["frecuencia_pares"]}
     if metodo == "experto":
-        return [("experto", sin("experto")), ("experto.trpo", {**cfg["trpo"], **cfg["experto"]["trpo"]})]
+        return [("experto", sin("experto")),
+                ("experto.trpo", {**cfg["trpo"], **cfg["experto"]["trpo"]})]
     if metodo == "bc":
         return [("bc", cfg["bc"]), ("demostraciones", frecuencia)]
     if metodo == "gail":
@@ -253,8 +258,9 @@ def comprobar_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str
     """Comprueba los ajustes de un entrenamiento y devuelve la configuración resuelta.
 
     Solo se admiten los campos que el formulario ofrece para ese método, con un valor
-    de su tipo dentro de su rango; después la configuración se resuelve con ellos, que
-    aplica las mismas comprobaciones que los scripts.
+    de su tipo dentro de su rango; después la configuración se resuelve con ellos y se
+    comprueba con las reglas del entrenador (comprobar_config_metodo), que también
+    miran combinaciones de campos.
 
     Args:
         ruta_config: Ruta al YAML base.
@@ -279,4 +285,26 @@ def comprobar_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str
             errores.append(f"{ruta}: {motivo}")
     if errores:
         raise ValueError("Ajustes no válidos: " + "; ".join(errores))
-    return resolver_configuracion(ruta_config, entorno, ajustes)
+    cfg = resolver_configuracion(ruta_config, entorno, ajustes)
+    try:
+        comprobar_config_metodo(cfg, metodo)
+    except ValueError as error:
+        raise ValueError(f"Ajustes no válidos: {error}") from error
+    return cfg
+
+
+def comprobar_esquemas(ruta_config: Path, dashboard: dict[str, Any]) -> None:
+    """Genera el esquema de cada entorno y método, para no descubrir un fallo al pedirlo.
+
+    Lo llama la API al crearse: si dashboard.yaml no describe algún campo o un perfil
+    no vale, no arranca (en lugar de responder 500 al abrir ese formulario).
+
+    Raises:
+        ValueError: Con el entorno, el método y el motivo del primero que falle.
+    """
+    for entorno in TipoEntorno:
+        for metodo in METODOS:
+            try:
+                esquema_ajustes(ruta_config, entorno, metodo, dashboard)
+            except (ValueError, KeyError, TypeError) as error:
+                raise ValueError(f"Formulario de {metodo} en {entorno.value}: {error}") from error

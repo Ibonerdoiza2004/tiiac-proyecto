@@ -124,7 +124,8 @@ def test_listar_obtener_y_filtrar(app_y_gestor) -> None:
         gestor.esperar(id_, LIMITE)
     lista = cliente.get("/api/trabajos").json()
     assert [t["id"] for t in lista] == [a, b]
-    assert [t["id"] for t in cliente.get("/api/trabajos", params={"tipo": "comparacion"}).json()] == [b]
+    comparaciones = cliente.get("/api/trabajos", params={"tipo": "comparacion"}).json()
+    assert [t["id"] for t in comparaciones] == [b]
     assert cliente.get("/api/trabajos", params={"tipo": "otro"}).json() == []
     uno = cliente.get(f"/api/trabajos/{a}").json()
     assert uno["estado"] == "terminado"
@@ -332,6 +333,76 @@ def test_cerrar_la_conexion_de_una_sesion_la_cancela(app_y_gestor) -> None:
     assert gestor.esperar(sesion, LIMITE)["estado"] == "cancelado"
 
 
+def test_con_dos_pestanas_una_sesion_sigue_hasta_cerrar_la_ultima(app_y_gestor) -> None:
+    """Regresión: con dos pestañas siguiendo una sesión, cerrar la segunda cancelaba la
+    partida de la primera."""
+    cliente, gestor = app_y_gestor
+    sesion = contar(gestor, interactivo=True)
+    with cliente.websocket_connect(f"/api/trabajos/{sesion}") as primera:
+        leer(primera), leer(primera)
+        with cliente.websocket_connect(f"/api/trabajos/{sesion}") as segunda:
+            leer(segunda), leer(segunda)
+            esperar_hasta(lambda: len(gestor._observadores) == 2)
+            segunda.close()
+            esperar_hasta(lambda: len(gestor._observadores) == 1)
+        antes = len(gestor.historial(sesion))
+        esperar_hasta(lambda: len(gestor.historial(sesion)) > antes + 3)
+        assert gestor.obtener(sesion)["estado"] == "en_marcha"
+        # La primera pestaña sigue recibiendo y mandando.
+        primera.send_json({"tipo": "pausar"})
+        leer_hasta(primera, es_estado("pausado"))
+        cerrar_y_esperar(primera, gestor)
+    assert gestor.esperar(sesion, LIMITE)["estado"] == "cancelado"
+
+
+def test_un_mensaje_binario_da_error_y_la_conexion_sigue(app_y_gestor) -> None:
+    """Regresión: un mensaje binario salía de receive_text con una excepción y la
+    conexión se quedaba muda, sin eventos ni cierre."""
+    cliente, gestor = app_y_gestor
+    trabajo = contar(gestor)
+    with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
+        leer(ws), leer(ws)
+        ws.send_bytes(b"\x00\x01")
+        respuesta = leer_hasta(ws, lambda m: isinstance(m, dict) and m["tipo"] == "error")[-1]
+        assert "texto JSON" in respuesta["mensaje"]
+        ws.send_json({"tipo": "finalizar"})
+        mensajes, codigo = leer_hasta_cierre(ws)
+    assert codigo == 1000 and es_estado("terminado")(mensajes[-1])
+
+
+def test_un_error_inesperado_al_atender_un_mensaje_no_se_pierde(app_y_gestor,
+                                                                 monkeypatch) -> None:
+    """Regresión: una excepción del receptor se trataba como una desconexión y se perdía."""
+    cliente, gestor = app_y_gestor
+    trabajo = contar(gestor)
+
+    def rota(id_trabajo: str) -> None:
+        raise RuntimeError("fallo inesperado")
+
+    monkeypatch.setattr(gestor, "pausar", rota)
+    with pytest.raises(RuntimeError, match="fallo inesperado"):
+        with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
+            leer(ws), leer(ws)
+            ws.send_json({"tipo": "pausar"})
+            leer_hasta_cierre(ws)
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"})
+
+
+def test_finalizar_en_pausa_reanuda_y_termina(app_y_gestor) -> None:
+    """Regresión: tras pausar y finalizar, el trabajo seguía en pausa ocupando su hueco."""
+    cliente, gestor = app_y_gestor
+    trabajo = contar(gestor)
+    with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
+        leer(ws), leer(ws)
+        ws.send_json({"tipo": "pausar"})
+        leer_hasta(ws, es_estado("pausado"))
+        ws.send_json({"tipo": "finalizar"})
+        mensajes, codigo = leer_hasta_cierre(ws)
+    estados = [m["trabajo"]["estado"] for m in mensajes
+               if isinstance(m, dict) and m["tipo"] == "estado"]
+    assert codigo == 1000 and estados == ["en_marcha", "terminado"]
+
+
 def test_cerrar_la_conexion_de_un_entrenamiento_no_lo_para(app_y_gestor) -> None:
     cliente, gestor = app_y_gestor
     trabajo = contar(gestor)
@@ -411,14 +482,30 @@ def test_cola_envio_conserva_el_orden_de_los_eventos() -> None:
         cola = ColaEnvio()
         cola.poner(_imagen(0))
         cola.poner(progreso)
-        cola.poner(_imagen(1))  # sustituye a la 0, que sigue en su sitio de la cola
+        cola.poner(_imagen(1))  # después del progreso: no puede adelantarlo
+        cola.poner(_imagen(2))  # seguida de la 1: la sustituye
         cola.poner(estado)
-        sacados = [await cola.sacar() for _ in range(3)]
+        sacados = [await cola.sacar() for _ in range(4)]
         vacia = cola.vacia()
-        cola.poner(_imagen(2))  # tras enviar, una imagen nueva vuelve a entrar
+        cola.poner(_imagen(3))  # tras enviar, una imagen nueva vuelve a entrar
         return sacados + [vacia, await cola.sacar()]
 
-    assert asyncio.run(probar()) == [b"imagen-1", progreso, estado, True, b"imagen-2"]
+    # Regresión: antes salía [imagen-2, progreso, estado]: la imagen nueva ocupaba el
+    # sitio de la 0 y adelantaba al progreso que había llegado antes que ella.
+    assert asyncio.run(probar()) == [b"imagen-0", progreso, b"imagen-2", estado, True,
+                                     b"imagen-3"]
+
+
+def test_cola_envio_una_imagen_que_llega_mientras_se_envia_la_anterior() -> None:
+    async def probar() -> list[Any]:
+        cola = ColaEnvio()
+        cola.poner(_imagen(0))
+        primera = await cola.sacar()  # ya salió: la 1 no puede sustituirla
+        cola.poner(_imagen(1))
+        cola.poner(_imagen(2))
+        return [primera, await cola.sacar(), cola.vacia()]
+
+    assert asyncio.run(probar()) == [b"imagen-0", b"imagen-2", True]
 
 
 # --- Protocolo único: eventos propios y órdenes por tipo ----------------------------------

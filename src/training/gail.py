@@ -46,72 +46,24 @@ from src.data.entornos import crear_entorno_vectorizado
 from src.data.loaders import pares_de_subconjunto, tensores_de_pares
 from src.data.splits import SplitsDemostraciones, huella_archivo
 from src.data.tipos import LoteTransiciones, Trayectoria
-from src.models.factory import Discriminador, comprobar_arquitectura, construir_discriminador
+from src.models.factory import Discriminador, construir_discriminador
 from src.training.barrido import MetodoBarrido, comprobar_config_comun
 from src.training.trpo import (SECCION_TRPO, config_trpo, crear_trpo,
                                estadisticas_normalizacion, evaluar_retorno, iteracion_trpo)
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
+from src.utils.reglas_config import MODOS_RECOMPENSA
+from src.utils.reglas_config import config_discriminador as _config_discriminador
+from src.utils.reglas_config import config_gail as _config_gail
 from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
 from src.utils.tracking import (RegistroProgreso, abrir_run_barrido, con_seccion,
                                 nombre_artefacto, registrar, registrar_resumen,
                                 subir_artefacto, terminar_run, usar_artefacto)
-from src.utils.validacion import es_entero_positivo, es_real_finito
+from src.utils.validacion import es_entero_positivo
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_DISCRIMINADOR = "discriminador.pt"
 _ARCHIVO_METADATOS = "gail.json"
-
-# −log(1 − D) da recompensas >= 0: favorece alargar las partidas, para entornos
-# que terminan al fallar (CartPole). log D da recompensas <= 0: favorece
-# acabarlas, para entornos que terminan al tener éxito (MountainCar, Acrobot).
-# En el original, la segunda es favor_zero_expert_reward (cuts_off_on_success).
-MODOS_RECOMPENSA = ("menos_log_uno_menos_d", "log_d")
-
-
-def _config_discriminador(cfg: dict) -> dict:
-    """Devuelve gail.discriminador comprobado.
-
-    Raises:
-        ValueError: Si falta alguna clave o algún valor no es válido.
-    """
-    gcfg = cfg.get("gail") if isinstance(cfg, dict) else None
-    dcfg = gcfg.get("discriminador") if isinstance(gcfg, dict) else None
-    claves = {"capas_ocultas", "activacion", "optimizador", "learning_rate", "pasos_adam",
-              "peso_entropia", "normalizar_entrada", "epsilon_normalizacion"}
-    if not isinstance(dcfg, dict) or not claves <= dcfg.keys():
-        raise ValueError("La configuración necesita gail.discriminador con "
-                         + ", ".join(sorted(claves)))
-    # La misma comprobación que al crear la red: así comprobar_config_barrido la
-    # rechaza antes de lanzar el barrido y no en cada entrenamiento.
-    try:
-        comprobar_arquitectura(dcfg["capas_ocultas"], dcfg["activacion"])
-    except ValueError as error:
-        raise ValueError(f"gail.discriminador no es válido: {error}") from error
-
-    def real(clave: str) -> float:
-        """Devuelve dcfg[clave] si es un real finito no booleano."""
-        valor = dcfg[clave]
-        if not es_real_finito(valor):
-            raise ValueError(f"gail.discriminador.{clave} debe ser un real finito, no {valor!r}")
-        return float(valor)
-
-    if dcfg["optimizador"] != "adam":
-        raise ValueError(f"gail.discriminador.optimizador desconocido: {dcfg['optimizador']!r}; "
-                         "opciones: ['adam']")
-    if real("learning_rate") <= 0:
-        raise ValueError("gail.discriminador.learning_rate debe ser positivo")
-    pasos = dcfg["pasos_adam"]
-    if not es_entero_positivo(pasos):
-        raise ValueError(
-            f"gail.discriminador.pasos_adam debe ser un entero positivo, no {pasos!r}")
-    if real("peso_entropia") < 0:
-        raise ValueError("gail.discriminador.peso_entropia no puede ser negativo")
-    if not isinstance(dcfg["normalizar_entrada"], bool):
-        raise ValueError("gail.discriminador.normalizar_entrada debe ser un booleano")
-    if real("epsilon_normalizacion") <= 0:
-        raise ValueError("gail.discriminador.epsilon_normalizacion debe ser positivo")
-    return dcfg
 
 
 def _comprobar_lote(lote: object, nombre: str) -> LoteTransiciones:
@@ -666,31 +618,6 @@ def iteracion_gail(agente: TRPO, envoltorio: EntornoRecompensaGAIL,
                     for clave, valor in medidas_discriminador.items()})
     medidas["reajuste/perdida_valor"] = reajuste["perdida_valor"]
     return medidas
-
-
-def _config_gail(cfg: dict) -> dict:
-    """Devuelve la sección gail comprobada (sin el discriminador, que se comprueba aparte).
-
-    Raises:
-        ValueError: Si falta alguna clave o algún valor no es válido.
-    """
-    gcfg = cfg.get("gail") if isinstance(cfg, dict) else None
-    if not isinstance(gcfg, dict):
-        raise ValueError("La configuración necesita la sección gail")
-
-    reglas = {
-        "iteraciones": es_entero_positivo,
-        "evaluar_cada": es_entero_positivo,
-        "episodios_evaluacion": es_entero_positivo,
-        "evaluacion_determinista": lambda v: isinstance(v, bool),
-        "recompensa": lambda v: v in MODOS_RECOMPENSA,
-    }
-    for clave, valida in reglas.items():
-        if clave not in gcfg:
-            raise ValueError(f"Falta gail.{clave} en la configuración")
-        if not valida(gcfg[clave]):
-            raise ValueError(f"gail.{clave} no es válido: {gcfg[clave]!r}")
-    return gcfg
 
 
 def comprobar_config_barrido(cfg: dict) -> None:

@@ -26,7 +26,10 @@ Comunicación con cada proceso, por tres tuberías de un solo sentido:
 - *Órdenes* (API → hijo): diccionarios que la tarea lee entre pasos.
 
 Pausar y reanudar envían ``SIGSTOP`` y ``SIGCONT`` al proceso: es exacto, el
-proceso sigue después donde estaba. Cancelar lo termina sin guardar nada.
+proceso sigue después donde estaba. Cancelar lo termina sin guardar nada (``SIGTERM``
+y, si en ``ESPERA_TERMINAR`` segundos sigue vivo, ``SIGKILL``). Las señales se mandan
+por un *pidfd* del proceso (Linux): aunque el sistema reutilice su número de proceso
+cuando termina, nunca llegan a otro.
 
 Quien quiera seguir los trabajos (el WebSocket de la API) se registra con
 ``observar``: recibe cada evento (estado, progreso, imagen) desde un único hilo
@@ -219,7 +222,8 @@ def ejecutar_en_proceso(ruta: str, argumentos: dict[str, Any], mensajes: Connect
         tarea = resolver_tarea(ruta)
         resultado = tarea(argumentos, CanalTrabajo(mensajes, imagenes, ordenes))
         if not isinstance(resultado, dict):
-            raise TypeError(f"La tarea debe devolver un diccionario, no {type(resultado).__name__}")
+            raise TypeError("La tarea debe devolver un diccionario, no "
+                            f"{type(resultado).__name__}")
         mensajes.send(("resultado", resultado))
     except Exception as error:  # noqa: BLE001 - se informa a la API, que sigue
         mensajes.send(("error", repr(error)))
@@ -250,6 +254,8 @@ class _Trabajo:
     ultimo_evento: int = 0  # cuántos eventos lleva; cada uno lleva su número en "n"
     proceso: Any = None
     ordenes: Connection | None = None
+    pidfd: int | None = None  # para mandarle señales sin riesgo; None si ya no se puede
+    hilo_imagenes: threading.Thread | None = None
 
     def describir(self) -> dict[str, Any]:
         """Datos públicos del trabajo (sin el historial de progreso ni la imagen)."""
@@ -378,8 +384,10 @@ class GestorTrabajos:
 
         Los eventos son ``{"tipo": "estado", "trabajo": datos públicos}``,
         ``{"tipo": "progreso", "medidas": ...}``, ``{"tipo": "imagen", "datos": bytes}``
-        y los propios de la tarea (``{"tipo": "partida_terminada", ...}``), y cada uno lleva ``"n"``: su número dentro del trabajo (1, 2, 3...). Se llaman desde un único hilo repartidor, en el orden en que ocurrieron y sin
-        el cerrojo tomado: tienen que ser rápidos (si lanzan una excepción, se ignora).
+        y los propios de la tarea (``{"tipo": "partida_terminada", ...}``), y cada uno
+        lleva ``"n"``: su número dentro del trabajo (1, 2, 3...). Se llaman desde un
+        único hilo repartidor, en el orden en que ocurrieron y sin el cerrojo tomado:
+        tienen que ser rápidos (si lanzan una excepción, se ignora).
 
         Returns:
             Una función que deja de observar.
@@ -496,31 +504,57 @@ class GestorTrabajos:
             return trabajo.describir()
 
     def _lanzar_pendientes(self) -> None:
-        """Arranca los de la cola mientras haya hueco y avisa. Con el cerrojo tomado."""
+        """Arranca los de la cola mientras haya hueco y avisa. Con el cerrojo tomado.
+
+        Si un proceso no llega a arrancar (por ejemplo, porque sus argumentos no se
+        pueden pasar por pickle), ese trabajo queda fallido con el motivo y se sigue
+        con los siguientes: nunca se queda en la cola sin ocupar hueco.
+        """
         while self._cola and self._vivos() < self.procesos:
             trabajo = self._trabajos[self._cola.popleft()]
-            self._arrancar(trabajo)
+            try:
+                self._arrancar(trabajo)
+            except Exception as error:  # noqa: BLE001 - se informa y se sigue con la cola
+                trabajo.estado = EstadoTrabajo.FALLIDO
+                trabajo.error = f"No se pudo arrancar el proceso: {error!r}"
+                trabajo.terminado = time.time()
+                self._cerrojo.notify_all()
             self._encolar_estado(trabajo)
 
     def _arrancar(self, trabajo: _Trabajo) -> None:
-        """Crea las tuberías y el proceso del trabajo y sus hilos de lectura."""
+        """Crea las tuberías y el proceso del trabajo y sus hilos de lectura.
+
+        Raises:
+            Exception: Lo que lance el arranque del proceso; entonces no queda nada
+                abierto.
+        """
         lectura_mensajes, escritura_mensajes = self._contexto.Pipe(duplex=False)
         lectura_imagenes, escritura_imagenes = self._contexto.Pipe(duplex=False)
         lectura_ordenes, escritura_ordenes = self._contexto.Pipe(duplex=False)
-        proceso = self._contexto.Process(
-            target=ejecutar_en_proceso, name=f"trabajo-{trabajo.id}",
-            args=(trabajo.tarea, trabajo.argumentos, escritura_mensajes,
-                  escritura_imagenes, lectura_ordenes))
-        proceso.start()
+        del_hijo = (escritura_mensajes, escritura_imagenes, lectura_ordenes)
+        try:
+            proceso = self._contexto.Process(
+                target=ejecutar_en_proceso, name=f"trabajo-{trabajo.id}",
+                args=(trabajo.tarea, trabajo.argumentos, *del_hijo))
+            proceso.start()
+        except BaseException:
+            for extremo in (*del_hijo, lectura_mensajes, lectura_imagenes, escritura_ordenes):
+                extremo.close()
+            raise
         # Los extremos del hijo se cierran aquí: si el hijo muere, la lectura da EOFError.
-        for extremo in (escritura_mensajes, escritura_imagenes, lectura_ordenes):
+        for extremo in del_hijo:
             extremo.close()
         trabajo.proceso = proceso
+        # Mientras no se recoja su final (join), el número del proceso es suyo: el pidfd
+        # sigue apuntando a él aunque después el sistema reutilice ese número.
+        trabajo.pidfd = os.pidfd_open(proceso.pid) if hasattr(os, "pidfd_open") else None
         trabajo.ordenes = escritura_ordenes
         trabajo.estado = EstadoTrabajo.EN_MARCHA
         trabajo.iniciado = time.time()
-        threading.Thread(target=self._leer_imagenes, args=(trabajo, lectura_imagenes),
-                         name=f"imagenes-{trabajo.id}", daemon=True).start()
+        trabajo.hilo_imagenes = threading.Thread(
+            target=self._leer_imagenes, args=(trabajo, lectura_imagenes),
+            name=f"imagenes-{trabajo.id}", daemon=True)
+        trabajo.hilo_imagenes.start()
         threading.Thread(target=self._leer_mensajes, args=(trabajo, lectura_mensajes),
                          name=f"mensajes-{trabajo.id}", daemon=True).start()
 
@@ -565,11 +599,30 @@ class GestorTrabajos:
         finally:
             lectura.close()
         proceso = trabajo.proceso
-        proceso.join(ESPERA_TERMINAR)
-        if proceso.is_alive():
-            proceso.kill()
-            proceso.join()
-        with self._cerrojo:
+        try:
+            proceso.join(ESPERA_TERMINAR)
+            if proceso.is_alive():
+                with self._cerrojo:
+                    try:
+                        self._senal_segura(trabajo, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass  # acabó entre is_alive y la señal (p. ej., lo mató cerrar)
+                proceso.join()
+            # La última imagen antes que el estado final: quien sigue el trabajo la
+            # recibe antes de que se cierre la conexión.
+            if trabajo.hilo_imagenes is not None:
+                trabajo.hilo_imagenes.join(ESPERA_TERMINAR)
+        finally:
+            with self._cerrojo:
+                self._finalizar(trabajo, resultado, error)
+
+    def _finalizar(self, trabajo: _Trabajo, resultado: dict[str, Any] | None,
+                   error: str | None) -> None:
+        """Fija el estado final, libera el hueco y avisa. Con el cerrojo tomado."""
+        try:
+            if trabajo.pidfd is not None:
+                os.close(trabajo.pidfd)
+                trabajo.pidfd = None
             if trabajo.cancelado:
                 trabajo.estado = EstadoTrabajo.CANCELADO
             elif resultado is not None:
@@ -577,13 +630,15 @@ class GestorTrabajos:
             else:
                 trabajo.estado = EstadoTrabajo.FALLIDO
                 trabajo.error = error or (
-                    f"El proceso terminó sin resultado (código de salida {proceso.exitcode}; "
-                    "negativo si lo mató una señal, por ejemplo por falta de memoria)")
+                    "El proceso terminó sin resultado (código de salida "
+                    f"{trabajo.proceso.exitcode}; negativo si lo mató una señal, por "
+                    "ejemplo por falta de memoria)")
             trabajo.terminado = time.time()
             trabajo.ordenes.close()
             self._encolar_estado(trabajo)
             if not self._cerrado:
                 self._lanzar_pendientes()
+        finally:
             self._cerrojo.notify_all()
 
     # --- Control ------------------------------------------------------------
@@ -608,6 +663,20 @@ class GestorTrabajos:
         return self._senal(id_trabajo, EstadoTrabajo.PAUSADO, signal.SIGCONT,
                            EstadoTrabajo.EN_MARCHA, "reanudar")
 
+    @staticmethod
+    def _senal_segura(trabajo: _Trabajo, senal: int) -> None:
+        """Manda la señal al proceso del trabajo por su pidfd. Con el cerrojo tomado.
+
+        Raises:
+            ProcessLookupError: Si el proceso ya ha terminado.
+        """
+        if trabajo.pidfd is not None:
+            signal.pidfd_send_signal(trabajo.pidfd, senal)
+        elif trabajo.estado in ESTADOS_FINALES or trabajo.proceso is None:
+            raise ProcessLookupError("el proceso ya ha terminado")
+        else:  # sin pidfd (fuera de Linux): por su número
+            os.kill(trabajo.proceso.pid, senal)
+
     def _senal(self, id_trabajo: str, desde: EstadoTrabajo, senal: int,
                hacia: EstadoTrabajo, accion: str) -> dict[str, Any]:
         """Envía la señal si el trabajo está en el estado desde y pasa a hacia."""
@@ -617,7 +686,7 @@ class GestorTrabajos:
                 raise OperacionNoValida(f"No se puede {accion} un trabajo "
                                         f"{trabajo.estado.value}")
             try:
-                os.kill(trabajo.proceso.pid, senal)
+                self._senal_segura(trabajo, senal)
             except ProcessLookupError:
                 raise OperacionNoValida(f"No se puede {accion}: el proceso ya ha "
                                         "terminado") from None
@@ -625,10 +694,13 @@ class GestorTrabajos:
             self._encolar_estado(trabajo)
             return trabajo.describir()
 
-    def enviar_orden(self, id_trabajo: str, orden: Mapping[str, Any]) -> None:
+    def enviar_orden(self, id_trabajo: str, orden: Mapping[str, Any],
+                     reanudar: bool = False) -> None:
         """Manda una orden al trabajo, que la lee entre pasos (CanalTrabajo.ordenes).
 
-        Si está en pausa, la orden espera en la tubería hasta que se reanude.
+        Si está en pausa, la orden espera en la tubería hasta que se reanude; con
+        ``reanudar``, el trabajo se reanuda a la vez (lo usa ``finalizar``: un trabajo
+        en pausa no puede terminar).
 
         Raises:
             TrabajoDesconocido: Si no existe.
@@ -646,6 +718,13 @@ class GestorTrabajos:
                 trabajo.ordenes.send(dict(orden))
             except OSError as error:
                 raise OperacionNoValida(f"El trabajo ya no recibe órdenes: {error!r}") from error
+            if reanudar and trabajo.estado is EstadoTrabajo.PAUSADO:
+                try:
+                    self._senal_segura(trabajo, signal.SIGCONT)
+                except ProcessLookupError:
+                    return  # ya estaba acabando: su hilo de mensajes fija el final
+                trabajo.estado = EstadoTrabajo.EN_MARCHA
+                self._encolar_estado(trabajo)
 
     def cancelar(self, id_trabajo: str) -> dict[str, Any]:
         """Cancela el trabajo sin guardar nada: lo quita de la cola o termina su proceso.
@@ -671,21 +750,40 @@ class GestorTrabajos:
                 self._terminar_proceso(trabajo)
             return trabajo.describir()
 
-    @staticmethod
-    def _terminar_proceso(trabajo: _Trabajo) -> None:
-        """Termina el proceso: si está en pausa, primero lo reanuda para que reciba SIGTERM."""
+    def _terminar_proceso(self, trabajo: _Trabajo) -> None:
+        """Termina el proceso (SIGTERM) y lo mata si sigue vivo tras ESPERA_TERMINAR.
+
+        Si está en pausa, primero lo reanuda para que reciba SIGTERM. Con el cerrojo
+        tomado.
+        """
         try:
             if trabajo.estado is EstadoTrabajo.PAUSADO:
-                os.kill(trabajo.proceso.pid, signal.SIGCONT)
-            trabajo.proceso.terminate()
+                self._senal_segura(trabajo, signal.SIGCONT)
+            self._senal_segura(trabajo, signal.SIGTERM)
         except ProcessLookupError:
-            pass
+            return
+        temporizador = threading.Timer(ESPERA_TERMINAR, self._matar_si_sigue, (trabajo,))
+        temporizador.daemon = True
+        temporizador.start()
+
+    def _matar_si_sigue(self, trabajo: _Trabajo) -> None:
+        """SIGKILL al proceso si todavía no ha terminado (por ejemplo, si ignora SIGTERM)."""
+        with self._cerrojo:
+            if trabajo.estado in ESTADOS_FINALES:
+                return
+            try:
+                self._senal_segura(trabajo, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     def cerrar(self, timeout: float = ESPERA_TERMINAR * 2) -> None:
         """Cancela todo (cola y procesos) y espera a que terminen. Al parar la API.
 
+        Los procesos que siguen vivos al acabar el plazo se matan (SIGKILL) y se
+        espera a que el sistema los recoja: al volver no queda ningún hijo vivo.
+
         Args:
-            timeout: Segundos como mucho para esperar a los procesos.
+            timeout: Segundos como mucho para esperar a que terminen por las buenas.
         """
         with self._cerrojo:
             self._cerrado = True
@@ -700,7 +798,21 @@ class GestorTrabajos:
                     self._terminar_proceso(trabajo)
             self._cola.clear()
             self._cerrojo.notify_all()
-            self._cerrojo.wait_for(
+            acabados = self._cerrojo.wait_for(
                 lambda: all(t.estado in ESTADOS_FINALES for t in pendientes), timeout)
+            if not acabados:
+                for trabajo in pendientes:
+                    if trabajo.estado not in ESTADOS_FINALES:
+                        try:
+                            self._senal_segura(trabajo, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+        # Fuera del cerrojo: el hilo de mensajes de cada uno lo necesita para acabar.
+        for trabajo in pendientes:
+            if trabajo.proceso is not None:
+                trabajo.proceso.join()
+        with self._cerrojo:
+            self._cerrojo.wait_for(lambda: all(t.estado in ESTADOS_FINALES for t in pendientes),
+                                   ESPERA_TERMINAR)
             # El repartidor termina después de repartir lo que ya estaba en la cola.
             self._eventos.put(None)

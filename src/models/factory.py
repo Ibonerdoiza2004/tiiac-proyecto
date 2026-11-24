@@ -10,31 +10,13 @@ import torch.nn as nn
 from gymnasium import spaces
 from torch.distributions import Categorical, Distribution, Independent, Normal
 
+from src.utils.reglas_config import comprobar_arquitectura
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 ACTIVACIONES = {
     "tanh": nn.Tanh,
     "relu": nn.ReLU,
 }
-
-
-def comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
-    """Comprueba la lista de capas ocultas y el nombre de la activación.
-
-    Es la comprobación que aplican PoliticaBC y Discriminador al crearse; sirve
-    también para validar una configuración antes de crear ninguna red.
-
-    Raises:
-        ValueError: Si capas_ocultas no es una lista de enteros positivos (puede
-            estar vacía) o activacion no es una clave de ACTIVACIONES.
-    """
-    if (isinstance(capas_ocultas, (str, bytes)) or not isinstance(capas_ocultas, Sequence)
-            or not all(es_entero_positivo(c) for c in capas_ocultas)):
-        raise ValueError(
-            f"capas_ocultas debe ser una lista de enteros positivos, no {capas_ocultas!r}")
-    if not isinstance(activacion, str) or activacion not in ACTIVACIONES:
-        raise ValueError(
-            f"activacion desconocida: {activacion!r}; opciones: {sorted(ACTIVACIONES)}")
 
 
 def _comprobar_dimensiones(dim_observacion: object, dim_accion: object,

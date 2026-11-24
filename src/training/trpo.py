@@ -38,127 +38,16 @@ from src.models.factory import ACTIVACIONES
 from src.training.evaluacion import evaluar_politica, normalizar_observacion
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
+from src.utils.reglas_config import config_experto as _config_experto
+from src.utils.reglas_config import config_trpo, config_trpo_experto
 from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
 from src.utils.tracking import con_seccion, registrar
-from src.utils.validacion import es_entero_positivo, es_real_finito
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_POLITICA = "policy.pth"  # pesos de la política dentro del zip de sb3
 # Sección de W&B de las medidas de iteracion_trpo, que se devuelven sin prefijo.
 SECCION_TRPO = "trpo"
 _ARCHIVO_METADATOS = "experto.json"
-
-
-def config_trpo(cfg: dict) -> dict:
-    """Devuelve la sección trpo comprobada.
-
-    Raises:
-        ValueError: Si falta alguna clave o algún valor no es válido.
-    """
-    tcfg = cfg.get("trpo") if isinstance(cfg, dict) else None
-    if not isinstance(tcfg, dict):
-        raise ValueError("La configuración necesita la sección trpo")
-    reglas = {
-        "capas_ocultas": lambda v: (isinstance(v, list) and len(v) > 0
-                                    and all(es_entero_positivo(c) for c in v)),
-        "activacion": lambda v: isinstance(v, str) and v in ACTIVACIONES,
-        "gamma": lambda v: es_real_finito(v) and 0 < v <= 1,
-        "gae_lambda": lambda v: es_real_finito(v) and 0 <= v <= 1,
-        "target_kl": lambda v: es_real_finito(v) and v > 0,
-        "cg_damping": lambda v: es_real_finito(v) and v >= 0,
-        "pasos_por_iteracion": es_entero_positivo,
-        "n_entornos": es_entero_positivo,
-        "normalizar_observaciones": lambda v: isinstance(v, bool),
-        "limite_normalizacion": lambda v: es_real_finito(v) and v > 0,
-        "normalizar_ventajas": lambda v: isinstance(v, bool),
-        "log_std_inicial": es_real_finito,
-        "inicializacion_ortogonal": lambda v: isinstance(v, bool),
-        "pasos_gradiente_conjugado": es_entero_positivo,
-        "busqueda_lineal_factor": lambda v: es_real_finito(v) and 0 < v < 1,
-        "busqueda_lineal_maximo": es_entero_positivo,
-        "learning_rate_valor": lambda v: es_real_finito(v) and v > 0,
-        "pasos_valor": es_entero_positivo,
-        "batch_size_valor": es_entero_positivo,
-    }
-    for clave, valida in reglas.items():
-        if clave not in tcfg:
-            raise ValueError(f"Falta trpo.{clave} en la configuración")
-        if not valida(tcfg[clave]):
-            raise ValueError(f"trpo.{clave} no es válido: {tcfg[clave]!r}")
-    if tcfg["pasos_por_iteracion"] % tcfg["n_entornos"]:
-        raise ValueError("trpo.pasos_por_iteracion debe ser divisible por trpo.n_entornos: "
-                         f"{tcfg['pasos_por_iteracion']} entre {tcfg['n_entornos']}")
-    if tcfg["pasos_por_iteracion"] % tcfg["batch_size_valor"]:
-        raise ValueError("trpo.batch_size_valor debe dividir trpo.pasos_por_iteracion: "
-                         f"{tcfg['batch_size_valor']} no divide {tcfg['pasos_por_iteracion']}")
-    # Estandarizar las ventajas necesita al menos dos valores (sb3 lo exige).
-    if tcfg["normalizar_ventajas"] and (tcfg["pasos_por_iteracion"] < 2
-                                        or tcfg["batch_size_valor"] < 2):
-        raise ValueError("Con trpo.normalizar_ventajas, trpo.pasos_por_iteracion y "
-                         "trpo.batch_size_valor deben ser al menos 2")
-    return tcfg
-
-
-def config_trpo_experto(cfg: dict) -> dict:
-    """Devuelve una copia de cfg con trpo cambiado por experto.trpo, la del experto.
-
-    experto.trpo cambia solo las claves que pone; vacía o ausente, el experto usa la
-    sección trpo, como GAIL. La sección resultante se comprueba con config_trpo.
-
-    Args:
-        cfg: Configuración resuelta.
-
-    Returns:
-        Configuración nueva; cfg no se modifica.
-
-    Raises:
-        ValueError: Si experto.trpo no es un diccionario o la sección resultante no
-            es válida.
-    """
-    experto = cfg.get("experto") if isinstance(cfg, dict) else None
-    cambios = experto.get("trpo", {}) if isinstance(experto, dict) else {}
-    if not isinstance(cambios, dict):
-        raise ValueError("experto.trpo debe ser un diccionario")
-    tcfg = cfg.get("trpo")
-    if not isinstance(tcfg, dict):
-        raise ValueError("La configuración necesita la sección trpo")
-    combinada = {**cfg, "trpo": {**tcfg, **cambios}}
-    config_trpo(combinada)
-    return combinada
-
-
-def _semilla_valida(valor: object) -> bool:
-    """Indica si valor es una semilla válida según validar_semilla, la única comprobación."""
-    try:
-        validar_semilla(valor)
-    except ValueError:
-        return False
-    return True
-
-
-def _config_experto(cfg: dict) -> dict:
-    """Devuelve la sección experto comprobada.
-
-    Raises:
-        ValueError: Si falta alguna clave o algún valor no es válido.
-    """
-    ecfg = cfg.get("experto") if isinstance(cfg, dict) else None
-    if not isinstance(ecfg, dict):
-        raise ValueError("La configuración necesita la sección experto")
-    reglas = {
-        "pasos_totales": es_entero_positivo,
-        "retorno_objetivo": es_real_finito,
-        "semilla": _semilla_valida,
-        "evaluar_cada": es_entero_positivo,
-        "episodios_evaluacion": es_entero_positivo,
-        "evaluacion_determinista": lambda v: isinstance(v, bool),
-    }
-    for clave, valida in reglas.items():
-        if clave not in ecfg:
-            raise ValueError(f"Falta experto.{clave} en la configuración")
-        if not valida(ecfg[clave]):
-            raise ValueError(f"experto.{clave} no es válido: {ecfg[clave]!r}")
-    return ecfg
 
 
 def _comprobar_espacios(observacion: spaces.Space, accion: spaces.Space) -> None:

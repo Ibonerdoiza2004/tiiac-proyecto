@@ -28,14 +28,17 @@ WebSocket ``/api/trabajos/{id}``, para seguir un trabajo y reconectarse a mitad:
   de la funcionalidad tal cual (por ejemplo ``{"tipo": "partida_terminada", ...}``).
 - Cuando el trabajo termina, falla o se cancela, manda ese último estado y cierra
   la conexión normalmente (código 1000).
-- Del navegador: ``{"tipo": "pausar"}``, ``{"tipo": "reanudar"}`` y
-  ``{"tipo": "cancelar"}`` para cualquier trabajo, y las órdenes de su tipo
-  (``ORDENES_POR_TIPO`` en contrato.py: ``accion`` y ``finalizar`` en una sesión,
-  ``vista`` y ``finalizar`` en un entrenamiento), que se validan y se pasan al trabajo.
-- Un mensaje que no vale recibe ``{"tipo": "error", "mensaje": ...}`` y la conexión
-  sigue. Si el trabajo no existe, se manda ese error y se cierra con el código 4404.
+- Del navegador, mensajes de texto JSON: ``{"tipo": "pausar"}``,
+  ``{"tipo": "reanudar"}`` y ``{"tipo": "cancelar"}`` para cualquier trabajo, y las
+  órdenes de su tipo (``ORDENES_POR_TIPO`` en contrato.py: ``accion`` y ``finalizar``
+  en una sesión, ``vista`` y ``finalizar`` en un entrenamiento), que se validan y se
+  pasan al trabajo. ``finalizar`` en pausa reanuda el trabajo para que pueda terminar.
+- Un mensaje que no vale (también uno binario) recibe
+  ``{"tipo": "error", "mensaje": ...}`` y la conexión sigue. Si el trabajo no existe,
+  se manda ese error y se cierra con el código 4404.
 - Cerrar la conexión no afecta a un entrenamiento, que sigue y admite reconectarse;
-  una sesión interactiva (jugar o ver al experto), en cambio, se cancela.
+  una sesión interactiva (jugar o ver al experto), en cambio, se cancela cuando se
+  cierra la última conexión que la seguía (otra pestaña abierta la mantiene).
 
 Los números que no son finitos (NaN, infinito) se mandan como ``null``, también en
 las respuestas HTTP, porque JSON no los admite.
@@ -46,40 +49,53 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import threading
+from collections import Counter
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from src.app.contrato import CONTROLES, TrabajoApi, validar_orden
+from src.app.contrato import CONTROLES, ORDENES_QUE_REANUDAN, TrabajoApi, validar_orden
 from src.app.trabajos import ESTADOS_FINALES, GestorTrabajos, OperacionNoValida, TrabajoDesconocido
 
 # Código de cierre del WebSocket cuando el trabajo no existe (4000-4999: de la aplicación).
 CIERRE_NO_EXISTE = 4404
-_IMAGEN = object()  # marca en la cola de envío: «hay una imagen nueva»
 _FINALES = {estado.value for estado in ESTADOS_FINALES}
+
+
+class _Imagen:
+    """Hueco de una imagen en la cola de envío; guarda la más reciente de su tanda."""
+
+    def __init__(self, datos: bytes):
+        """Hueco con su primera imagen."""
+        self.datos = datos
 
 
 class ColaEnvio:
     """Lo que falta por enviar por un WebSocket, en orden; de las imágenes, solo la última.
 
-    Si llegan varias imágenes antes de enviar la primera, se envía una sola vez la
-    más reciente: el navegador nunca recibe imágenes repetidas ni atrasadas.
+    Si llegan varias imágenes seguidas antes de enviar la primera, se envía una sola
+    vez la más reciente: el navegador nunca recibe imágenes repetidas ni atrasadas.
+    Una imagen nunca adelanta a un evento que llegó antes que ella: si entre dos
+    imágenes hay otro evento, van las tres en su orden.
     """
 
     def __init__(self) -> None:
         """Crea la cola vacía. Se usa desde un único bucle de asyncio."""
         self._cola: asyncio.Queue[Any] = asyncio.Queue()
-        self._imagen: bytes | None = None
-        self._imagen_pendiente = False
+        # El hueco de imagen al final de la cola, si lo último que entró fue una imagen.
+        self._ultima: _Imagen | None = None
 
     def poner(self, evento: dict[str, Any]) -> None:
         """Añade un evento del gestor (estado, progreso o imagen)."""
         if evento["tipo"] == "imagen":
-            self._imagen = evento["datos"]
-            if not self._imagen_pendiente:
-                self._imagen_pendiente = True
-                self._cola.put_nowait(_IMAGEN)
+            if self._ultima is not None:
+                self._ultima.datos = evento["datos"]  # sustituye a la de su tanda
+            else:
+                self._ultima = _Imagen(evento["datos"])
+                self._cola.put_nowait(self._ultima)
         else:
+            self._ultima = None
             self._cola.put_nowait(evento)
 
     def vacia(self) -> bool:
@@ -87,11 +103,12 @@ class ColaEnvio:
         return self._cola.empty()
 
     async def sacar(self) -> dict[str, Any] | bytes:
-        """Espera y devuelve lo siguiente: un evento o los bytes de la última imagen."""
+        """Espera y devuelve lo siguiente: un evento o los bytes de una imagen."""
         evento = await self._cola.get()
-        if evento is _IMAGEN:
-            self._imagen_pendiente = False
-            return self._imagen
+        if isinstance(evento, _Imagen):
+            if evento is self._ultima:
+                self._ultima = None  # ya salió: la siguiente imagen va en otro hueco
+            return evento.datos
         return evento
 
 
@@ -126,6 +143,7 @@ def crear_router_trabajos(gestor: GestorTrabajos) -> APIRouter:
         Un router con las rutas bajo /trabajos (se monta con el prefijo /api).
     """
     router = APIRouter(prefix="/trabajos", tags=["trabajos"])
+    conexiones = Conexiones()
 
     @router.get("", response_model=list[TrabajoApi])
     def listar(tipo: str | None = None) -> list[dict[str, Any]]:
@@ -155,12 +173,36 @@ def crear_router_trabajos(gestor: GestorTrabajos) -> APIRouter:
     @router.websocket("/{id_trabajo}")
     async def seguir(websocket: WebSocket, id_trabajo: str) -> None:
         """Sigue un trabajo: foto inicial, eventos en directo y controles."""
-        await seguir_trabajo(websocket, gestor, id_trabajo)
+        await seguir_trabajo(websocket, gestor, id_trabajo, conexiones)
 
     return router
 
 
-async def seguir_trabajo(websocket: WebSocket, gestor: GestorTrabajos, id_trabajo: str) -> None:
+class Conexiones:
+    """Cuántos WebSockets siguen cada trabajo, para cancelar una sesión con el último."""
+
+    def __init__(self) -> None:
+        """Sin conexiones."""
+        self._cerrojo = threading.Lock()
+        self._abiertas: Counter[str] = Counter()
+
+    def abrir(self, id_trabajo: str) -> None:
+        """Cuenta una conexión más al trabajo."""
+        with self._cerrojo:
+            self._abiertas[id_trabajo] += 1
+
+    def cerrar(self, id_trabajo: str) -> bool:
+        """Descuenta una conexión; devuelve si era la última."""
+        with self._cerrojo:
+            self._abiertas[id_trabajo] -= 1
+            if self._abiertas[id_trabajo] > 0:
+                return False
+            del self._abiertas[id_trabajo]
+            return True
+
+
+async def seguir_trabajo(websocket: WebSocket, gestor: GestorTrabajos, id_trabajo: str,
+                         conexiones: Conexiones | None = None) -> None:
     """Cuerpo del WebSocket de un trabajo (protocolo en el docstring del módulo).
 
     Los eventos llegan desde el hilo repartidor del gestor y pasan al bucle de asyncio
@@ -171,7 +213,9 @@ async def seguir_trabajo(websocket: WebSocket, gestor: GestorTrabajos, id_trabaj
         websocket: Conexión sin aceptar todavía.
         gestor: Gestor de trabajos.
         id_trabajo: Trabajo que se sigue.
+        conexiones: Conexiones abiertas por trabajo (por defecto, solo esta).
     """
+    conexiones = conexiones or Conexiones()
     await websocket.accept()
     bucle = asyncio.get_running_loop()
     cola = ColaEnvio()
@@ -186,15 +230,18 @@ async def seguir_trabajo(websocket: WebSocket, gestor: GestorTrabajos, id_trabaj
     try:
         foto, dejar = gestor.suscribir(id_trabajo, al_evento)
     except TrabajoDesconocido:
-        await websocket.send_json({"tipo": "error", "mensaje": f"No existe el trabajo {id_trabajo}"})
+        await websocket.send_json({"tipo": "error",
+                                   "mensaje": f"No existe el trabajo {id_trabajo}"})
         await websocket.close(code=CIERRE_NO_EXISTE)
         return
 
-    # Si la conexión acaba por cualquier otro motivo que el final del trabajo (el
-    # navegador cierra, se corta la red o el servidor interrumpe esta función), una
-    # sesión interactiva se descarta: no sigue sin nadie mirando. Por eso va en el
-    # finally y no después: una interrupción (CancelledError) se saltaría el resto.
+    # Si la última conexión de una sesión interactiva acaba por cualquier otro motivo
+    # que el final del trabajo (el navegador cierra, se corta la red o el servidor
+    # interrumpe esta función), la sesión se descarta: no sigue sin nadie mirando. Por
+    # eso va en el finally y no después: una interrupción (CancelledError) se saltaría
+    # el resto.
     acabado = False
+    conexiones.abrir(id_trabajo)
     try:
         await _enviar_json(websocket, {"tipo": "estado", "trabajo": foto["trabajo"]})
         await _enviar_json(websocket, {"tipo": "historial", "progreso": foto["historial"],
@@ -218,13 +265,16 @@ async def seguir_trabajo(websocket: WebSocket, gestor: GestorTrabajos, id_trabaj
         if enviar in hechas and enviar.exception() is None:
             acabado = True
             await websocket.close()
-        elif enviar in hechas and not isinstance(enviar.exception(), WebSocketDisconnect):
-            raise enviar.exception()  # un error inesperado al enviar
+        for tarea in (enviar, recibir):  # un error inesperado de cualquiera de las dos
+            if tarea in hechas and not isinstance(tarea.exception(),
+                                                  (WebSocketDisconnect, type(None))):
+                raise tarea.exception()
     except WebSocketDisconnect:
         pass
     finally:
         dejar()
-        if not acabado and foto["trabajo"]["interactivo"]:
+        ultima = conexiones.cerrar(id_trabajo)
+        if not acabado and ultima and foto["trabajo"]["interactivo"]:
             try:
                 gestor.cancelar(id_trabajo)
             except OperacionNoValida:
@@ -260,10 +310,14 @@ async def _recibir_controles(websocket: WebSocket, gestor: GestorTrabajos,
     trabajo (validar_orden) y se pasan al trabajo.
     """
     while True:
-        try:
-            texto = await websocket.receive_text()
-        except WebSocketDisconnect:
+        recibido = await websocket.receive()
+        if recibido["type"] == "websocket.disconnect":
             return
+        texto = recibido.get("text")
+        if texto is None:
+            await _enviar_json(websocket, {"tipo": "error",
+                                           "mensaje": "Los mensajes tienen que ser texto JSON"})
+            continue
         try:
             mensaje = json.loads(texto)
         except json.JSONDecodeError:
@@ -278,6 +332,7 @@ async def _recibir_controles(websocket: WebSocket, gestor: GestorTrabajos,
             if tipo in CONTROLES:
                 getattr(gestor, tipo)(id_trabajo)
             else:
-                gestor.enviar_orden(id_trabajo, validar_orden(tipo_trabajo, mensaje))
+                gestor.enviar_orden(id_trabajo, validar_orden(tipo_trabajo, mensaje),
+                                    reanudar=tipo in ORDENES_QUE_REANUDAN)
         except (OperacionNoValida, TrabajoDesconocido, ValueError) as error:
             await _enviar_json(websocket, {"tipo": "error", "mensaje": str(error)})
