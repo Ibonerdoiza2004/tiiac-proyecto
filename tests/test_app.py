@@ -111,7 +111,8 @@ def test_la_ruta_del_frontend_es_relativa_a_la_carpeta_de_trabajo(
 
 def _cfg(**cambios: object) -> dict:
     """Configuración base válida con cambios en aplicativo (None borra la clave)."""
-    cfg = {"aplicativo": {"host": "127.0.0.1", "puerto": 8000, "web": "web/dist"},
+    cfg = {"aplicativo": {"host": "127.0.0.1", "puerto": 8000, "web": "web/dist",
+                          "biblioteca": "biblioteca"},
            "experimento": {"procesos": 5}}
     for clave, valor in cambios.items():
         if valor is None:
@@ -123,7 +124,8 @@ def _cfg(**cambios: object) -> dict:
 
 def test_config_aplicativo_valida() -> None:
     assert config_aplicativo(_cfg()) == {"host": "127.0.0.1", "puerto": 8000,
-                                         "web": Path("web/dist"), "procesos": 5}
+                                         "web": Path("web/dist"),
+                                         "biblioteca": Path("biblioteca"), "procesos": 5}
 
 
 @pytest.mark.parametrize("puerto", [1, 65535, np.int64(8000)])
@@ -146,6 +148,9 @@ def test_config_aplicativo_admite_puertos_limite_y_enteros_de_numpy(puerto: obje
     ({"host": None}, "Falta"),
     ({"puerto": None}, "Falta"),
     ({"web": None}, "Falta"),
+    ({"biblioteca": ""}, "aplicativo.biblioteca"),
+    ({"biblioteca": 3}, "aplicativo.biblioteca"),
+    ({"biblioteca": None}, "Falta"),
 ])
 def test_config_aplicativo_rechaza_valores_no_validos(cambio: dict, mensaje: str) -> None:
     with pytest.raises(ValueError, match=mensaje):
@@ -161,7 +166,8 @@ def test_config_aplicativo_rechaza_procesos_no_validos(procesos: object) -> None
 
 
 @pytest.mark.parametrize("cfg", [{}, {"aplicativo": None, "experimento": {"procesos": 5}},
-                                 {"aplicativo": {"host": "h", "puerto": 1, "web": "w"}}])
+                                 {"aplicativo": {"host": "h", "puerto": 1, "web": "w",
+                                                 "biblioteca": "b"}}])
 def test_config_aplicativo_rechaza_secciones_que_faltan(cfg: dict) -> None:
     with pytest.raises(ValueError, match="Falta"):
         config_aplicativo(cfg)

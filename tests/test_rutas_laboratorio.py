@@ -219,6 +219,9 @@ def test_guardar_con_un_cuerpo_que_no_vale(cliente_y_gestor, cuerpo) -> None:
      "ajustes": {"bc": {"learning_rate": 0.01}}},
     {"entorno": "halfcheetah", "metodo": "gail", "datos": ["a"], "vista": True,
      "ajustes": {"gail": {"iteraciones": 3, "discriminador": {"learning_rate": 0.1}}}},
+    {"entorno": "cartpole", "metodo": "experto", "nombre": "Mi experto"},
+    {"entorno": "cartpole", "metodo": "experto", "nombre": "x" * 100},
+    {"entorno": "cartpole", "metodo": "experto", "nombre": None},
 ])
 def test_un_entrenamiento_valido_responde_501_hasta_su_rama(cliente, cuerpo) -> None:
     respuesta = cliente.post("/api/entrenamientos", json=cuerpo)
@@ -254,6 +257,10 @@ def test_entrenamiento_con_ajustes_que_no_valen(cliente, cuerpo, mensaje) -> Non
     {"entorno": "cartpole", "metodo": "experto", "wandb": 1},
     {"entorno": "cartpole", "metodo": "experto", "ajustes": [1]},
     {"entorno": "cartpole", "metodo": "experto", "otra": 1},
+    {"entorno": "cartpole", "metodo": "experto", "nombre": ""},
+    {"entorno": "cartpole", "metodo": "experto", "nombre": "   "},
+    {"entorno": "cartpole", "metodo": "experto", "nombre": "x" * 101},
+    {"entorno": "cartpole", "metodo": "experto", "nombre": 3},
 ])
 def test_entrenamiento_que_no_vale_por_su_forma(cliente, cuerpo) -> None:
     assert cliente.post("/api/entrenamientos", json=cuerpo).status_code == 422
@@ -280,3 +287,24 @@ def test_un_dashboard_que_no_vale_impide_crear_la_app(tmp_path) -> None:
     (copia / "dashboard.yaml").write_text("laboratorio: {}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="falta la sección"):
         crear_app(copia / "default.yaml", GestorTrabajos(1))
+
+
+# --- Nombre del modelo ---------------------------------------------------------------------
+
+def test_nombre_del_modelo_el_del_usuario_o_uno_generado() -> None:
+    from datetime import datetime
+
+    from src.app.contrato import EntrenamientoCrear
+    from src.app.rutas_laboratorio import nombre_modelo
+    from src.data.biblioteca import nombre_por_defecto
+
+    con = EntrenamientoCrear(entorno="cartpole", metodo="experto", nombre="  Mi experto ")
+    assert nombre_modelo(con, "CartPole-v1") == "Mi experto"
+    sin = EntrenamientoCrear(entorno="reacher", metodo="gail", datos=["a"])
+    generado = nombre_modelo(sin, "Reacher-v5")
+    assert generado.startswith("GAIL · Reacher · ")
+    momento = datetime(2026, 11, 24, 18, 30)
+    assert nombre_por_defecto("gail", "CartPole-v1", momento) == "GAIL · CartPole · 24/11 18:30"
+    assert nombre_por_defecto("bc", "HalfCheetah-v5", momento) == "BC · HalfCheetah · 24/11 18:30"
+    assert nombre_por_defecto("experto", "MountainCar-v0", momento) == \
+        "Experto · MountainCar · 24/11 18:30"

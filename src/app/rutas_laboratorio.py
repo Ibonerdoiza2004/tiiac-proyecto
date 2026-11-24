@@ -21,6 +21,7 @@ from src.app.contrato import (ConfiguracionJuegoApi, EntrenamientoCrear, Esquema
                               MetodoEntrenamiento, ResultadoGuardadoApi, SesionCrear,
                               SesionGuardar, TrabajoApi)
 from src.app.trabajos import GestorTrabajos, OperacionNoValida
+from src.data.biblioteca import nombre_por_defecto
 from src.utils.configuracion import TipoEntorno, resolver_configuracion
 
 PENDIENTE_JUGAR = ("Todavía no implementado: las sesiones llegan con la rama "
@@ -55,6 +56,18 @@ def fps_entorno(gym_id: str) -> int:
     if not isinstance(fps, int) or fps < 1:
         raise ValueError(f"{gym_id} no declara render_fps")
     return fps
+
+
+def nombre_modelo(peticion: EntrenamientoCrear, gym: str) -> str:
+    """Nombre con el que se guardará el modelo: el del usuario, sin espacios a los lados,
+    o uno generado (nombre_por_defecto) si no puso ninguno.
+
+    Args:
+        peticion: Petición de entrenamiento ya validada.
+        gym: Id de Gymnasium del entorno.
+    """
+    return peticion.nombre.strip() if peticion.nombre else nombre_por_defecto(peticion.metodo,
+                                                                               gym)
 
 
 def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
@@ -118,10 +131,11 @@ def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
     def crear_entrenamiento(peticion: EntrenamientoCrear) -> dict[str, Any]:
         """Entrena un experto, un BC o un GAIL. Se sigue por /api/trabajos/{id}."""
         try:
-            comprobar_ajustes(ruta_config, peticion.entorno, peticion.metodo, peticion.ajustes,
-                              dashboard)
+            cfg = comprobar_ajustes(ruta_config, peticion.entorno, peticion.metodo,
+                                    peticion.ajustes, dashboard)
         except ValueError as error:
             raise no_valida(str(error)) from error
+        nombre_modelo(peticion, cfg["entorno"]["id"])  # lo recibirá el trabajador
         raise HTTPException(status_code=501, detail=PENDIENTE_ENTRENAR)
 
     return router

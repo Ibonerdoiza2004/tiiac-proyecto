@@ -39,6 +39,8 @@ Positivo = Annotated[int, Field(strict=True, ge=1)]
 # Estrictos: un booleano o un entero del navegador tiene que serlo de verdad («true» o
 # 1 no valen como booleano, ni «3» como entero).
 Booleano = Annotated[bool, Field(strict=True)]
+# Nombre que pone el usuario a algo de la biblioteca: con algún carácter visible.
+NombreUsuario = Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
 
 
 class _Estricto(BaseModel):
@@ -269,7 +271,7 @@ class TramoPartidaApi(_Estricto):
 class SesionGuardar(_Estricto):
     """Cuerpo de POST /api/sesiones/{id}/guardar. Guardar cierra la sesión."""
 
-    nombre: Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
+    nombre: NombreUsuario
     partidas: Annotated[list[TramoPartidaApi], Field(min_length=1)]
 
     @model_validator(mode="after")
@@ -338,6 +340,10 @@ class EntrenamientoCrear(_Estricto):
 
     entorno: TipoEntorno
     metodo: MetodoEntrenamiento
+    nombre: NombreUsuario | None = Field(
+        None, description="Nombre del modelo en la biblioteca; si falta, se genera uno con "
+                          "el método, el entorno y la fecha (p. ej. «GAIL · CartPole · "
+                          "24/11 18:30»).")
     ajustes: dict[str, Any] = Field(
         default_factory=dict, description="Solo lo que cambia el usuario, anidado como en "
                                           "configs/, p. ej. {\"bc\": {\"learning_rate\": 0.01}}.")
@@ -362,15 +368,47 @@ class EntrenamientoCrear(_Estricto):
         return self
 
 
-# --- Biblioteca (el índice llega en el paso siguiente) ---------------------------------------
+# --- Biblioteca -------------------------------------------------------------------------
+
+TipoElemento = Literal["experto", "bc", "gail", "demostraciones"]
+OrigenElemento = Literal["congelado", "entrega", "dashboard"]
+
+
+class ElementoBibliotecaApi(BaseModel):
+    """Un modelo o un conjunto de demostraciones de la biblioteca.
+
+    Si su carpeta no se puede leer, sale igualmente con ``valido: false`` y el motivo;
+    entonces los campos que dependen de la ficha pueden faltar (null).
+    """
+
+    id: str
+    entorno: TipoEntorno
+    tipo: TipoElemento
+    nombre: str
+    origen: OrigenElemento | None
+    creado: str | None
+    descripcion: str | None
+    fuente: Literal["experto", "humano", "combinado"] | None = Field(
+        description="Solo en demostraciones: quién jugó las partidas.")
+    artefacto: str | None = Field(description="Artefacto de W&B del que se descargó, si "
+                                              "vino de allí (nombre:versión).")
+    valido: bool
+    motivo: str | None
+    detalles: dict[str, Any] = Field(description="Lo principal de sus metadatos (pasos y "
+                                                 "retorno del experto, partidas y pares "
+                                                 "de unas demostraciones…).")
+
 
 class DemostracionApi(BaseModel):
-    """Un conjunto o subconjunto de demostraciones de la biblioteca."""
+    """Un conjunto de demostraciones, como lo usa el formulario de entrenar."""
 
     id: str
     entorno: TipoEntorno
     nombre: str
     tipo: Literal["conjunto", "subconjunto"]
-    partidas: Positivo
+    partidas: Positivo | None
     pares: Positivo | None
-    fuente: Literal["experto", "humano", "combinado"]
+    fuente: Literal["experto", "humano", "combinado"] | None
+    origen: OrigenElemento | None
+    valido: bool
+    motivo: str | None

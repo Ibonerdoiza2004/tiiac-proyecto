@@ -36,6 +36,9 @@ aplicativo:
   host: 127.0.0.1
   puerto: 8000  # El que espera el proxy de Vite (web/vite.config.js).
   web: web/dist
+  # Modelos y demostraciones del dashboard, una carpeta por elemento (src/data/biblioteca.py).
+  # No se versiona; se llena con scripts/preparar_biblioteca.py y con lo que se cree.
+  biblioteca: biblioteca
 
 entorno:
   id: null

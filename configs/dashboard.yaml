@@ -92,3 +92,13 @@ campos:
 
   demostraciones:
     frecuencia_pares: {etiqueta: "Un par de cada", ayuda: "Usa uno de cada tantos pares de las demostraciones.", nivel: avanzado, min: 1}
+
+# Precarga de la biblioteca (scripts/preparar_biblioteca.py y Docker al arrancar): run de
+# comparación de W&B de la entrega de cada entorno; se añaden los BC y GAIL que evaluó.
+precarga:
+  comparaciones:
+    cartpole: ft49odps
+    mountaincar: ocgr7382
+    acrobot: bqaquz1w
+    reacher: u0imo43m
+    halfcheetah: k7v7i4fo

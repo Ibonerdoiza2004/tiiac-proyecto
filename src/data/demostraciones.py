@@ -339,6 +339,36 @@ def _leer_manifiesto(archivo: np.lib.npyio.NpzFile) -> dict[str, Any]:
     return manifiesto
 
 
+def resumen_demostraciones(ruta: str | Path) -> dict[str, Any]:
+    """Lee solo el manifiesto de un archivo de demostraciones, sin cargar las partidas.
+
+    Para listar archivos deprisa (la biblioteca del dashboard): comprueba el formato
+    y que el archivo tenga los arrays que declara, pero no valida las partidas frente
+    a los espacios del entorno, que es lo que hace cargar_demostraciones.
+
+    Args:
+        ruta: Archivo NPZ guardado con guardar_demostraciones.
+
+    Returns:
+        ``{"partidas", "pares", "metadatos"}``: número de partidas, pasos en total y
+        los metadatos del manifiesto.
+
+    Raises:
+        ValueError: Si el archivo no se puede leer o su manifiesto no es válido.
+    """
+    try:
+        archivo = np.load(Path(ruta), allow_pickle=False)
+    except (OSError, EOFError, ValueError, zipfile.BadZipFile) as error:
+        # np.load da ValueError si los bytes no son un NPZ (los toma por un pickle).
+        raise ValueError(f"No se pudo leer {Path(ruta).name} como NPZ: {error}") from error
+    with archivo:
+        manifiesto = _leer_manifiesto(archivo)
+    episodios = manifiesto["episodios"]
+    return {"partidas": len(episodios),
+            "pares": sum(int(e["numero_pasos"]) for e in episodios),
+            "metadatos": manifiesto["metadatos"]}
+
+
 def cargar_demostraciones(
     ruta: str | Path,
     espacio_observacion: spaces.Space,

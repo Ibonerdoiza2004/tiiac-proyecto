@@ -429,6 +429,7 @@ común a cualquier trabajo.
 | `GET /api/trabajos`, `GET /api/trabajos/{id}` | Listar y consultar trabajos |
 | `POST /api/trabajos/{id}/pausar`, `/reanudar`, `/cancelar` | Controlar cualquier trabajo |
 | WebSocket `/api/trabajos/{id}` | Seguir cualquier trabajo en directo |
+| `GET /api/biblioteca/modelos`, `/demostraciones`, `/{id}` | Modelos y demostraciones de la biblioteca (`?entorno=`, `?tipo=`) |
 
 | WebSocket | Mensaje |
 |---|---|
@@ -439,6 +440,22 @@ común a cualquier trabajo.
 
 Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder ni repetir
 progreso; una sesión de jugar, en cambio, se descarta.
+
+La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
+`biblioteca/`, no se versiona), con una carpeta por elemento
+(`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una
+`ficha.json` con el nombre, el origen (congelado, entrega o dashboard) y la fecha. Para
+llenarla con los expertos y las demostraciones congelados y los BC y GAIL de la entrega,
+con una sesión de W&B (`wandb login`):
+
+```bash
+python scripts/preparar_biblioteca.py
+```
+
+Descarga de los cinco entornos unos 42 MB en un minuto y medio (medido el 2026-11-24 en
+este portátil) y comprueba las huellas de los congelados. Se puede repetir: lo que ya
+está no se descarga otra vez. `--entorno` elige entornos y `--sin-entrega` deja solo los
+congelados.
 
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con
@@ -462,6 +479,7 @@ src/models/factory.py   política de BC y discriminador
 src/training/           TRPO y experto, BC, GAIL, barridos, evaluación y flujo de run.py
 src/utils/              configuración, semillas, seguimiento W&B, archivos y validación
 src/app/                API FastAPI del aplicativo (E2): python -m src.app
+biblioteca/             modelos y demostraciones del dashboard (no se versiona)
 web/                    frontend del aplicativo (React con Vite) y sus tests
 scripts/                cada etapa por separado
 tests/                  tests (pytest)

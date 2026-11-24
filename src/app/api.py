@@ -19,9 +19,11 @@ from fastapi.staticfiles import StaticFiles
 
 from src.app.ajustes import cargar_dashboard
 from src.app.contrato import EntornoApi, EstadoApi
+from src.app.rutas_biblioteca import crear_router_biblioteca
 from src.app.rutas_laboratorio import crear_router_laboratorio
 from src.app.rutas_trabajos import crear_router_trabajos
 from src.app.trabajos import GestorTrabajos, OperacionNoValida, SinHueco, TrabajoDesconocido
+from src.data.biblioteca import Biblioteca
 from src.utils.configuracion import (TipoEntorno, leer_configuracion_base,
                                      resolver_configuracion)
 from src.utils.validacion import es_entero, es_entero_positivo
@@ -42,7 +44,7 @@ def config_aplicativo(cfg: dict[str, Any]) -> dict[str, Any]:
         cfg: YAML base (leer_configuracion_base).
 
     Returns:
-        ``{"host", "puerto", "web", "procesos"}``, con ``web`` como Path.
+        ``{"host", "puerto", "web", "biblioteca", "procesos"}``, con las rutas como Path.
 
     Raises:
         ValueError: Si falta alguna clave o su valor no es válido.
@@ -50,6 +52,7 @@ def config_aplicativo(cfg: dict[str, Any]) -> dict[str, Any]:
     try:
         seccion = cfg["aplicativo"]
         host, puerto, web = seccion["host"], seccion["puerto"], seccion["web"]
+        biblioteca = seccion["biblioteca"]
         procesos = cfg["experimento"]["procesos"]
     except (KeyError, TypeError) as error:
         raise ValueError(f"Falta en la configuración del aplicativo: {error}") from error
@@ -60,9 +63,12 @@ def config_aplicativo(cfg: dict[str, Any]) -> dict[str, Any]:
                          f"no {puerto!r}")
     if not isinstance(web, str) or not web:
         raise ValueError(f"aplicativo.web debe ser una ruta, no {web!r}")
+    if not isinstance(biblioteca, str) or not biblioteca:
+        raise ValueError(f"aplicativo.biblioteca debe ser una ruta, no {biblioteca!r}")
     if not es_entero_positivo(procesos):
         raise ValueError(f"experimento.procesos debe ser un entero positivo, no {procesos!r}")
-    return {"host": host, "puerto": int(puerto), "web": Path(web), "procesos": int(procesos)}
+    return {"host": host, "puerto": int(puerto), "web": Path(web),
+            "biblioteca": Path(biblioteca), "procesos": int(procesos)}
 
 
 def describir_entornos(ruta_config: Path) -> list[EntornoApi]:
@@ -115,6 +121,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     entornos = describir_entornos(ruta_config)
     dashboard = cargar_dashboard(Path(ruta_config).parent / ARCHIVO_DASHBOARD)
     gestor = gestor or GestorTrabajos(aplicativo["procesos"])
+    biblioteca = Biblioteca(aplicativo["biblioteca"], {e.id: e.gym for e in entornos})
 
     @asynccontextmanager
     async def ciclo_de_vida(app: FastAPI) -> AsyncIterator[None]:
@@ -125,6 +132,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     app = FastAPI(title="GAIL lab", description="API del dashboard de TIIAC.",
                   lifespan=ciclo_de_vida)
     app.state.gestor = gestor
+    app.state.biblioteca = biblioteca
     for excepcion, codigo in ((TrabajoDesconocido, 404), (OperacionNoValida, 409),
                               (SinHueco, 503)):
         app.add_exception_handler(excepcion, _respuesta_error(codigo))
@@ -138,6 +146,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
 
     api.include_router(crear_router_trabajos(gestor))
     api.include_router(crear_router_laboratorio(Path(ruta_config), dashboard, gestor))
+    api.include_router(crear_router_biblioteca(biblioteca))
     app.include_router(api)
 
     web = aplicativo["web"]
