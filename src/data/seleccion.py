@@ -14,11 +14,13 @@ el subconjunto deja de ser válido.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from gymnasium import spaces
 
 from src.data.biblioteca import ARCHIVO_SUBCONJUNTO, Biblioteca, agregar_nuevo, es_id
@@ -181,3 +183,68 @@ def cargar_subconjunto(biblioteca: Biblioteca, id_subconjunto: str,
     comprobar_contra_conjunto(datos, huella_archivo(npz),
                               {i: t.numero_pasos for i, t in por_id.items()})
     return [por_id[i] for i in datos["partidas"]], datos
+
+
+# Campos de una partida que tienen que coincidir si sale dos veces del mismo NPZ.
+_CAMPOS_PARTIDA = ("estados", "acciones", "siguientes_estados", "recompensas_originales",
+                   "terminados", "truncados")
+
+
+def combinar_demostraciones(origenes: Sequence[tuple[str, Sequence[Trayectoria]]],
+                            entorno: str) -> tuple[list[Trayectoria], dict[str, Any]]:
+    """Junta partidas de varios NPZ en una sola colección, sin repetir ninguna.
+
+    Una partida se identifica por la huella de su NPZ y su id_episodio: si llega dos
+    veces (por ejemplo, de un conjunto y de un subconjunto suyo), cuenta una vez, así
+    que los pares repetidos cuentan una vez. Las partidas se ordenan por (huella,
+    id original) y reciben ids nuevos de 0 a N − 1: con los mismos datos, en cualquier
+    orden, el resultado es el mismo. Los arrays no se copian.
+
+    Args:
+        origenes: Pares (huella del NPZ, partidas que se toman de él); las partidas,
+            enteras y con su id_episodio del NPZ.
+        entorno: Id de Gymnasium del entorno de todas ellas.
+
+    Returns:
+        Las partidas con sus ids nuevos y los metadatos de un NPZ combinado
+        (comprobar_metadatos): fuente «combinado», entorno y, de cada partida, de qué
+        NPZ e id sale.
+
+    Raises:
+        ValueError: Si no hay ninguna partida, una huella o una partida no vale, o la
+            misma partida de un NPZ llega con contenidos distintos.
+    """
+    if isinstance(origenes, (str, bytes)) or not isinstance(origenes, Sequence):
+        raise ValueError("origenes debe ser una lista de (huella, partidas)")
+    if not isinstance(entorno, str) or not entorno.strip():
+        raise ValueError("entorno debe ser el id de Gymnasium del entorno")
+    unicas: dict[tuple[str, int], Trayectoria] = {}
+    for indice, origen in enumerate(origenes):
+        if not isinstance(origen, (tuple, list)) or len(origen) != 2:
+            raise ValueError(f"origenes[{indice}] debe ser (huella, partidas)")
+        huella, partidas = origen
+        comprobar_huella(huella)
+        if isinstance(partidas, (str, bytes)) or not isinstance(partidas, Sequence):
+            raise ValueError(f"origenes[{indice}]: partidas debe ser una lista de Trayectoria")
+        for partida in partidas:
+            if not isinstance(partida, Trayectoria) or not es_id_episodio(partida.id_episodio):
+                raise ValueError(f"origenes[{indice}]: se esperaban objetos Trayectoria con "
+                                 "id_episodio")
+            clave = (huella, int(partida.id_episodio))
+            anterior = unicas.setdefault(clave, partida)
+            if anterior is not partida and not all(
+                    np.array_equal(getattr(anterior, c), getattr(partida, c))
+                    for c in _CAMPOS_PARTIDA):
+                raise ValueError(f"La partida {clave[1]} del NPZ {huella[:12]} llega dos veces "
+                                 "con contenidos distintos")
+    if not unicas:
+        raise ValueError("No hay ninguna partida que combinar")
+    claves = sorted(unicas)
+    trayectorias = [dataclasses.replace(unicas[clave], id_episodio=nuevo)
+                    for nuevo, clave in enumerate(claves)]
+    metadatos = {"fuente": "combinado", "entorno": entorno,
+                 "partidas": [{"id_episodio": nuevo, "huella_dataset": huella,
+                               "id_original": original}
+                              for nuevo, (huella, original) in enumerate(claves)]}
+    return trayectorias, metadatos
+

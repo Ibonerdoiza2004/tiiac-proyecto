@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import itertools
 import json
 import re
 import shutil
@@ -15,9 +17,11 @@ from src.app.contrato import DemostracionApi
 from src.app.rutas_biblioteca import como_demostracion
 from src.data.biblioteca import (ARCHIVO_SUBCONJUNTO, Biblioteca, agregar, agregar_nuevo,
                                  crear_ficha, nuevo_id)
-from src.data.demostraciones import guardar_demostraciones, resumen_demostraciones
+from src.data.demostraciones import (cargar_demostraciones, fuente_demostraciones,
+                                     guardar_demostraciones, resumen_demostraciones)
 from src.data.seleccion import (FORMATO_SUBCONJUNTO, VERSION_SUBCONJUNTO, cargar_subconjunto,
-                                comprobar_subconjunto, crear_subconjunto)
+                                combinar_demostraciones, comprobar_subconjunto,
+                                crear_subconjunto)
 from src.data.splits import huella_archivo
 from src.data.tipos import Trayectoria
 
@@ -277,3 +281,100 @@ def test_si_su_conjunto_no_es_valido_el_subconjunto_tampoco(biblioteca):
     elemento = biblioteca.obtener(sub)
     assert not elemento["valido"]
     assert elemento["motivo"].startswith(f"su conjunto {conjunto} no es válido: la ficha dice")
+
+
+# --- combinar_demostraciones -----------------------------------------------------------
+
+HUELLA_A, HUELLA_B, HUELLA_C = "aa" * 32, "bb" * 32, "cc" * 32
+
+
+def _partidas(pasos_por_id: dict[int, int]) -> list[Trayectoria]:
+    return [_partida(pasos=p, identificador=i) for i, p in pasos_por_id.items()]
+
+
+def test_combinar_da_ids_nuevos_en_orden_y_dice_de_donde_sale_cada_una():
+    a, b = _partidas({3: 4, 0: 5}), _partidas({0: 2, 1: 3})
+    partidas, metadatos = combinar_demostraciones([(HUELLA_B, b), (HUELLA_A, a)], "CartPole-v1")
+    assert [p.id_episodio for p in partidas] == [0, 1, 2, 3]
+    assert [p.numero_pasos for p in partidas] == [5, 4, 2, 3]
+    assert metadatos == {"fuente": "combinado", "entorno": "CartPole-v1", "partidas": [
+        {"id_episodio": 0, "huella_dataset": HUELLA_A, "id_original": 0},
+        {"id_episodio": 1, "huella_dataset": HUELLA_A, "id_original": 3},
+        {"id_episodio": 2, "huella_dataset": HUELLA_B, "id_original": 0},
+        {"id_episodio": 3, "huella_dataset": HUELLA_B, "id_original": 1}]}
+    # Sin copiar los arrays y sin tocar las partidas de entrada.
+    assert partidas[0].estados is a[1].estados and partidas[2].acciones is b[0].acciones
+    assert [p.id_episodio for p in a] == [3, 0]
+
+
+def test_una_partida_elegida_dos_veces_cuenta_una():
+    """Un conjunto y un subconjunto suyo (otras copias de las mismas partidas)."""
+    conjunto, subconjunto = _partidas({0: 4, 3: 6, 5: 5}), _partidas({3: 6, 5: 5})
+    partidas, metadatos = combinar_demostraciones(
+        [(HUELLA_A, conjunto), (HUELLA_A, subconjunto), (HUELLA_A, conjunto[:1])], "CartPole-v1")
+    assert [m["id_original"] for m in metadatos["partidas"]] == [0, 3, 5]
+    assert sum(p.numero_pasos for p in partidas) == 4 + 6 + 5  # pares sin repetir
+
+
+def test_el_mismo_id_de_dos_npz_son_dos_partidas():
+    partidas, metadatos = combinar_demostraciones(
+        [(HUELLA_A, _partidas({0: 4})), (HUELLA_B, _partidas({0: 4}))], "CartPole-v1")
+    assert len(partidas) == 2
+    assert [m["huella_dataset"] for m in metadatos["partidas"]] == [HUELLA_A, HUELLA_B]
+
+
+def test_el_orden_de_los_datos_no_cambia_el_resultado():
+    """Todas las permutaciones de tres orígenes, con sus partidas al revés o no."""
+    origenes = [(HUELLA_A, _partidas({2: 3, 0: 4})), (HUELLA_B, _partidas({1: 5})),
+                (HUELLA_C, _partidas({7: 2, 4: 6}))]
+    esperado = combinar_demostraciones(origenes, "CartPole-v1")
+    for orden in itertools.permutations(origenes):
+        for invertir in (False, True):
+            entrada = [(h, list(reversed(p)) if invertir else p) for h, p in orden]
+            partidas, metadatos = combinar_demostraciones(entrada, "CartPole-v1")
+            assert metadatos == esperado[1]
+            for obtenida, prevista in zip(partidas, esperado[0]):
+                assert obtenida.id_episodio == prevista.id_episodio
+                np.testing.assert_array_equal(obtenida.estados, prevista.estados)
+
+
+def test_la_misma_partida_con_otro_contenido_es_un_error():
+    otra = _partidas({0: 4})[0]
+    distinta = dataclasses.replace(otra, acciones=(otra.acciones + 1) % 3)
+    with pytest.raises(ValueError, match="llega dos veces con contenidos distintos"):
+        combinar_demostraciones([(HUELLA_A, [otra]), (HUELLA_A, [distinta])], "CartPole-v1")
+
+
+@pytest.mark.parametrize("origenes, mensaje", [
+    ([], "ninguna partida"),
+    ([(HUELLA_A, [])], "ninguna partida"),
+    ([(HUELLA_A, []), (HUELLA_B, [])], "ninguna partida"),
+    ("origenes", r"lista de \(huella, partidas\)"),
+    ({HUELLA_A: []}, r"lista de \(huella, partidas\)"),
+    ([HUELLA_A], r"origenes\[0\] debe ser \(huella, partidas\)"),
+    ([(HUELLA_A, [], 1)], r"origenes\[0\] debe ser \(huella, partidas\)"),
+    ([("corta", [])], "huella"),
+    ([(HUELLA_A, "partidas")], "lista de Trayectoria"),
+    ([(HUELLA_A, [{"id_episodio": 0}])], "objetos Trayectoria"),
+])
+def test_combinar_rechaza_lo_que_no_vale(origenes, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        combinar_demostraciones(origenes, "CartPole-v1")
+
+
+@pytest.mark.parametrize("entorno", ["", "  ", None, 3])
+def test_combinar_necesita_el_entorno(entorno):
+    with pytest.raises(ValueError, match="entorno"):
+        combinar_demostraciones([(HUELLA_A, _partidas({0: 2}))], entorno)
+
+
+def test_lo_combinado_se_guarda_y_se_lee_como_un_npz_combinado(tmp_path):
+    partidas, metadatos = combinar_demostraciones(
+        [(HUELLA_A, _partidas({3: 4, 0: 5})), (HUELLA_B, _partidas({0: 2}))], "CartPole-v1")
+    ruta = guardar_demostraciones(tmp_path / "combinado.npz", partidas, metadatos,
+                                  OBSERVACION, DISCRETA)
+    leidas, leidos = cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
+    assert leidos == metadatos and fuente_demostraciones(leidos) == "combinado"
+    assert [p.id_episodio for p in leidas] == [0, 1, 2]
+    assert resumen_demostraciones(ruta)["pares"] == 11
+
