@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import json
+import math
 import re
 import shutil
 from pathlib import Path
@@ -21,9 +22,11 @@ from src.data.demostraciones import (cargar_demostraciones, fuente_demostracione
                                      guardar_demostraciones, resumen_demostraciones)
 from src.data.seleccion import (FORMATO_SUBCONJUNTO, VERSION_SUBCONJUNTO, cargar_subconjunto,
                                 combinar_demostraciones, comprobar_subconjunto,
-                                crear_subconjunto)
-from src.data.splits import huella_archivo
+                                crear_subconjunto, proporcion_validacion, repartir_combinado)
+from src.data.splits import huella_archivo, validar_splits
 from src.data.tipos import Trayectoria
+from src.utils.configuracion import resolver_configuracion
+from src.utils.seed import crear_generador
 
 OBSERVACION = spaces.Box(-np.inf, np.inf, (4,), np.float32)
 DISCRETA = spaces.Discrete(3)
@@ -377,4 +380,132 @@ def test_lo_combinado_se_guarda_y_se_lee_como_un_npz_combinado(tmp_path):
     assert leidos == metadatos and fuente_demostraciones(leidos) == "combinado"
     assert [p.id_episodio for p in leidas] == [0, 1, 2]
     assert resumen_demostraciones(ruta)["pares"] == 11
+
+
+# --- reparto de un combinado -----------------------------------------------------------
+
+HUELLA_COMBINADO = "dd" * 32
+UN_TERCIO, UN_SEXTO = 5 / 15, 5 / 30
+
+
+def _combinado(tamanos: dict[str, int]) -> dict:
+    """Metadatos de un combinado con tantas partidas de cada NPZ como se diga."""
+    partidas, nuevo = [], 0
+    for huella, cuantas in tamanos.items():
+        for original in range(cuantas):
+            partidas.append({"id_episodio": nuevo, "huella_dataset": huella,
+                             "id_original": original})
+            nuevo += 1
+    return {"fuente": "combinado", "entorno": "CartPole-v1", "partidas": partidas}
+
+
+def _por_origen(metadatos: dict, ids) -> dict[str, int]:
+    origen = {p["id_episodio"]: p["huella_dataset"] for p in metadatos["partidas"]}
+    cuenta: dict[str, int] = {}
+    for i in ids:
+        cuenta[origen[i]] = cuenta.get(origen[i], 0) + 1
+    return cuenta
+
+
+@pytest.mark.parametrize("tamanos, proporcion, validacion", [
+    ({HUELLA_A: 15}, UN_TERCIO, {HUELLA_A: 5}),                 # como la E1
+    ({HUELLA_A: 9, HUELLA_B: 6}, UN_TERCIO, {HUELLA_A: 3, HUELLA_B: 2}),
+    ({HUELLA_A: 30}, UN_SEXTO, {HUELLA_A: 5}),
+    ({HUELLA_A: 12, HUELLA_B: 4, HUELLA_C: 2}, UN_TERCIO, {HUELLA_A: 4, HUELLA_B: 1,
+                                                           HUELLA_C: 1}),
+    ({HUELLA_A: 2}, UN_TERCIO, {HUELLA_A: 1}),                  # 0,67 redondea a 1
+    ({HUELLA_A: 3}, 0.5, {HUELLA_A: 2}),                        # 1,5: los medios hacia arriba
+])
+def test_cada_origen_aporta_su_parte_a_validacion(tamanos, proporcion, validacion):
+    metadatos = _combinado(tamanos)
+    splits = repartir_combinado(metadatos, HUELLA_COMBINADO, proporcion, crear_generador(0))
+    assert _por_origen(metadatos, splits.validacion) == validacion
+    total = sum(tamanos.values())
+    assert len(splits.train) + len(splits.validacion) == total
+    assert splits.huella_dataset == HUELLA_COMBINADO
+    # Cualquier cantidad son las N primeras de train, de 1 a todas.
+    assert splits.subconjuntos == {n: splits.train[:n] for n in range(1, len(splits.train) + 1)}
+    validar_splits(splits, range(total))
+
+
+@pytest.mark.parametrize("tamanos, proporcion, validacion", [
+    # El redondeo deja validación vacía: una del origen más grande (A, por huella si empatan).
+    ({HUELLA_A: 1, HUELLA_B: 1, HUELLA_C: 1}, UN_TERCIO, {HUELLA_A: 1}),
+    ({HUELLA_B: 1, HUELLA_C: 2}, UN_SEXTO, {HUELLA_C: 1}),
+    # El redondeo deja train vacío: una vuelve del origen más grande.
+    ({HUELLA_A: 1, HUELLA_B: 1}, 0.5, {HUELLA_B: 1}),
+    ({HUELLA_A: 1, HUELLA_B: 2}, 0.9, {HUELLA_A: 1, HUELLA_B: 1}),
+])
+def test_siempre_hay_una_de_train_y_una_de_validacion(tamanos, proporcion, validacion):
+    metadatos = _combinado(tamanos)
+    splits = repartir_combinado(metadatos, HUELLA_COMBINADO, proporcion, crear_generador(3))
+    assert _por_origen(metadatos, splits.validacion) == validacion
+    assert splits.train and splits.validacion
+
+
+@pytest.mark.parametrize("total", range(2, 13))
+@pytest.mark.parametrize("proporcion", [UN_TERCIO, UN_SEXTO, 0.5])
+def test_con_un_origen_siempre_reparte_todas(total, proporcion):
+    """De 2 a 12 partidas de un solo NPZ, con las proporciones de los perfiles y 0,5."""
+    splits = repartir_combinado(_combinado({HUELLA_A: total}), HUELLA_COMBINADO, proporcion,
+                                crear_generador(total))
+    esperadas = min(max(math.floor(total * proporcion + 0.5), 1), total - 1)
+    assert len(splits.validacion) == esperadas
+    assert sorted(splits.train + splits.validacion) == list(range(total))
+
+
+def test_el_reparto_depende_de_la_semilla_y_no_del_orden():
+    metadatos = _combinado({HUELLA_A: 9, HUELLA_B: 6})
+    al_reves = {**metadatos, "partidas": metadatos["partidas"][::-1]}
+    a = repartir_combinado(metadatos, HUELLA_COMBINADO, UN_TERCIO, crear_generador(7))
+    assert a == repartir_combinado(al_reves, HUELLA_COMBINADO, UN_TERCIO, crear_generador(7))
+    assert a != repartir_combinado(metadatos, HUELLA_COMBINADO, UN_TERCIO, crear_generador(8))
+
+
+def test_train_mezcla_los_origenes():
+    """train se baraja entero: sus primeras partidas no son siempre del primer NPZ."""
+    metadatos = _combinado({HUELLA_A: 10, HUELLA_B: 10})
+    origenes_primera = {_por_origen(metadatos, repartir_combinado(
+        metadatos, HUELLA_COMBINADO, UN_TERCIO, crear_generador(semilla)).train[:1]).popitem()[0]
+        for semilla in range(10)}
+    assert origenes_primera == {HUELLA_A, HUELLA_B}
+
+
+@pytest.mark.parametrize("metadatos, proporcion, generador, mensaje", [
+    (_combinado({HUELLA_A: 1}), UN_TERCIO, crear_generador(0), "al menos dos partidas"),
+    ({"fuente": "combinado", "entorno": "x", "partidas": []}, UN_TERCIO, crear_generador(0),
+     "al menos dos partidas"),
+    ({"entorno": "x", "partidas": []}, UN_TERCIO, crear_generador(0), "combinados"),
+    ({"fuente": "humano"}, UN_TERCIO, crear_generador(0), "combinados"),
+    ([], UN_TERCIO, crear_generador(0), "combinados"),
+    (_combinado({HUELLA_A: 4}), 0, crear_generador(0), "entre 0 y 1"),
+    (_combinado({HUELLA_A: 4}), 1, crear_generador(0), "entre 0 y 1"),
+    (_combinado({HUELLA_A: 4}), -0.2, crear_generador(0), "entre 0 y 1"),
+    (_combinado({HUELLA_A: 4}), float("nan"), crear_generador(0), "entre 0 y 1"),
+    (_combinado({HUELLA_A: 4}), True, crear_generador(0), "entre 0 y 1"),
+    (_combinado({HUELLA_A: 4}), "0.3", crear_generador(0), "entre 0 y 1"),
+    (_combinado({HUELLA_A: 4}), UN_TERCIO, 0, "generador"),
+])
+def test_repartir_rechaza_lo_que_no_vale(metadatos, proporcion, generador, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        repartir_combinado(metadatos, HUELLA_COMBINADO, proporcion, generador)
+
+
+def test_repartir_comprueba_la_huella_del_combinado():
+    with pytest.raises(ValueError, match="huella"):
+        repartir_combinado(_combinado({HUELLA_A: 4}), "corta", UN_TERCIO, crear_generador(0))
+
+
+@pytest.mark.parametrize("entorno, esperada", [("cartpole", UN_TERCIO), ("mountaincar", UN_TERCIO),
+                                               ("acrobot", UN_TERCIO), ("reacher", UN_SEXTO),
+                                               ("halfcheetah", UN_SEXTO)])
+def test_la_proporcion_es_la_de_cada_perfil(entorno, esperada):
+    cfg = resolver_configuracion(Path(__file__).resolve().parent.parent / "configs" / "default.yaml",
+                                 entorno)
+    assert proporcion_validacion(cfg) == pytest.approx(esperada)
+
+
+def test_la_proporcion_necesita_la_seccion_demostraciones():
+    with pytest.raises(ValueError, match="demostraciones"):
+        proporcion_validacion({})
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,9 @@ from gymnasium import spaces
 
 from src.data.biblioteca import ARCHIVO_SUBCONJUNTO, Biblioteca, agregar_nuevo, es_id
 from src.data.demostraciones import (ARCHIVO_DEMOSTRACIONES, cargar_demostraciones,
-                                     resumen_demostraciones)
-from src.data.splits import comprobar_huella, huella_archivo
+                                     config_demostraciones, resumen_demostraciones)
+from src.data.splits import (SplitsDemostraciones, comprobar_huella, huella_archivo,
+                             validar_splits)
 from src.data.tipos import Trayectoria, es_id_episodio
 
 FORMATO_SUBCONJUNTO = "tiiac-subconjunto"
@@ -247,4 +249,82 @@ def combinar_demostraciones(origenes: Sequence[tuple[str, Sequence[Trayectoria]]
                                "id_original": original}
                               for nuevo, (huella, original) in enumerate(claves)]}
     return trayectorias, metadatos
+
+
+def proporcion_validacion(cfg: Mapping[str, Any]) -> float:
+    """Parte de las partidas que va a validación en un combinado: la del perfil.
+
+    ``demostraciones.partidas_validacion / (partidas_train + partidas_validacion)``: 5 de
+    15 en CartPole, MountainCar y Acrobot; 5 de 30 en Reacher y HalfCheetah.
+
+    Raises:
+        ValueError: Si la sección demostraciones no es válida (config_demostraciones).
+    """
+    dcfg = config_demostraciones(cfg)
+    return dcfg["partidas_validacion"] / (dcfg["partidas_train"] + dcfg["partidas_validacion"])
+
+
+def repartir_combinado(metadatos: Mapping[str, Any], huella_dataset: str, proporcion: float,
+                       generador: np.random.Generator) -> SplitsDemostraciones:
+    """Reparte las partidas de un combinado entre train y validación, por origen.
+
+    Cada NPZ de origen aporta a validación, al azar, la proporción pedida de sus
+    partidas, redondeada al entero más cercano (los medios hacia arriba): así la
+    validación tiene de todos los datos elegidos. Hay al menos una partida en train y
+    una en validación; si el redondeo deja alguno vacío, se completa con una del
+    origen con más partidas. Cada partida va entera a un lado. ``train`` sale
+    barajado y los subconjuntos son sus N primeras partidas, de 1 a todas, así que
+    cualquier cantidad se entrena como en la E1.
+
+    Args:
+        metadatos: Metadatos del combinado (combinar_demostraciones): de qué NPZ sale
+            cada partida.
+        huella_dataset: Huella del NPZ combinado ya guardado.
+        proporcion: Parte que va a validación, entre 0 y 1 (proporcion_validacion).
+        generador: Generador de src.utils.seed.crear_generador.
+
+    Returns:
+        Los splits, validados.
+
+    Raises:
+        ValueError: Si los metadatos no son de un combinado, hay menos de dos partidas
+            o la proporción o el generador no valen.
+    """
+    # True y False quedan fuera por el rango (valen 1 y 0).
+    if not isinstance(proporcion, (int, float)) or not 0 < proporcion < 1:
+        raise ValueError(f"proporcion debe estar entre 0 y 1, sin incluirlos, no {proporcion!r}")
+    if not isinstance(generador, np.random.Generator):
+        raise ValueError("generador debe ser un numpy.random.Generator de crear_generador")
+    if not isinstance(metadatos, Mapping) or metadatos.get("fuente") != "combinado":
+        raise ValueError("Solo se reparten así los combinados (fuente «combinado»)")
+    grupos: dict[str, list[int]] = {}
+    for partida in metadatos.get("partidas", []):
+        grupos.setdefault(partida["huella_dataset"], []).append(int(partida["id_episodio"]))
+    if sum(len(ids) for ids in grupos.values()) < 2:
+        raise ValueError("Hacen falta al menos dos partidas: una de train y una de validación")
+
+    # Por huella y por id, para que el resultado no dependa del orden de llegada. Se
+    # barajan posiciones, no ids (como crear_splits).
+    porciones: list[tuple[list[int], list[int]]] = []
+    for huella in sorted(grupos):
+        ids = sorted(grupos[huella])
+        barajados = [ids[k] for k in generador.permutation(len(ids))]
+        cuantas = math.floor(len(ids) * proporcion + 0.5)
+        porciones.append((barajados[cuantas:], barajados[:cuantas]))
+    # El origen con más partidas (el primero por huella, si empatan) completa lo vacío.
+    tamanos = [len(t) + len(v) for t, v in porciones]
+    train_mayor, validacion_mayor = porciones[tamanos.index(max(tamanos))]
+    if not any(v for _, v in porciones):
+        validacion_mayor.append(train_mayor.pop())
+    elif not any(t for t, _ in porciones):
+        train_mayor.append(validacion_mayor.pop())
+
+    train_ordenado = sorted(i for t, _ in porciones for i in t)
+    train = tuple(train_ordenado[k] for k in generador.permutation(len(train_ordenado)))
+    splits = SplitsDemostraciones(
+        train=train, validacion=tuple(sorted(i for _, v in porciones for i in v)),
+        subconjuntos={n: train[:n] for n in range(1, len(train) + 1)},
+        huella_dataset=huella_dataset)
+    validar_splits(splits, [i for ids in grupos.values() for i in ids])
+    return splits
 
