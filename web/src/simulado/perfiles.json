@@ -4,7 +4,9 @@
       "metodo": "experto",
       "duracion": {
         "unidad": "pasos",
-        "total": 1000000
+        "total": 1000000,
+        "campo": "experto.pasos_totales",
+        "bloque": "experto.trpo.pasos_por_iteracion"
       },
       "secciones": [
         {
@@ -179,7 +181,8 @@
       "metodo": "bc",
       "duracion": {
         "unidad": "epocas",
-        "total": 500
+        "total": 500,
+        "campo": "bc.epocas_maximas"
       },
       "secciones": [
         {
@@ -275,7 +278,8 @@
       "metodo": "gail",
       "duracion": {
         "unidad": "iteraciones",
-        "total": 300
+        "total": 300,
+        "campo": "gail.iteraciones"
       },
       "secciones": [
         {
@@ -529,7 +533,9 @@
       "metodo": "experto",
       "duracion": {
         "unidad": "pasos",
-        "total": 100000
+        "total": 100000,
+        "campo": "experto.pasos_totales",
+        "bloque": "experto.trpo.pasos_por_iteracion"
       },
       "secciones": [
         {
@@ -703,7 +709,8 @@
       "metodo": "bc",
       "duracion": {
         "unidad": "epocas",
-        "total": 500
+        "total": 500,
+        "campo": "bc.epocas_maximas"
       },
       "secciones": [
         {
@@ -799,7 +806,8 @@
       "metodo": "gail",
       "duracion": {
         "unidad": "iteraciones",
-        "total": 20
+        "total": 20,
+        "campo": "gail.iteraciones"
       },
       "secciones": [
         {
@@ -1053,7 +1061,9 @@
       "metodo": "experto",
       "duracion": {
         "unidad": "pasos",
-        "total": 25000000
+        "total": 25001984,
+        "campo": "experto.pasos_totales",
+        "bloque": "experto.trpo.pasos_por_iteracion"
       },
       "secciones": [
         {
@@ -1222,7 +1232,8 @@
       "metodo": "bc",
       "duracion": {
         "unidad": "epocas",
-        "total": 500
+        "total": 500,
+        "campo": "bc.epocas_maximas"
       },
       "secciones": [
         {
@@ -1318,7 +1329,8 @@
       "metodo": "gail",
       "duracion": {
         "unidad": "iteraciones",
-        "total": 500
+        "total": 500,
+        "campo": "gail.iteraciones"
       },
       "secciones": [
         {
@@ -1572,7 +1584,9 @@
       "metodo": "experto",
       "duracion": {
         "unidad": "pasos",
-        "total": 1000000
+        "total": 1000000,
+        "campo": "experto.pasos_totales",
+        "bloque": "experto.trpo.pasos_por_iteracion"
       },
       "secciones": [
         {
@@ -1747,7 +1761,8 @@
       "metodo": "bc",
       "duracion": {
         "unidad": "epocas",
-        "total": 500
+        "total": 500,
+        "campo": "bc.epocas_maximas"
       },
       "secciones": [
         {
@@ -1843,7 +1858,8 @@
       "metodo": "gail",
       "duracion": {
         "unidad": "iteraciones",
-        "total": 300
+        "total": 300,
+        "campo": "gail.iteraciones"
       },
       "secciones": [
         {
@@ -2097,7 +2113,9 @@
       "metodo": "experto",
       "duracion": {
         "unidad": "pasos",
-        "total": 25000000
+        "total": 25001984,
+        "campo": "experto.pasos_totales",
+        "bloque": "experto.trpo.pasos_por_iteracion"
       },
       "secciones": [
         {
@@ -2268,7 +2286,8 @@
       "metodo": "bc",
       "duracion": {
         "unidad": "epocas",
-        "total": 500
+        "total": 500,
+        "campo": "bc.epocas_maximas"
       },
       "secciones": [
         {
@@ -2364,7 +2383,8 @@
       "metodo": "gail",
       "duracion": {
         "unidad": "iteraciones",
-        "total": 500
+        "total": 500,
+        "campo": "gail.iteraciones"
       },
       "secciones": [
         {

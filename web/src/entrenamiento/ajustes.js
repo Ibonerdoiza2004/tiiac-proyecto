@@ -145,6 +145,38 @@ export function validarAjustes(esquema, valores) {
 }
 
 /**
+ * Duración con lo escrito en el formulario: el valor del campo de la duración o, si hay
+ * bloque (el experto), ese valor redondeado hacia arriba a un múltiplo del bloque, como
+ * pasos_reales_experto en src/app/ajustes.py.
+ *
+ * @param {import('../api/entrenamiento.js').EsquemaAjustes} esquema
+ * @param {Record<string, string | boolean>} valores Valores del formulario por idCampo.
+ * @returns {number | null} null si lo escrito en esos campos no es válido; la del perfil
+ *   si el esquema no dice de qué campo sale.
+ */
+export function duracionEditada(esquema, valores) {
+  const { total, campo, bloque } = esquema.duracion;
+  if (!campo) {
+    return total;
+  }
+  const campos = camposPorRuta(esquema);
+  const leer = (id) => {
+    const descripcion = campos.get(id);
+    if (!descripcion) {
+      return null;
+    }
+    const leido = leerCampo(descripcion, valores[id] ?? aFormulario(descripcion, descripcion.valor));
+    return typeof leido.valor === 'number' && leido.valor > 0 ? leido.valor : null;
+  };
+  const valor = leer(campo);
+  if (valor === null || !bloque) {
+    return valor;
+  }
+  const tamano = leer(bloque);
+  return tamano === null ? null : Math.ceil(valor / tamano) * tamano;
+}
+
+/**
  * Campos de un esquema por su ruta completa en configs/, para comprobar ajustes ya
  * construidos (lo usa el backend simulado, como hará el real).
  *

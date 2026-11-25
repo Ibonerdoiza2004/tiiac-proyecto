@@ -146,9 +146,10 @@ export function crearApiEntrenamientoSimulada({ almacen = crearAlmacen(), dibuja
       } catch (error) {
         return rechazar(422, error.message);
       }
-      const { unidad } = esquema(entorno, metodo).duracion;
-      const total = { experto: valores.get('experto.pasos_totales'),
-        bc: valores.get('bc.epocas_maximas'), gail: valores.get('gail.iteraciones') }[metodo];
+      // Como el real: el valor del campo de la duración, redondeado al bloque en el experto.
+      const { unidad, campo, bloque } = esquema(entorno, metodo).duracion;
+      const total = bloque ? Math.ceil(valores.get(campo) / valores.get(bloque)) * valores.get(bloque)
+        : valores.get(campo);
       const id = almacen.nuevoId('entrenamiento');
       entrenamientos.set(id, { entorno, metodo, ajustes: copia(ajustes), datos: [...datos], vista,
         wandb, valores, duracion: { unidad, total }, semilla: semilla + entrenamientos.size });

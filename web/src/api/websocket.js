@@ -9,7 +9,8 @@
 
 import { BASE_API, comprobarRuta } from './http.js';
 
-// Valor de `WebSocket.OPEN` en el estándar, por si la implementación no lo expone.
+// Valores de `WebSocket.CONNECTING` y `WebSocket.OPEN` en el estándar.
+const CONECTANDO = 0;
 const ABIERTO = 1;
 
 /** Estados por los que pasa una conexión. */
@@ -20,24 +21,48 @@ export const ESTADOS_CONEXION = Object.freeze({
 });
 
 /**
+ * @typedef {object} Cierre Cómo terminó una conexión.
+ * @property {number | null} codigo Código de cierre (1000 normal; la API usa 4404 si el
+ *   trabajo no existe); null si el navegador no lo dio.
+ * @property {string | null} error Mensaje del último `{tipo: 'error'}` del servidor si fue
+ *   lo último que llegó antes de cerrar (el motivo del cierre); si no, null.
+ */
+
+/**
  * Construye la URL `ws://` o `wss://` de una ruta de la API.
  *
  * @param {string} ruta Ruta que empieza por «/», como `/trabajos/3/progreso`.
  * @param {object} [opciones]
- * @param {string} [opciones.base] Prefijo de la API (por defecto `/api`).
+ * @param {string} [opciones.base] Prefijo de la API (por defecto `/api`), relativo a la
+ *   página o una URL absoluta `http(s)://servidor/prefijo`.
  * @param {{ protocol: string, host: string }} [opciones.ubicacion] Origen de la página
- *   (por defecto `window.location`).
+ *   (por defecto `window.location`); con una base absoluta no se usa.
  * @returns {string} URL absoluta del WebSocket.
  * @throws {TypeError} Si la ruta no es válida o el protocolo no es http ni https.
  */
 export function urlWebSocket(ruta, { base = BASE_API, ubicacion = globalThis.location } = {}) {
   comprobarRuta(ruta);
   const protocolos = { 'http:': 'ws:', 'https:': 'wss:' };
-  const protocolo = protocolos[ubicacion?.protocol];
-  if (!protocolo || !ubicacion.host) {
-    throw new TypeError(`No se puede abrir un WebSocket desde ${String(ubicacion?.protocol)}`);
+  let origen = ubicacion;
+  let prefijo = base;
+  if (/^[a-z][a-z\d+.-]*:/i.test(base)) {
+    const url = new URL(base);
+    origen = url;
+    prefijo = url.pathname;
   }
-  return `${protocolo}//${ubicacion.host}${base.replace(/\/+$/, '')}${ruta}`;
+  const protocolo = protocolos[origen?.protocol];
+  if (!protocolo || !origen.host) {
+    throw new TypeError(`No se puede abrir un WebSocket desde ${String(origen?.protocol)}`);
+  }
+  return `${protocolo}//${origen.host}${prefijo.replace(/\/+$/, '')}${ruta}`;
+}
+
+/** Mensaje de un `{tipo: 'error', mensaje}` del servidor, o null si no lo es. */
+function errorDelServidor(mensaje) {
+  if (!mensaje || typeof mensaje !== 'object' || mensaje.tipo !== 'error') {
+    return null;
+  }
+  return String(mensaje.mensaje ?? 'Error del servidor');
 }
 
 /**
@@ -46,6 +71,8 @@ export function urlWebSocket(ruta, { base = BASE_API, ubicacion = globalThis.loc
  *   `false` sin enviar nada si la conexión no está abierta.
  * @property {() => void} cerrar Cierra la conexión; después no se llama a ningún callback.
  * @property {() => string} estado Estado actual (`ESTADOS_CONEXION`).
+ * @property {() => boolean} conectando Si el socket aún no ha abierto: lo que no se pudo
+ *   enviar se puede volver a intentar, a diferencia de una conexión que se cierra.
  */
 
 /**
@@ -55,7 +82,8 @@ export function urlWebSocket(ruta, { base = BASE_API, ubicacion = globalThis.loc
  * @param {object} [opciones]
  * @param {(mensaje: unknown) => void} [opciones.alMensaje] Recibe cada mensaje JSON.
  * @param {(imagen: Blob) => void} [opciones.alImagen] Recibe cada imagen binaria.
- * @param {(estado: string) => void} [opciones.alCambiarEstado] Recibe cada cambio de estado.
+ * @param {(estado: string, cierre?: Cierre) => void} [opciones.alCambiarEstado] Recibe cada
+ *   cambio de estado; al cerrarse, también cómo terminó.
  * @param {(error: Error) => void} [opciones.alError] Recibe errores de conexión y mensajes
  *   de texto que no son JSON.
  * @param {string} [opciones.base] Prefijo de la API.
@@ -80,18 +108,22 @@ export function conectarWebSocket(
   socket.binaryType = 'blob';
   let estado = ESTADOS_CONEXION.CONECTANDO;
   let activa = true;
+  // El servidor avisa con {tipo: 'error'} antes de cerrar por un motivo propio: se guarda
+  // mientras sea lo último que llegó, para decir por qué se cerró.
+  let ultimoError = null;
 
-  const cambiarEstado = (nuevo) => {
+  const cambiarEstado = (nuevo, ...detalle) => {
     if (estado !== nuevo) {
       estado = nuevo;
       if (activa) {
-        alCambiarEstado(nuevo);
+        alCambiarEstado(nuevo, ...detalle);
       }
     }
   };
 
   socket.onopen = () => cambiarEstado(ESTADOS_CONEXION.ABIERTA);
-  socket.onclose = () => cambiarEstado(ESTADOS_CONEXION.CERRADA);
+  socket.onclose = (evento) => cambiarEstado(ESTADOS_CONEXION.CERRADA,
+    { codigo: typeof evento?.code === 'number' ? evento.code : null, error: ultimoError });
   socket.onerror = () => {
     if (activa) {
       alError(new Error('Error en la conexión con la API'));
@@ -102,6 +134,7 @@ export function conectarWebSocket(
       return;
     }
     if (typeof data !== 'string') {
+      ultimoError = null;
       alImagen(data instanceof Blob ? data : new Blob([data], { type: 'image/jpeg' }));
       return;
     }
@@ -109,9 +142,11 @@ export function conectarWebSocket(
     try {
       mensaje = JSON.parse(data);
     } catch (error) {
+      ultimoError = null;
       alError(new Error('La API envió un mensaje que no es JSON', { cause: error }));
       return;
     }
+    ultimoError = errorDelServidor(mensaje);
     alMensaje(mensaje);
   };
 
@@ -134,5 +169,6 @@ export function conectarWebSocket(
       socket.close();
     },
     estado: () => estado,
+    conectando: () => activa && socket.readyState === CONECTANDO,
   };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { aFormulario, camposPorRuta, hojasDeAjustes, idCampo, leerCampo, validarAjustes,
+import { aFormulario, camposPorRuta, duracionEditada, hojasDeAjustes, idCampo, leerCampo, validarAjustes,
   valoresIniciales } from './ajustes.js';
 
 const ENTERO = { clave: 'n', tipo: 'entero', min: 1, valor: 20 };
@@ -115,5 +115,44 @@ describe('ajustes ya construidos', () => {
     expect([...campos.keys()]).toEqual(['gail.n', 'gail.b', 'gail.discriminador.lr',
       'gail.discriminador.activacion', 'gail.discriminador.capas', 'experto.trpo.r']);
     expect(campos.get('gail.discriminador.lr')).toBe(REAL);
+  });
+});
+
+describe('duracionEditada', () => {
+  const esquema = (duracion) => ({ metodo: 'experto', duracion, secciones: [
+    { clave: 'experto', campos: [{ clave: 'pasos_totales', tipo: 'entero', valor: 100, min: 1 }] },
+    { clave: 'experto.trpo', campos: [{ clave: 'pasos_por_iteracion', tipo: 'entero', valor: 30, min: 1 }] },
+  ] });
+  const CON_BLOQUE = { unidad: 'pasos', total: 120, campo: 'experto.pasos_totales',
+    bloque: 'experto.trpo.pasos_por_iteracion' };
+
+  it('sin cambios da la del perfil', () => {
+    expect(duracionEditada(esquema(CON_BLOQUE), {})).toBe(120);
+  });
+
+  it.each([['90', '30', 90], ['91', '30', 120], ['1', '30', 30], ['100', '1', 100], ['7', '8', 8]])(
+    '%s pasos en bloques de %s dan %i', (pasos, bloque, esperado) => {
+      expect(duracionEditada(esquema(CON_BLOQUE), { 'experto.pasos_totales': pasos,
+        'experto.trpo.pasos_por_iteracion': bloque })).toBe(esperado);
+    });
+
+  it('sin bloque es el valor del campo', () => {
+    const duracion = { unidad: 'pasos', total: 100, campo: 'experto.pasos_totales' };
+    expect(duracionEditada(esquema(duracion), { 'experto.pasos_totales': '91' })).toBe(91);
+  });
+
+  it.each([['abc', '30'], ['0', '30'], ['91', ''], ['91', '0'], ['-5', '30']])(
+    'con %j y %j no se puede calcular', (pasos, bloque) => {
+      expect(duracionEditada(esquema(CON_BLOQUE), { 'experto.pasos_totales': pasos,
+        'experto.trpo.pasos_por_iteracion': bloque })).toBeNull();
+    });
+
+  it('si cita un campo que no está en el formulario no la inventa', () => {
+    expect(duracionEditada(esquema({ ...CON_BLOQUE, campo: 'experto.no_existe' }), {})).toBeNull();
+    expect(duracionEditada(esquema({ ...CON_BLOQUE, bloque: 'trpo.no_existe' }), {})).toBeNull();
+  });
+
+  it('un esquema sin campo (backend anterior) da la del perfil', () => {
+    expect(duracionEditada(esquema({ unidad: 'pasos', total: 120 }), { 'experto.pasos_totales': '7' })).toBe(120);
   });
 });

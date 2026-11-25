@@ -49,10 +49,21 @@ def test_cada_valor_del_esquema_es_el_del_perfil(entorno, metodo) -> None:
 def test_duracion_y_semilla_por_defecto(entorno, metodo) -> None:
     cfg = resolver_configuracion(CONFIG, entorno)
     esquema = esquema_ajustes(CONFIG, entorno, metodo, DASHBOARD)
-    unidad, total = {"experto": ("pasos", pasos_reales_experto(cfg)),
-                     "bc": ("epocas", cfg["bc"]["epocas_maximas"]),
-                     "gail": ("iteraciones", cfg["gail"]["iteraciones"])}[metodo]
-    assert esquema["duracion"] == {"unidad": unidad, "total": total}
+    duracion = {"experto": {"unidad": "pasos", "total": pasos_reales_experto(cfg),
+                            "campo": "experto.pasos_totales",
+                            "bloque": "experto.trpo.pasos_por_iteracion"},
+                "bc": {"unidad": "epocas", "total": cfg["bc"]["epocas_maximas"],
+                       "campo": "bc.epocas_maximas"},
+                "gail": {"unidad": "iteraciones", "total": cfg["gail"]["iteraciones"],
+                         "campo": "gail.iteraciones"}}[metodo]
+    assert esquema["duracion"] == duracion
+    # Los campos que cita existen en el formulario y el total sale de sus valores.
+    campos = _campos(esquema)
+    valor = campos[duracion["campo"]]["valor"]
+    if "bloque" in duracion:
+        bloque = campos[duracion["bloque"]]["valor"]
+        valor = -(-valor // bloque) * bloque
+    assert valor == duracion["total"]
     assert esquema["semilla"] == (cfg["experto"]["semilla"] if metodo == "experto"
                                   else cfg["experimento"]["semilla_repeticiones"])
     assert esquema["semilla"] == semilla_por_defecto(cfg, metodo)

@@ -336,10 +336,16 @@ class DuracionApi(BaseModel):
 
     En el experto son los pasos reales, no el presupuesto: TRPO da bloques completos y
     para en el primero que llega a experto.pasos_totales (pasos_reales_experto).
+    ``campo`` y ``bloque`` dicen de qué campos del formulario sale, para que la interfaz
+    la recalcule con lo que se edite: el total es el valor de ``campo`` o, con
+    ``bloque``, ese valor redondeado hacia arriba a un múltiplo del de ``bloque``.
     """
 
     unidad: UnidadDuracion
     total: Positivo
+    campo: str = Field(description="Campo del formulario (sección.clave) con la duración.")
+    bloque: str | None = Field(None, description="Campo con el tamaño del bloque al que se "
+                                                 "redondea (solo el experto).")
 
 
 class EsquemaAjustesApi(BaseModel):

@@ -29,6 +29,8 @@ EXCLUIDAS = {"experto": {"semilla", "trpo"}, "gail": {"discriminador"}}
 DURACION = {"experto": ("pasos", ("experto", "pasos_totales")),
             "bc": ("epocas", ("bc", "epocas_maximas")),
             "gail": ("iteraciones", ("gail", "iteraciones"))}
+# Campo del formulario al que se redondea la duración (pasos_reales_experto).
+BLOQUE_EXPERTO = "experto.trpo.pasos_por_iteracion"
 DESCRIPCION_CAMPO = {"etiqueta", "ayuda", "nivel", "tipo", "min", "max", "paso"}
 
 
@@ -232,10 +234,11 @@ def esquema_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str,
                              for clave, valor in valores.items()]}
                  for seccion, valores in secciones_de_metodo(cfg, metodo)]
     unidad, (seccion, clave) = DURACION[metodo]
-    total = int(cfg[seccion][clave])
+    duracion = {"unidad": unidad, "total": int(cfg[seccion][clave]),
+                "campo": f"{seccion}.{clave}"}
     if metodo == "experto":
-        total = pasos_reales_experto(cfg)
-    return {"metodo": metodo, "duracion": {"unidad": unidad, "total": total},
+        duracion.update(total=pasos_reales_experto(cfg), bloque=BLOQUE_EXPERTO)
+    return {"metodo": metodo, "duracion": duracion,
             "semilla": semilla_por_defecto(cfg, metodo), "secciones": secciones}
 
 

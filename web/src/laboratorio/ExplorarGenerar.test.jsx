@@ -343,11 +343,35 @@ describe('conexión perdida', () => {
     });
   });
 
-  it.each([0, 2, 3])('finalizar con el socket en readyState %i libera la sesión', async (estado) => {
+  it.each([2, 3])('finalizar con el socket en readyState %i libera la sesión', async (estado) => {
     const { socket, ocupado } = await enSesion();
     socket.readyState = estado;
     await usuario.click(boton('Finalizar'));
     esperarLiberado(ocupado, PERDIDA);
+  });
+
+  it('finalizar mientras el socket aún conecta avisa sin perder la sesión', async () => {
+    // Regresión: con readyState 0 la orden no sale y se daba la sesión por perdida.
+    const { socket, ocupado } = await enSesion();
+    socket.readyState = 0;
+    await usuario.click(boton('Finalizar'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Todavía se está conectando');
+    expect(ocupado).toHaveBeenLastCalledWith(true);
+    expect(socket.enviados).toEqual([]);
+    socket.readyState = 1;
+    await usuario.click(boton('Finalizar'));
+    expect(socket.enviados).toEqual([{ tipo: 'finalizar' }]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('si el servidor avisa de un error y cierra, se ve su motivo', async () => {
+    // Regresión: «Se perdió la conexión» sustituía al mensaje del servidor.
+    const { socket, ocupado } = await enSesion();
+    act(() => {
+      socket.recibir({ tipo: 'error', mensaje: 'El entorno falló.' });
+      socket.caer();
+    });
+    esperarLiberado(ocupado, 'El entorno falló. Las partidas de esta sesión no se han guardado.');
   });
 
   it('el error del socket deja paso al de conexión perdida', async () => {

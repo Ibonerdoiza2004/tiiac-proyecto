@@ -235,3 +235,48 @@ describe('ErrorApi', () => {
     expect(error.cause).toBeUndefined();
   });
 });
+
+describe('cuerpos que no se pueden mostrar', () => {
+  it('si falla la lectura del cuerpo da ErrorApi con el estado y la causa', async () => {
+    // Regresión: salía un TypeError sin tratar.
+    const fallo = new TypeError('network error');
+    const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, headers: new Headers(),
+      text: () => Promise.reject(fallo) });
+    const error = await crearClienteHttp({ fetch }).obtener('/x').catch((e) => e);
+    expect(error).toBeInstanceOf(ErrorApi);
+    expect(error.estado).toBe(200);
+    expect(error.message).toBe('No se pudo leer la respuesta de la API');
+    expect(error.cause).toBe(fallo);
+  });
+
+  it('si se cancela mientras se lee el cuerpo, propaga el AbortError', async () => {
+    const control = new AbortController();
+    const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, headers: new Headers(),
+      text: () => Promise.reject(new DOMException('cancelada', 'AbortError')) });
+    const error = await crearClienteHttp({ fetch }).obtener('/x', { senal: control.signal }).catch((e) => e);
+    expect(error.name).toBe('AbortError');
+    expect(error).not.toBeInstanceOf(ErrorApi);
+  });
+
+  it.each([
+    ['text/html', '<html><body><h1>502 Bad Gateway</h1></body></html>'],
+    ['text/plain', '  <!DOCTYPE html><html></html>'],
+    ['', '<html>error</html>'],
+  ])('una página HTML de error (%j) no sale como mensaje', async (tipo, html) => {
+    // Regresión: el código fuente de la página se mostraba al usuario.
+    const { cliente } = clienteCon(respuesta(html, { estado: 502, tipo }));
+    const error = await cliente.obtener('/x').catch((e) => e);
+    expect(error.message).toBe('La API respondió con el código 502');
+    expect(error.detalle).toBeNull();
+  });
+
+  it('un texto de error sin HTML sí sale como mensaje', async () => {
+    const { cliente } = clienteCon(respuesta('Servicio en mantenimiento', { estado: 503, tipo: 'text/plain' }));
+    expect((await cliente.obtener('/x').catch((e) => e)).message).toBe('Servicio en mantenimiento');
+  });
+
+  it('con 200 un HTML se devuelve como texto, como cualquier otro', async () => {
+    const { cliente } = clienteCon(respuesta('<p>hola</p>', { tipo: 'text/html' }));
+    expect(await cliente.obtener('/x')).toBe('<p>hola</p>');
+  });
+});

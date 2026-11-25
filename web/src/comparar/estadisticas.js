@@ -58,6 +58,8 @@ export function desdeResultado(resultado) {
  * @property {number | null} desviacion Desviación típica muestral; null con menos de dos.
  * @property {number | null} ultima Retorno de la última partida jugada.
  * @property {number[]} retornos En orden de partida.
+ * @property {Record<number, number>} porPartida Retorno por número de partida (desde 0),
+ *   para no desplazar las filas si falta alguna.
  */
 
 /**
@@ -72,12 +74,13 @@ export function resumirModelo(modelo, porPartida = {}) {
   const retornos = indices.map((i) => porPartida[i]);
   const n = retornos.length;
   if (!n) {
-    return { modelo, partidas: 0, media: null, desviacion: null, ultima: null, retornos };
+    return { modelo, partidas: 0, media: null, desviacion: null, ultima: null, retornos, porPartida: {} };
   }
   const media = retornos.reduce((suma, r) => suma + r, 0) / n;
   const desviacion = n > 1
     ? Math.sqrt(retornos.reduce((suma, r) => suma + (r - media) ** 2, 0) / (n - 1)) : null;
-  return { modelo, partidas: n, media, desviacion, ultima: retornos.at(-1), retornos };
+  return { modelo, partidas: n, media, desviacion, ultima: retornos.at(-1), retornos,
+    porPartida: { ...porPartida } };
 }
 
 /**

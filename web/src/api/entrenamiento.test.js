@@ -56,11 +56,11 @@ describe('crearApiEntrenamiento', () => {
     opciones.alImagen(imagen);
     opciones.alMensaje({ tipo: 'progreso', paso: 3, medidas: { m: 1 } });
     opciones.alError(new Error('red'));
-    opciones.alCambiarEstado('cerrada');
+    opciones.alCambiarEstado('cerrada', { codigo: 4404, error: 'No existe' });
     expect(c.alImagen).toHaveBeenCalledWith(imagen);
     expect(c.alProgreso).toHaveBeenCalledWith({ paso: 3, medidas: { m: 1 } });
     expect(c.alError.mock.calls[0][0].message).toBe('red');
-    expect(c.alCambiarEstado).toHaveBeenCalledWith('cerrada');
+    expect(c.alCambiarEstado).toHaveBeenCalledWith('cerrada', { codigo: 4404, error: 'No existe' });
   });
 
   it('funciona sin callbacks', () => {

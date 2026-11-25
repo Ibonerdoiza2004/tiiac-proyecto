@@ -61,7 +61,7 @@ describe('desdeResultado', () => {
 describe('resumirModelo', () => {
   it('sin partidas no tiene media ni desviación', () => {
     expect(resumirModelo('a')).toEqual({ modelo: 'a', partidas: 0, media: null, desviacion: null,
-      ultima: null, retornos: [] });
+      ultima: null, retornos: [], porPartida: {} });
   });
 
   it('con una partida hay media pero no desviación', () => {

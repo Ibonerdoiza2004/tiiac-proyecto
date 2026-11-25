@@ -43,7 +43,9 @@ export default function Resultados({ resumenes, nombre, modelo }) {
   const minimo = Math.min(0, ...medias);
   const maximo = Math.max(0, ...medias);
   const ancho = (m) => (maximo === minimo ? 0 : ((m - minimo) / (maximo - minimo)) * 100);
-  const filas = Math.max(0, ...resumenes.map((r) => r.partidas));
+  // Una fila por número de partida, hasta la más alta jugada: si falta alguna, su celda
+  // queda vacía en lugar de subir las siguientes.
+  const filas = Math.max(0, ...resumenes.flatMap((r) => Object.keys(r.porPartida).map((i) => Number(i) + 1)));
 
   return (
     <div className="resultados">
@@ -92,7 +94,7 @@ export default function Resultados({ resumenes, nombre, modelo }) {
                     <tr key={i}>
                       <th scope="row">{i + 1}</th>
                       {resumenes.map((r) => (
-                        <td key={r.modelo}>{r.retornos[i] === undefined ? '—' : formatearNumero(r.retornos[i])}</td>
+                        <td key={r.modelo}>{r.porPartida[i] === undefined ? '—' : formatearNumero(r.porPartida[i])}</td>
                       ))}
                     </tr>
                   ))}

@@ -118,7 +118,7 @@ function seccion(clave, nodos, excluidas = new Set()) {
  *
  * @param {string} [raiz] Carpeta configs/.
  * @returns {Record<string, Record<string, {metodo: string, duracion: {unidad: string,
- *   total: number}, secciones: object[]}>>}
+ *   total: number, campo: string, bloque?: string}, secciones: object[]}>>}
  */
 export function generarPerfiles(raiz = RAIZ) {
   const leer = (ruta) => leerNodo(parseDocument(readFileSync(ruta, 'utf-8')).contents);
@@ -128,21 +128,24 @@ export function generarPerfiles(raiz = RAIZ) {
   for (const archivo of entornos) {
     const c = combinar(base, leer(join(raiz, 'entornos', archivo)));
     const trpoExperto = combinar(c.trpo, c.experto.trpo);
+    const bloque = trpoExperto.pasos_por_iteracion.valor;
     const frecuencia = seccion('demostraciones', { frecuencia_pares: c.demostraciones.frecuencia_pares });
     perfiles[archivo.replace(/\.yaml$/, '')] = {
       experto: {
         metodo: 'experto',
-        duracion: { unidad: 'pasos', total: c.experto.pasos_totales.valor },
+        // Como pasos_reales_experto (src/app/ajustes.py): bloques completos de TRPO.
+        duracion: { unidad: 'pasos', total: Math.ceil(c.experto.pasos_totales.valor / bloque) * bloque,
+          campo: 'experto.pasos_totales', bloque: 'experto.trpo.pasos_por_iteracion' },
         secciones: [seccion('experto', c.experto, EXCLUIDAS.experto), seccion('experto.trpo', trpoExperto)],
       },
       bc: {
         metodo: 'bc',
-        duracion: { unidad: 'epocas', total: c.bc.epocas_maximas.valor },
+        duracion: { unidad: 'epocas', total: c.bc.epocas_maximas.valor, campo: 'bc.epocas_maximas' },
         secciones: [seccion('bc', c.bc), frecuencia],
       },
       gail: {
         metodo: 'gail',
-        duracion: { unidad: 'iteraciones', total: c.gail.iteraciones.valor },
+        duracion: { unidad: 'iteraciones', total: c.gail.iteraciones.valor, campo: 'gail.iteraciones' },
         secciones: [seccion('gail', c.gail, EXCLUIDAS.gail),
           seccion('gail.discriminador', c.gail.discriminador), seccion('trpo', c.trpo), frecuencia],
       },
