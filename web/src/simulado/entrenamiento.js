@@ -193,7 +193,8 @@ export function crearApiEntrenamientoSimulada({ almacen = crearAlmacen(), dibuja
           && m.metodo === metodo).length + 1}`;
         const resumen = { unidad: duracion.unidad, paso, total: duracion.total, motivo,
           medidas: ultimas, ajustes: entreno.ajustes, datos: entreno.datos, wandb: entreno.wandb };
-        almacen.modelos.push({ nombre, entorno, metodo, incompleto, resumen });
+        almacen.modelos.push({ id: almacen.nuevoId('modelo'), nombre, entorno, metodo, incompleto,
+          resumen, creado: new Date().toISOString() });
         // Como el servidor real, la respuesta llega después, no dentro de la llamada.
         setTimeout(() => {
           avisar(callbacks.alTerminar, { modelo: { nombre, incompleto }, resumen: copia(resumen) });

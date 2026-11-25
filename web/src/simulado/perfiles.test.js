@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { OPCIONES, generarPerfiles, textoPerfiles } from '../../scripts/perfiles.mjs';
+import { OPCIONES, generarEvaluacion, generarPerfiles, textoPerfiles } from '../../scripts/perfiles.mjs';
 import { ENTORNOS } from '../entornos.js';
+import EVALUACION from './evaluacion.json';
 import PERFILES from './perfiles.json';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -84,5 +85,19 @@ describe('perfiles.json', () => {
     expect(OPCIONES['gail.discriminador.optimizador']).toEqual(['adam']);
     expect(campo('cartpole', 'bc', 'bc', 'optimizador').opciones).toEqual(['adam', 'rmsprop', 'sgd']);
     expect(campo('cartpole', 'gail', 'gail.discriminador', 'optimizador').opciones).toEqual(['adam']);
+  });
+});
+
+describe('evaluacion.json', () => {
+  it('está al día con configs/ (si falla: npm run perfiles)', () => {
+    expect(JSON.stringify(EVALUACION, null, 2) + '\n').toBe(textoPerfiles(generarEvaluacion()));
+  });
+
+  it('es la evaluación de la E1 en todos los entornos', () => {
+    // configs/default.yaml, sección evaluacion (ningún perfil la cambia).
+    expect(Object.keys(EVALUACION).sort()).toEqual(ENTORNOS.map((e) => e.id).sort());
+    for (const evaluacion of Object.values(EVALUACION)) {
+      expect(evaluacion).toEqual({ episodios: 50, semilla: 9000, determinista: true });
+    }
   });
 });
