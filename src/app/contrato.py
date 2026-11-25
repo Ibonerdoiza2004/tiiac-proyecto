@@ -267,32 +267,20 @@ class SesionCrear(_Estricto):
         return self
 
 
-class TramoPartidaApi(_Estricto):
-    """Qué pares de una partida se guardan: ``[inicio, fin)``, desde 0."""
-
-    indice: Natural
-    tramo: tuple[Natural, Natural]
-
-    @model_validator(mode="after")
-    def _tramo_no_vacio(self) -> TramoPartidaApi:
-        """El tramo tiene al menos un par."""
-        inicio, fin = self.tramo
-        if inicio >= fin:
-            raise ValueError(f"El tramo [{inicio}, {fin}) no tiene pares: inicio < fin")
-        return self
-
-
 class SesionGuardar(_Estricto):
-    """Cuerpo de POST /api/sesiones/{id}/guardar. Guardar cierra la sesión."""
+    """Cuerpo de POST /api/sesiones/{id}/guardar. Guardar cierra la sesión.
+
+    ``partidas`` son los índices de las partidas terminadas que se guardan, enteras (no
+    se recortan: decisión del usuario).
+    """
 
     nombre: NombreUsuario
-    partidas: Annotated[list[TramoPartidaApi], Field(min_length=1)]
+    partidas: Annotated[list[Natural], Field(min_length=1)]
 
     @model_validator(mode="after")
     def _partidas_distintas(self) -> SesionGuardar:
         """Cada partida, como mucho una vez."""
-        indices = [p.indice for p in self.partidas]
-        if len(set(indices)) != len(indices):
+        if len(set(self.partidas)) != len(self.partidas):
             raise ValueError("Hay partidas repetidas")
         return self
 

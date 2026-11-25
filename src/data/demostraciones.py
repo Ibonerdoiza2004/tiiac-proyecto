@@ -24,8 +24,7 @@ from numpy.typing import NDArray
 from src.data.entornos import crear_entorno
 from src.data.splits import (comprobar_cantidades, comprobar_huella, crear_splits,
                              guardar_splits, huella_archivo)
-from src.data.tipos import (ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria,
-                            comprobar_tramo, es_id_episodio)
+from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria, es_id_episodio
 from src.utils.seed import (crear_generador, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes, validar_semilla)
 from src.utils.validacion import es_entero, es_semilla
@@ -46,17 +45,15 @@ FUENTES = ("experto", "humano", "combinado")
 # Metadatos obligatorios de cada fuente (puede haber más).
 METADATOS_POR_FUENTE = {
     "experto": frozenset({"entorno", "experto", "procedencia", "configuracion_experto"}),
-    # Grabadas jugando en el dashboard: fecha de la sesión y, de cada partida guardada,
-    # su semilla y el tramo [inicio, fin) de la partida jugada que se conserva.
+    # Grabadas jugando en el dashboard: fecha de la sesión y la semilla de cada partida
+    # guardada (enteras: las partidas no se recortan).
     "humano": frozenset({"fuente", "entorno", "fecha", "partidas"}),
-    # Hechas con combinar_demostraciones: de qué archivo (huella), partida y tramo sale
-    # cada partida.
+    # Hechas con combinar_demostraciones: de qué archivo (huella) y partida sale cada una.
     "combinado": frozenset({"fuente", "entorno", "partidas"}),
 }
 # Claves de cada partida en metadatos["partidas"], según la fuente.
-CLAVES_PARTIDA = {"humano": frozenset({"id_episodio", "semilla", "tramo"}),
-                  "combinado": frozenset({"id_episodio", "huella_dataset", "id_original",
-                                          "tramo"})}
+CLAVES_PARTIDA = {"humano": frozenset({"id_episodio", "semilla"}),
+                  "combinado": frozenset({"id_episodio", "huella_dataset", "id_original"})}
 _FORMATO = "tiiac-demostraciones"
 _VERSION = 1
 
@@ -111,12 +108,9 @@ def comprobar_metadatos(metadatos: object, pasos_por_partida: Mapping[int, int])
     - experto (o sin fuente): entorno, experto, procedencia y configuracion_experto,
       como en la E1.
     - humano: fuente, entorno (id de Gymnasium), fecha y partidas, con una entrada
-      ``{"id_episodio", "semilla", "tramo"}`` por partida del archivo.
+      ``{"id_episodio", "semilla"}`` por partida del archivo.
     - combinado: fuente, entorno y partidas, con una entrada
-      ``{"id_episodio", "huella_dataset", "id_original", "tramo"}`` por partida.
-
-    El tramo es ``[inicio, fin)`` en los pasos de la partida original, así que tiene
-    tantos pasos como la partida guardada.
+      ``{"id_episodio", "huella_dataset", "id_original"}`` por partida.
 
     Args:
         metadatos: Metadatos del manifiesto.
@@ -159,13 +153,6 @@ def comprobar_metadatos(metadatos: object, pasos_por_partida: Mapping[int, int])
         if identificador in vistas:
             raise ValueError(f"{contexto}: id_episodio {identificador} repetido")
         vistas.add(identificador)
-        try:
-            inicio, fin = comprobar_tramo(partida["tramo"])
-        except ValueError as error:
-            raise ValueError(f"{contexto}: {error}") from None
-        if fin - inicio != pasos_por_partida[identificador]:
-            raise ValueError(f"{contexto}: el tramo {[inicio, fin]} tiene {fin - inicio} "
-                             f"pasos y la partida, {pasos_por_partida[identificador]}")
         if fuente == "humano" and not es_semilla(partida["semilla"]):
             raise ValueError(f"{contexto}: semilla no válida: {partida['semilla']!r}")
         if fuente == "combinado":
@@ -311,8 +298,8 @@ def guardar_demostraciones(
 
     Los metadatos JSON dependen de su fuente (comprobar_metadatos): los de un
     experto incluyen entorno, experto, procedencia y configuracion_experto; los
-    humanos y los combinados, una entrada por partida. Los escalares NumPy se guardan como números de
-    Python y las tuplas se leerán como listas. La ruta termina en .npz y se
+    humanos y los combinados, una entrada por partida. Los escalares NumPy se
+    guardan como números de Python y las tuplas se leerán como listas. La ruta termina en .npz y se
     crean sus directorios. El manifiesto de formato y versión vive dentro del
     mismo archivo comprimido, legible con np.load(..., allow_pickle=False).
 
@@ -452,8 +439,9 @@ def resumen_demostraciones(ruta: str | Path) -> dict[str, Any]:
         ruta: Archivo NPZ guardado con guardar_demostraciones.
 
     Returns:
-        ``{"partidas", "pares", "metadatos"}``: número de partidas, pasos en total y
-        los metadatos del manifiesto.
+        ``{"partidas", "pares", "pasos_por_partida", "metadatos"}``: número de
+        partidas, pasos en total, pasos de cada partida por su id_episodio y los
+        metadatos del manifiesto.
 
     Raises:
         ValueError: Si el archivo no se puede leer o su manifiesto no es válido.
@@ -468,6 +456,7 @@ def resumen_demostraciones(ruta: str | Path) -> dict[str, Any]:
     episodios = manifiesto["episodios"]
     return {"partidas": len(episodios),
             "pares": sum(int(e["numero_pasos"]) for e in episodios),
+            "pasos_por_partida": {e["id_episodio"]: int(e["numero_pasos"]) for e in episodios},
             "metadatos": manifiesto["metadatos"]}
 
 

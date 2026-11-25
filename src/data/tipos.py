@@ -21,28 +21,6 @@ def es_id_episodio(valor: object) -> bool:
     return es_entero(valor) and ID_EPISODIO_MINIMO <= int(valor) <= ID_EPISODIO_MAXIMO
 
 
-def comprobar_tramo(tramo: object, pasos: int | None = None) -> tuple[int, int]:
-    """Comprueba un tramo ``[inicio, fin)`` de pasos de una partida, desde 0.
-
-    Args:
-        tramo: Lista o tupla de dos enteros (no booleanos).
-        pasos: Pasos de la partida; si se da, el tramo tiene que caber en ella.
-
-    Returns:
-        ``(inicio, fin)`` como int.
-
-    Raises:
-        ValueError: Si no son dos enteros con ``0 <= inicio < fin`` (y ``fin <= pasos``).
-    """
-    if (not isinstance(tramo, (list, tuple)) or len(tramo) != 2
-            or not all(es_entero(v) and v >= 0 for v in tramo) or tramo[0] >= tramo[1]):
-        raise ValueError(f"El tramo debe ser [inicio, fin) con 0 <= inicio < fin, no {tramo!r}")
-    inicio, fin = int(tramo[0]), int(tramo[1])
-    if pasos is not None and fin > pasos:
-        raise ValueError(f"El tramo [{inicio}, {fin}) no cabe en una partida de {pasos} pasos")
-    return inicio, fin
-
-
 @dataclass(frozen=True, slots=True)
 class Trayectoria:
     """Una partida completa con sus transiciones en orden.

@@ -1288,14 +1288,13 @@ PASOS = {0: 3, 5: 2}  # partidas del archivo de prueba: id 0 con 3 pasos e id 5 
 
 def _humano() -> dict[str, Any]:
     return {"fuente": "humano", "entorno": "CartPole-v1", "fecha": "2026-11-25T10:00:00+01:00",
-            "partidas": [{"id_episodio": 0, "semilla": 11, "tramo": [0, 3]},
-                         {"id_episodio": 5, "semilla": 12, "tramo": [4, 6]}]}
+            "partidas": [{"id_episodio": 0, "semilla": 11}, {"id_episodio": 5, "semilla": 12}]}
 
 
 def _combinado() -> dict[str, Any]:
     return {"fuente": "combinado", "entorno": "CartPole-v1", "partidas": [
-        {"id_episodio": 0, "huella_dataset": HUELLA, "id_original": 3, "tramo": [10, 13]},
-        {"id_episodio": 5, "huella_dataset": "cd" * 32, "id_original": 3, "tramo": [0, 2]}]}
+        {"id_episodio": 0, "huella_dataset": HUELLA, "id_original": 3},
+        {"id_episodio": 5, "huella_dataset": "cd" * 32, "id_original": 3}]}
 
 
 def _partidas_de_prueba() -> list[Trayectoria]:
@@ -1351,16 +1350,11 @@ def _partida(indice, **cambios):
     (_humano, _partida(0, id_episodio="0"), "no es de ninguna partida"),
     # False == 0 en Python: sin es_id_episodio pasaría por la partida 0.
     (_humano, _partida(0, id_episodio=False), "no es de ninguna partida"),
-    (_humano, _partida(1, id_episodio=0, tramo=[0, 3]), "repetido"),
+    (_humano, _partida(1, id_episodio=0), "repetido"),
     (_humano, lambda m: m["partidas"].pop(), "Faltan en partidas las partidas [5]"),
-    (_humano, _partida(0, tramo=[0, 2]), "tiene 2 pasos y la partida, 3"),
-    (_humano, _partida(0, tramo=[3, 0]), "0 <= inicio < fin"),
-    (_humano, _partida(0, tramo=[2, 2]), "0 <= inicio < fin"),
-    (_humano, _partida(0, tramo=[-1, 2]), "0 <= inicio < fin"),
-    (_humano, _partida(0, tramo=[0, 3, 4]), "0 <= inicio < fin"),
-    (_humano, _partida(0, tramo=[0.0, 3]), "0 <= inicio < fin"),
-    (_humano, _partida(0, tramo=[False, True]), "0 <= inicio < fin"),
-    (_humano, _partida(0, tramo="0-3"), "0 <= inicio < fin"),
+    # Ya no hay tramos: una entrada con tramo tiene una clave de más.
+    (_humano, _partida(0, tramo=[0, 3]), "exactamente"),
+    (_combinado, _partida(0, tramo=[0, 3]), "exactamente"),
     (_humano, _partida(0, semilla=-1), "semilla no válida"),
     (_humano, _partida(0, semilla=True), "semilla no válida"),
     (_combinado, _partida(0, huella_dataset="corta"), "huella"),
@@ -1393,9 +1387,9 @@ def test_guardar_comprueba_los_metadatos_con_las_partidas(tmp_path):
 def test_cargar_comprueba_los_metadatos_con_las_partidas(tmp_path):
     valido = _guardar(tmp_path / "valido.npz", _partidas_de_prueba(), _humano())
     ruta = _manipular(valido, tmp_path / "manipulado.npz",
-                      lambda c: c["manifiesto"]["metadatos"]["partidas"][1].update(tramo=[0, 5]))
-    with pytest.raises(ValueError, match="tiene 5 pasos y la partida, 2"):
+                      lambda c: c["manifiesto"]["metadatos"]["partidas"][1].update(id_episodio=9))
+    with pytest.raises(ValueError, match="9 no es de ninguna partida"):
         cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
-    with pytest.raises(ValueError, match="tiene 5 pasos y la partida, 2"):
+    with pytest.raises(ValueError, match="9 no es de ninguna partida"):
         resumen_demostraciones(ruta)
 

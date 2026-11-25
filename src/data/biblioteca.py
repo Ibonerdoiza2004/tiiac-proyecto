@@ -11,6 +11,9 @@ para el usuario, de dónde viene (congelado, entrega o dashboard) y cuándo se c
 | ``bc``           | ``politica.pt`` (con sus metadatos dentro)        |
 | ``demostraciones`` | ``demostraciones.npz`` y, si los hay, ``splits.json`` |
 
+Un subconjunto de demostraciones (src/data/seleccion.py) no tiene NPZ: su carpeta
+lleva ``subconjunto.json``, que dice de qué conjunto sale y qué partidas toma.
+
 El índice no se guarda en ningún archivo común: se reconstruye leyendo las
 carpetas cada vez, así que dos trabajos que terminan a la vez no se pisan (cada uno
 escribe su carpeta nueva y la renombra al final). Una carpeta que no se puede leer
@@ -34,6 +37,8 @@ from src.utils.configuracion import TipoEntorno
 FORMATO_FICHA = "tiiac-biblioteca"
 VERSION_FICHA = 1
 ARCHIVO_FICHA = "ficha.json"
+# Un subconjunto no tiene NPZ: este archivo dice de qué conjunto sale y qué toma.
+ARCHIVO_SUBCONJUNTO = "subconjunto.json"
 TIPOS_MODELO = ("experto", "bc", "gail")
 TIPOS = (*TIPOS_MODELO, "demostraciones")
 ORIGENES = ("congelado", "entrega", "dashboard")
@@ -208,7 +213,7 @@ def agregar(raiz: Path, ficha: Mapping[str, Any], escribir: Callable[[Path], Non
     def escribir_con_ficha(carpeta: Path) -> None:
         """Escribe los archivos, comprueba que estén y añade la ficha."""
         escribir(carpeta)
-        faltan = [a for a in ARCHIVOS[ficha["tipo"]] if not (carpeta / a).is_file()]
+        faltan = [a for a in archivos_de(ficha["tipo"], carpeta) if not (carpeta / a).is_file()]
         if faltan:
             raise ValueError(f"Faltan archivos de un elemento {ficha['tipo']}: {faltan}")
         (carpeta / ARCHIVO_FICHA).write_text(
@@ -322,9 +327,21 @@ def _detalles_demostraciones(carpeta: Path, gym: str) -> dict[str, Any]:
     entorno = resumen["metadatos"].get("entorno")
     if entorno != gym:
         raise ValueError(f"demostraciones.npz es de {entorno!r}, no de {gym}")
-    return {"partidas": resumen["partidas"], "pares": resumen["pares"],
+    return {"tipo": "conjunto", "partidas": resumen["partidas"], "pares": resumen["pares"],
             "fuente": fuente_demostraciones(resumen["metadatos"]),
             "splits": (carpeta / "splits.json").is_file()}
+
+
+def es_subconjunto(carpeta: Path) -> bool:
+    """Si la carpeta de unas demostraciones es un subconjunto (tiene subconjunto.json)."""
+    return (Path(carpeta) / ARCHIVO_SUBCONJUNTO).is_file()
+
+
+def archivos_de(tipo: str, carpeta: Path) -> tuple[str, ...]:
+    """Archivos que tiene que tener un elemento: los de su tipo, salvo un subconjunto."""
+    if tipo == "demostraciones" and es_subconjunto(carpeta):
+        return (ARCHIVO_SUBCONJUNTO,)
+    return ARCHIVOS[tipo]
 
 
 DETALLES: dict[str, Callable[[Path, str], dict[str, Any]]] = {
@@ -359,15 +376,22 @@ class Biblioteca:
             elemento.update({clave: ficha.get(clave) for clave in
                              ("nombre", "origen", "creado", "descripcion", "fuente",
                               "artefacto")})
-            faltan = [a for a in ARCHIVOS[tipo] if not (carpeta / a).is_file()]
+            faltan = [a for a in archivos_de(tipo, carpeta) if not (carpeta / a).is_file()]
             if faltan:
                 raise ValueError(f"faltan {', '.join(faltan)}")
-            elemento["detalles"] = DETALLES[tipo](carpeta, self.entornos[entorno])
+            subconjunto = tipo == "demostraciones" and es_subconjunto(carpeta)
+            if subconjunto:
+                elemento["detalles"] = {"tipo": "subconjunto"}
+                elemento["detalles"] = self._detalles_subconjunto(carpeta, entorno)
+            else:
+                elemento["detalles"] = DETALLES[tipo](carpeta, self.entornos[entorno])
             if tipo == "demostraciones":
-                # La fuente la dice el NPZ; la ficha, si la da, tiene que coincidir.
+                # La fuente la dicen los datos (el NPZ o el de su conjunto); la ficha, si
+                # la da, tiene que coincidir.
                 fuente = elemento["detalles"]["fuente"]
                 if elemento["fuente"] not in (None, fuente):
-                    raise ValueError(f"la ficha dice fuente {elemento['fuente']!r} y el NPZ, "
+                    datos = "su conjunto" if subconjunto else "el NPZ"
+                    raise ValueError(f"la ficha dice fuente {elemento['fuente']!r} y {datos}, "
                                      f"{fuente!r}")
                 elemento["fuente"] = fuente
             elemento["valido"] = True
@@ -376,6 +400,40 @@ class Biblioteca:
         except Exception as error:  # noqa: BLE001 - un elemento roto no tumba el índice
             elemento["motivo"] = f"no se pudo leer: {error!r}"
         return elemento
+
+    def _detalles_subconjunto(self, carpeta: Path, entorno: str) -> dict[str, Any]:
+        """Detalles de un subconjunto, comprobado contra su conjunto tal como está ahora.
+
+        Raises:
+            ValueError: Si su conjunto no existe, es de otro entorno, es otro subconjunto,
+                no es válido o ha cambiado, o no tiene sus partidas.
+        """
+        from src.data.demostraciones import resumen_demostraciones  # noqa: PLC0415
+        from src.data.seleccion import (comprobar_contra_conjunto,  # noqa: PLC0415
+                                        leer_subconjunto)
+        from src.data.splits import huella_archivo  # noqa: PLC0415
+
+        datos = leer_subconjunto(carpeta)
+        id_conjunto = datos["conjunto"]
+        try:
+            origen = self.ruta(id_conjunto)
+        except KeyError:
+            raise ValueError(f"no existe su conjunto {id_conjunto}") from None
+        if origen.parent.name != "demostraciones" or origen.parent.parent.name != entorno:
+            raise ValueError(f"{id_conjunto} no son demostraciones de {entorno}")
+        # Antes de leerlo: un subconjunto de otro (o de sí mismo) no se sigue.
+        if es_subconjunto(origen):
+            raise ValueError(f"{id_conjunto} es un subconjunto: solo se saca de un conjunto")
+        conjunto = self._leer(origen, entorno, "demostraciones")
+        if not conjunto["valido"]:
+            raise ValueError(f"su conjunto {id_conjunto} no es válido: {conjunto['motivo']}")
+        npz = origen / "demostraciones.npz"
+        pasos = resumen_demostraciones(npz)["pasos_por_partida"]
+        comprobar_contra_conjunto(datos, huella_archivo(npz), pasos)
+        return {"tipo": "subconjunto", "conjunto": id_conjunto,
+                "partidas": len(datos["partidas"]),
+                "pares": sum(pasos[i] for i in datos["partidas"]),
+                "fuente": conjunto["fuente"], "splits": False}
 
     def listar(self, entorno: str | None = None,
                tipos: tuple[str, ...] = TIPOS) -> list[dict[str, Any]]:

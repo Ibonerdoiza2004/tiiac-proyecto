@@ -50,12 +50,11 @@ def metadatos_demostraciones(gym: str, fuente: str | None = None) -> dict[str, A
     """Metadatos de las dos partidas de prueba (5 y 3 pasos) según su fuente."""
     if fuente == "humano":
         return {"fuente": "humano", "entorno": gym, "fecha": "2026-11-25T10:00:00+01:00",
-                "partidas": [{"id_episodio": 0, "semilla": 1, "tramo": [0, 5]},
-                             {"id_episodio": 1, "semilla": 2, "tramo": [2, 5]}]}
+                "partidas": [{"id_episodio": 0, "semilla": 1}, {"id_episodio": 1, "semilla": 2}]}
     if fuente == "combinado":
         return {"fuente": "combinado", "entorno": gym, "partidas": [
-            {"id_episodio": 0, "huella_dataset": HUELLA, "id_original": 7, "tramo": [0, 5]},
-            {"id_episodio": 1, "huella_dataset": HUELLA, "id_original": 7, "tramo": [9, 12]}]}
+            {"id_episodio": 0, "huella_dataset": HUELLA, "id_original": 7},
+            {"id_episodio": 1, "huella_dataset": HUELLA, "id_original": 8}]}
     return {"entorno": gym, "experto": "x", "procedencia": {}, "configuracion_experto": {},
             **({"fuente": fuente} if fuente else {})}
 
@@ -306,8 +305,8 @@ def test_indice_de_cada_tipo_con_sus_detalles(biblioteca) -> None:
                                                "segundos": 31.0, "huella_dataset": HUELLA}
     assert por_id[ids["bc"]]["detalles"] == {"subconjunto": 7, "semilla": 12, "repeticion": 2,
                                              "segundos": 1.2, "huella_dataset": HUELLA}
-    assert por_id[ids["demostraciones"]]["detalles"] == {"partidas": 2, "pares": 8,
-                                                         "fuente": "experto", "splits": False}
+    assert por_id[ids["demostraciones"]]["detalles"] == {
+        "tipo": "conjunto", "partidas": 2, "pares": 8, "fuente": "experto", "splits": False}
     assert por_id[ids["demostraciones"]]["fuente"] == "experto"  # por defecto
     assert por_id[ids["bc"]]["fuente"] is None
 

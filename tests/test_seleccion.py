@@ -1,120 +1,279 @@
-"""Tests de las selecciones de demostraciones (src/data/seleccion.py): tramos."""
+"""Tests de las selecciones de demostraciones (src/data/seleccion.py): subconjuntos."""
 
 from __future__ import annotations
 
-import itertools
+import json
+import re
+import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
 from gymnasium import spaces
 
-from src.data.demostraciones import validar_demostraciones
-from src.data.seleccion import recortar_partida
-from src.data.tipos import Trayectoria, comprobar_tramo
+from src.app.contrato import DemostracionApi
+from src.app.rutas_biblioteca import como_demostracion
+from src.data.biblioteca import (ARCHIVO_SUBCONJUNTO, Biblioteca, agregar, agregar_nuevo,
+                                 crear_ficha, nuevo_id)
+from src.data.demostraciones import guardar_demostraciones, resumen_demostraciones
+from src.data.seleccion import (FORMATO_SUBCONJUNTO, VERSION_SUBCONJUNTO, cargar_subconjunto,
+                                comprobar_subconjunto, crear_subconjunto)
+from src.data.splits import huella_archivo
+from src.data.tipos import Trayectoria
 
 OBSERVACION = spaces.Box(-np.inf, np.inf, (4,), np.float32)
 DISCRETA = spaces.Discrete(3)
-CONTINUA = spaces.Box(-100.0, 100.0, (2,), np.float32)
 PASOS = 5
 
 
-def _partida(continua: bool = False, final: str = "terminado", pasos: int = PASOS,
-             identificador: int = 7) -> Trayectoria:
-    """Partida de prueba con valores distintos en cada paso."""
+def _partida(pasos: int = PASOS, identificador: int = 7) -> Trayectoria:
+    """Partida de prueba con valores distintos en cada paso, terminada en el último."""
     estados = np.arange((pasos + 1) * 4, dtype=np.float32).reshape(pasos + 1, 4)
-    acciones = (np.arange(pasos * 2, dtype=np.float32).reshape(pasos, 2) if continua
-                else np.arange(pasos, dtype=np.int64) % 3)
     terminados = np.zeros(pasos, dtype=bool)
-    truncados = np.zeros(pasos, dtype=bool)
-    (terminados if final == "terminado" else truncados)[-1] = True
-    return Trayectoria(identificador, estados[:-1], acciones, estados[1:],
-                       np.arange(pasos, dtype=np.float32) + 0.5, terminados, truncados)
+    terminados[-1] = True
+    return Trayectoria(identificador, estados[:-1], np.arange(pasos, dtype=np.int64) % 3,
+                       estados[1:], np.arange(pasos, dtype=np.float32) + 0.5, terminados,
+                       np.zeros(pasos, dtype=bool))
 
 
-def _espacio(continua: bool) -> spaces.Space:
-    return CONTINUA if continua else DISCRETA
+# --- subconjuntos ----------------------------------------------------------------------
+
+ENTORNOS = {"cartpole": "CartPole-v1", "acrobot": "Acrobot-v1"}
+# Partidas del conjunto de prueba: id → pasos.
+PASOS_CONJUNTO = {0: 4, 3: 6, 5: 5}
+ELEGIDAS = [5, 0]
 
 
-# --- comprobar_tramo -------------------------------------------------------------------
-
-@pytest.mark.parametrize("tramo", [[0, 1], (2, 5), [np.int64(1), np.int32(3)], [0, 10**12]])
-def test_tramos_que_valen(tramo):
-    assert comprobar_tramo(tramo) == (int(tramo[0]), int(tramo[1]))
-    assert all(type(v) is int for v in comprobar_tramo(tramo))
+def _metadatos_experto(gym: str = "CartPole-v1") -> dict:
+    return {"entorno": gym, "experto": "x", "procedencia": {}, "configuracion_experto": {}}
 
 
-@pytest.mark.parametrize("tramo", [[1, 1], [3, 2], [-1, 2], [0], [0, 1, 2], [0.0, 1],
-                                   [0, 1.0], [False, True], ["0", "1"], "01", None, {0: 1},
-                                   np.array([0, 1])])
-def test_tramos_que_no_valen(tramo):
-    with pytest.raises(ValueError, match=r"\[inicio, fin\) con 0 <= inicio < fin"):
-        comprobar_tramo(tramo)
+def _guardar_conjunto(ruta: Path, pasos: dict[int, int] = PASOS_CONJUNTO,
+                      gym: str = "CartPole-v1") -> None:
+    guardar_demostraciones(ruta, [_partida(pasos=p, identificador=i) for i, p in pasos.items()],
+                           _metadatos_experto(gym), OBSERVACION, DISCRETA)
 
 
-def test_el_tramo_tiene_que_caber_en_la_partida():
-    assert comprobar_tramo([2, 5], 5) == (2, 5)
-    with pytest.raises(ValueError, match=r"\[2, 6\) no cabe en una partida de 5 pasos"):
-        comprobar_tramo([2, 6], 5)
+def _anadir_conjunto(biblioteca: Biblioteca, entorno: str = "cartpole", **extra) -> str:
+    return agregar_nuevo(biblioteca.raiz, entorno, "demostraciones", "Conjunto", "dashboard",
+                         lambda c: _guardar_conjunto(c / "demostraciones.npz",
+                                                     gym=ENTORNOS[entorno]), **extra)["id"]
 
 
-# --- recortar_partida ------------------------------------------------------------------
-
-TODOS_LOS_TRAMOS = [(i, f) for i in range(PASOS) for f in range(i + 1, PASOS + 1)]
-
-
-@pytest.mark.parametrize("continua", [False, True], ids=["discreta", "continua"])
-@pytest.mark.parametrize("final", ["terminado", "truncado"])
-@pytest.mark.parametrize("inicio, fin", TODOS_LOS_TRAMOS)
-def test_cada_tramo_de_una_partida(continua, final, inicio, fin):
-    """Todos los tramos de una partida de 5 pasos (el dominio es finito: 15)."""
-    partida = _partida(continua, final)
-    recorte = recortar_partida(partida, [inicio, fin])
-    assert recorte.id_episodio == partida.id_episodio
-    assert recorte.numero_pasos == fin - inicio
-    for campo in ("estados", "acciones", "siguientes_estados", "recompensas_originales"):
-        np.testing.assert_array_equal(getattr(recorte, campo),
-                                      getattr(partida, campo)[inicio:fin])
-        assert getattr(recorte, campo).dtype == getattr(partida, campo).dtype
-    # Solo el último paso finaliza: con sus marcas si es el final real; truncado si no.
-    assert not recorte.terminados[:-1].any() and not recorte.truncados[:-1].any()
-    if fin == PASOS:
-        assert (recorte.terminados[-1], recorte.truncados[-1]) == (final == "terminado",
-                                                                   final == "truncado")
-    else:
-        assert (recorte.terminados[-1], recorte.truncados[-1]) == (False, True)
-    validar_demostraciones([recorte], OBSERVACION, _espacio(continua))
+def _anadir_a_mano(biblioteca: Biblioteca, datos: object, entorno: str = "cartpole",
+                   **extra) -> str:
+    """Añade un subconjunto con el contenido que se quiera, sin comprobarlo."""
+    ficha = crear_ficha(nuevo_id(), entorno, "demostraciones", "A mano", "dashboard", **extra)
+    texto = datos if isinstance(datos, str) else json.dumps(datos)
+    agregar(biblioteca.raiz, ficha,
+            lambda c: (c / ARCHIVO_SUBCONJUNTO).write_text(texto, encoding="utf-8"))
+    return ficha["id"]
 
 
-@pytest.mark.parametrize("inicio, fin", [(i, f) for i, f in itertools.product(range(-1, 7),
-                                                                               range(-1, 8))
-                                         if not 0 <= i < f <= PASOS])
-def test_los_tramos_que_no_caben_se_rechazan(inicio, fin):
-    with pytest.raises(ValueError, match="inicio < fin|no cabe"):
-        recortar_partida(_partida(), [inicio, fin])
+def _datos(conjunto: str, huella: str, **cambios) -> dict:
+    return {"formato": FORMATO_SUBCONJUNTO, "version": VERSION_SUBCONJUNTO, "conjunto": conjunto,
+            "huella_dataset": huella, "partidas": [0], **cambios}
 
 
-def test_el_recorte_es_una_copia():
-    partida = _partida()
-    originales = {c: getattr(partida, c).copy() for c in ("estados", "acciones", "truncados")}
-    recorte = recortar_partida(partida, (1, 3))
-    # Marcar el corte como truncado no toca la partida original.
-    for campo, valor in originales.items():
-        np.testing.assert_array_equal(getattr(partida, campo), valor)
-    recorte.estados[:] = -1
-    recorte.acciones[:] = 0
-    recorte.truncados[:] = False
-    for campo, valor in originales.items():
-        np.testing.assert_array_equal(getattr(partida, campo), valor)
+@pytest.fixture
+def biblioteca(tmp_path: Path) -> Biblioteca:
+    return Biblioteca(tmp_path / "biblioteca", ENTORNOS)
 
 
-def test_tramos_seguidos_reconstruyen_la_partida():
-    partida = _partida()
-    trozos = [recortar_partida(partida, tramo) for tramo in ([0, 2], [2, 3], [3, 5])]
-    for campo in ("estados", "acciones", "siguientes_estados", "recompensas_originales"):
-        np.testing.assert_array_equal(np.concatenate([getattr(t, campo) for t in trozos]),
-                                      getattr(partida, campo))
+def test_crear_un_subconjunto_y_verlo_en_la_biblioteca(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca)
+    ficha = crear_subconjunto(biblioteca, conjunto, ELEGIDAS, "Mis mejores partidas")
+    assert (ficha["origen"], ficha["fuente"], ficha["tipo"]) == ("dashboard", "experto",
+                                                                 "demostraciones")
+    carpeta = biblioteca.ruta(ficha["id"])
+    assert not (carpeta / "demostraciones.npz").exists()  # no copia datos
+    datos = json.loads((carpeta / ARCHIVO_SUBCONJUNTO).read_text(encoding="utf-8"))
+    assert datos == {"formato": FORMATO_SUBCONJUNTO, "version": VERSION_SUBCONJUNTO,
+                     "conjunto": conjunto,
+                     "huella_dataset": huella_archivo(biblioteca.ruta(conjunto)
+                                                      / "demostraciones.npz"),
+                     "partidas": [0, 5]}  # en orden, sea cual sea el de la petición
+    elemento = biblioteca.obtener(ficha["id"])
+    assert elemento["valido"], elemento["motivo"]
+    assert elemento["detalles"] == {"tipo": "subconjunto", "conjunto": conjunto, "partidas": 2,
+                                    "pares": 4 + 5, "fuente": "experto", "splits": False}
+    api = DemostracionApi.model_validate(como_demostracion(elemento))
+    assert (api.tipo, api.partidas, api.pares, api.nombre) == ("subconjunto", 2, 9,
+                                                               "Mis mejores partidas")
 
 
-def test_solo_recorta_trayectorias():
-    with pytest.raises(ValueError, match="Trayectoria"):
-        recortar_partida({"estados": []}, [0, 1])
+def test_el_mismo_subconjunto_da_el_mismo_archivo(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca)
+    contenidos = set()
+    for partidas in ([5, 0], [0, 5], (np.int64(5), np.int32(0))):
+        ficha = crear_subconjunto(biblioteca, conjunto, partidas, "s")
+        contenidos.add((biblioteca.ruta(ficha["id"]) / ARCHIVO_SUBCONJUNTO).read_bytes())
+    assert len(contenidos) == 1
+
+
+def test_cargar_un_subconjunto_da_sus_partidas_enteras(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca)
+    ficha = crear_subconjunto(biblioteca, conjunto, ELEGIDAS, "s")
+    partidas, datos = cargar_subconjunto(biblioteca, ficha["id"], OBSERVACION, DISCRETA)
+    assert [p.id_episodio for p in partidas] == [0, 5] and datos["conjunto"] == conjunto
+    for partida in partidas:
+        esperada = _partida(pasos=PASOS_CONJUNTO[partida.id_episodio],
+                            identificador=partida.id_episodio)
+        for campo in ("estados", "acciones", "siguientes_estados", "terminados", "truncados"):
+            np.testing.assert_array_equal(getattr(partida, campo), getattr(esperada, campo))
+
+
+def test_la_fuente_del_subconjunto_es_la_de_su_conjunto(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca, fuente="experto")
+    ficha = crear_subconjunto(biblioteca, conjunto, [3], "s")
+    assert ficha["fuente"] == biblioteca.obtener(ficha["id"])["fuente"] == "experto"
+
+
+@pytest.mark.parametrize("partidas, mensaje", [
+    ([], "al menos una partida"),
+    ({0: 1}, "lista de id_episodio"),
+    ("05", "lista de id_episodio"),
+    (5, "lista de id_episodio"),
+    ([True], "no es un id de partida"),
+    (["0"], "no es un id de partida"),
+    ([1.0], "no es un id de partida"),
+    ([0, 3, 0], "repetidas"),
+    ([0, 9, 7], "las partidas [7, 9] no están en el conjunto"),
+])
+def test_crear_rechaza_partidas_que_no_valen(biblioteca, partidas, mensaje):
+    conjunto = _anadir_conjunto(biblioteca)
+    with pytest.raises(ValueError, match=re.escape(mensaje)):
+        crear_subconjunto(biblioteca, conjunto, partidas, "s")
+    assert [e["id"] for e in biblioteca.listar()] == [conjunto]  # no deja nada a medias
+
+
+def test_crear_rechaza_lo_que_no_es_un_conjunto_valido(biblioteca):
+    with pytest.raises(ValueError, match="No existe el conjunto"):
+        crear_subconjunto(biblioteca, "a" * 12, ELEGIDAS, "s")
+    conjunto = _anadir_conjunto(biblioteca)
+    sub = crear_subconjunto(biblioteca, conjunto, ELEGIDAS, "s")["id"]
+    with pytest.raises(ValueError, match="no es un conjunto de demostraciones"):
+        crear_subconjunto(biblioteca, sub, ELEGIDAS, "s")
+
+    def escribir_experto(carpeta: Path) -> None:
+        (carpeta / "modelo.zip").write_bytes(b"x")
+        (carpeta / "experto.json").write_text("{}")
+
+    experto = agregar_nuevo(biblioteca.raiz, "cartpole", "experto", "e", "dashboard",
+                            escribir_experto)["id"]
+    with pytest.raises(ValueError, match="no es un conjunto de demostraciones"):
+        crear_subconjunto(biblioteca, experto, ELEGIDAS, "s")
+    roto = agregar_nuevo(biblioteca.raiz, "cartpole", "demostraciones", "roto", "dashboard",
+                         lambda c: (c / "demostraciones.npz").write_bytes(b"no es un npz"))["id"]
+    with pytest.raises(ValueError, match="no es válido"):
+        crear_subconjunto(biblioteca, roto, ELEGIDAS, "s")
+
+
+def test_sin_su_conjunto_o_si_ha_cambiado_deja_de_ser_valido(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca)
+    sub = crear_subconjunto(biblioteca, conjunto, ELEGIDAS, "s")["id"]
+    npz = biblioteca.ruta(conjunto) / "demostraciones.npz"
+    # Otro NPZ válido en su lugar: el conjunto sigue valiendo, el subconjunto no.
+    npz.unlink()
+    _guardar_conjunto(npz, {0: 4, 3: 6, 5: 7})
+    assert biblioteca.obtener(conjunto)["valido"]
+    elemento = biblioteca.obtener(sub)
+    assert not elemento["valido"] and "el conjunto ha cambiado" in elemento["motivo"]
+    assert elemento["detalles"] == {"tipo": "subconjunto"}
+    assert como_demostracion(elemento)["tipo"] == "subconjunto"
+    with pytest.raises(ValueError, match="no es válido: el conjunto ha cambiado"):
+        cargar_subconjunto(biblioteca, sub, OBSERVACION, DISCRETA)
+    shutil.rmtree(biblioteca.ruta(conjunto))
+    elemento = biblioteca.obtener(sub)
+    assert not elemento["valido"] and elemento["motivo"] == f"no existe su conjunto {conjunto}"
+
+
+def test_un_subconjunto_con_partidas_que_su_conjunto_no_tiene_no_es_valido(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca)
+    huella = huella_archivo(biblioteca.ruta(conjunto) / "demostraciones.npz")
+    sub = _anadir_a_mano(biblioteca, _datos(conjunto, huella, partidas=[0, 4]))
+    elemento = biblioteca.obtener(sub)
+    assert not elemento["valido"] and "las partidas [4] no están" in elemento["motivo"]
+
+
+def test_cargar_comprueba_otra_vez_el_npz(biblioteca, monkeypatch):
+    """Si el NPZ cambia entre listar y cargar, se nota al cargar."""
+    from src.data import seleccion
+    conjunto = _anadir_conjunto(biblioteca)
+    sub = crear_subconjunto(biblioteca, conjunto, ELEGIDAS, "s")["id"]
+    monkeypatch.setattr(seleccion, "huella_archivo", lambda ruta: "cd" * 32)
+    with pytest.raises(ValueError, match="el conjunto ha cambiado"):
+        cargar_subconjunto(biblioteca, sub, OBSERVACION, DISCRETA)
+
+
+def test_subconjuntos_mal_apuntados_no_son_validos_y_no_hay_bucles(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca)
+    huella = huella_archivo(biblioteca.ruta(conjunto) / "demostraciones.npz")
+    bueno = _anadir_a_mano(biblioteca, _datos(conjunto, huella))
+    assert biblioteca.obtener(bueno)["valido"]
+    otro_entorno = _anadir_conjunto(biblioteca, "acrobot")
+    casos = {
+        _anadir_a_mano(biblioteca, _datos(bueno, huella)):
+            f"{bueno} es un subconjunto: solo se saca de un conjunto",
+        _anadir_a_mano(biblioteca, _datos(otro_entorno, huella)):
+            f"{otro_entorno} no son demostraciones de cartpole",
+        _anadir_a_mano(biblioteca, "{no json"): "no se pudo leer subconjunto.json",
+        _anadir_a_mano(biblioteca, _datos(conjunto, huella, version=2)):
+            "Formato de subconjunto desconocido",
+        _anadir_a_mano(biblioteca, _datos(conjunto, huella), fuente="humano"):
+            "la ficha dice fuente 'humano' y su conjunto, 'experto'",
+    }
+    for id_sub, motivo in casos.items():
+        elemento = biblioteca.obtener(id_sub)
+        assert not elemento["valido"] and motivo in elemento["motivo"], (id_sub, elemento)
+    # Uno que apunta a sí mismo no deja la lectura en bucle.
+    a_si_mismo = crear_ficha(nuevo_id(), "cartpole", "demostraciones", "yo", "dashboard")
+    agregar(biblioteca.raiz, a_si_mismo, lambda c: (c / ARCHIVO_SUBCONJUNTO).write_text(
+        json.dumps(_datos(a_si_mismo["id"], huella))))
+    assert "es un subconjunto" in biblioteca.obtener(a_si_mismo["id"])["motivo"]
+    assert len(biblioteca.listar()) == 9
+
+
+def test_cargar_rechaza_lo_que_no_es_un_subconjunto_valido(biblioteca):
+    conjunto = _anadir_conjunto(biblioteca)
+    with pytest.raises(ValueError, match="no es un subconjunto"):
+        cargar_subconjunto(biblioteca, conjunto, OBSERVACION, DISCRETA)
+    with pytest.raises(ValueError, match="No existe el subconjunto"):
+        cargar_subconjunto(biblioteca, "b" * 12, OBSERVACION, DISCRETA)
+
+
+@pytest.mark.parametrize("cambio, mensaje", [
+    (lambda d: d.pop("partidas"), "exactamente"),
+    (lambda d: d.update(otra=1), "exactamente"),
+    (lambda d: d.update(formato="otro"), "Formato de subconjunto desconocido"),
+    (lambda d: d.update(version=2), "Formato de subconjunto desconocido"),
+    (lambda d: d.update(conjunto="../a"), "no es un id de la biblioteca"),
+    (lambda d: d.update(huella_dataset="corta"), "huella"),
+    (lambda d: d.update(partidas="todas"), "al menos una partida"),
+    (lambda d: d.update(partidas=[]), "al menos una partida"),
+    (lambda d: d.update(partidas=[{"id_episodio": 0, "tramo": [0, 1]}]),
+     "no es un id de partida"),
+    (lambda d: d.update(partidas=[2, 2]), "repetidas"),
+])
+def test_forma_del_subconjunto(cambio, mensaje):
+    datos = _datos("a" * 12, "ab" * 32)
+    assert comprobar_subconjunto(datos) == datos
+    cambio(datos)
+    with pytest.raises(ValueError, match=re.escape(mensaje)):
+        comprobar_subconjunto(datos)
+
+
+def test_el_resumen_da_los_pasos_de_cada_partida(tmp_path):
+    _guardar_conjunto(tmp_path / "d.npz")
+    assert resumen_demostraciones(tmp_path / "d.npz")["pasos_por_partida"] == PASOS_CONJUNTO
+
+
+def test_si_su_conjunto_no_es_valido_el_subconjunto_tampoco(biblioteca):
+    """Aunque su NPZ se lea bien: aquí la ficha del conjunto dice otra fuente."""
+    conjunto = _anadir_conjunto(biblioteca, fuente="humano")
+    assert not biblioteca.obtener(conjunto)["valido"]
+    huella = huella_archivo(biblioteca.ruta(conjunto) / "demostraciones.npz")
+    sub = _anadir_a_mano(biblioteca, _datos(conjunto, huella), fuente="humano")
+    elemento = biblioteca.obtener(sub)
+    assert not elemento["valido"]
+    assert elemento["motivo"].startswith(f"su conjunto {conjunto} no es válido: la ficha dice")

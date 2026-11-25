@@ -425,7 +425,7 @@ común a cualquier trabajo.
 | `GET /api/laboratorio/{entorno}` | Velocidad del entorno, si se juega a mano y partidas por defecto |
 | `GET /api/laboratorio/{entorno}/ajustes/{metodo}` | Hiperparámetros del formulario (experto, bc o gail) con los valores del perfil; textos, nivel y rangos en `configs/dashboard.yaml` (un límite que no existe no aparece) |
 | `POST /api/sesiones` | Jugar a mano o ver al experto (llega con `laboratorio-jugar-api`; hasta entonces valida y responde 501) |
-| `POST /api/sesiones/{id}/guardar` | Guardar partidas y tramos de una sesión y cerrarla (ídem) |
+| `POST /api/sesiones/{id}/guardar` | Guardar partidas enteras de una sesión y cerrarla (ídem) |
 | `POST /api/entrenamientos` | Entrenar un experto, BC o GAIL, con nombre opcional para la biblioteca y W&B opcional (llega con `laboratorio-entrenar-api`; ídem) |
 | `GET /api/trabajos`, `GET /api/trabajos/{id}` | Listar y consultar trabajos |
 | `POST /api/trabajos/{id}/pausar`, `/reanudar`, `/cancelar` | Controlar cualquier trabajo |
@@ -456,7 +456,10 @@ se indique en la petición.
 La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `biblioteca/`, no se versiona), con una carpeta por elemento
 (`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una
-`ficha.json` con el nombre, el origen (congelado, entrega o dashboard) y la fecha. Para
+`ficha.json` con el nombre, el origen (congelado, entrega o dashboard) y la fecha. Un
+subconjunto de demostraciones no copia datos: su `subconjunto.json` dice de qué conjunto
+sale (con la huella de su NPZ) y qué partidas toma, enteras; si el conjunto falta o
+cambia, deja de ser válido. Para
 llenarla con los expertos y las demostraciones congelados y los BC y GAIL de la entrega,
 con una sesión de W&B (`wandb login`):
 
