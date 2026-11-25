@@ -21,6 +21,7 @@ import torch
 import yaml
 from gymnasium import spaces
 from sb3_contrib import TRPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
@@ -1147,10 +1148,10 @@ def _espiar(monkeypatch, registro: dict) -> None:
         "reajustar_valor_tras_discriminador")}
     registro["orden"] = []
 
-    def trpo(agente):
+    def trpo(agente, callback=None):
         discriminador = registro["discriminador"]
         antes = _estado(discriminador)
-        resultado = originales["iteracion_trpo"](agente)
+        resultado = originales["iteracion_trpo"](agente, callback)
         registro["fijo_en_el_bloque"] = _iguales(antes, _estado(discriminador))
         registro["orden"].append("trpo")
         return resultado
@@ -1481,6 +1482,56 @@ def test_entrenar_gail_es_reproducible():
     assert _iguales(_estado(d_a), _estado(d_b))
     np.testing.assert_equal(resumen_a["historial"], resumen_b["historial"])
     np.testing.assert_equal(resumen_a["validaciones"], resumen_b["validaciones"])
+
+
+class _ContadorPasos(BaseCallback):
+    """Callback de sb3 que solo cuenta los pasos que ve."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pasos = 0
+
+    def _on_step(self) -> bool:
+        self.pasos += 1
+        return True
+
+
+def _mismo_gail(a, b) -> None:
+    (agente_a, d_a, resumen_a), (agente_b, d_b, resumen_b) = a, b
+    assert _iguales(_estado(agente_a.policy), _estado(agente_b.policy))
+    assert _iguales(_estado(d_a), _estado(d_b))
+    np.testing.assert_equal(resumen_a["historial"], resumen_b["historial"])
+    np.testing.assert_equal(resumen_a["validaciones"], resumen_b["validaciones"])
+    assert resumen_a["iteraciones"] == resumen_b["iteraciones"]
+
+
+def test_parar_nunca_y_un_callback_no_cambian_gail():
+    """Los enganches del dashboard no tocan lo que se entrena ni lo que se valida."""
+    from src.training.gail import entrenar_gail
+    trayectorias, splits = _datos_gail()
+    contador = _ContadorPasos()
+    sin = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0)
+    con = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0, parar=lambda: False,
+                        callback=contador)
+    _mismo_gail(sin, con)
+    # 3 iteraciones de 64 pasos en 2 entornos; validar no pasa por el callback.
+    assert contador.pasos == 3 * 64 // 2
+
+
+@pytest.mark.parametrize("parada", [1, 2])
+def test_gail_parado_es_como_si_esa_fuera_la_ultima_iteracion(parada):
+    from src.training.gail import entrenar_gail
+    trayectorias, splits = _datos_gail()
+    consultas = []
+    parado = entrenar_gail(_cfg_gail(evaluar_cada=5), trayectorias, splits, 4, 0,
+                           parar=lambda: consultas.append(1) or len(consultas) >= parada)
+    corto = entrenar_gail(_cfg_gail(evaluar_cada=5, iteraciones=parada), trayectorias, splits, 4, 0)
+    _mismo_gail(parado, corto)
+    resumen = parado[2]
+    assert len(consultas) == resumen["iteraciones"] == parada
+    assert resumen["pasos"] == 64 * parada
+    # Se valida la iteración en la que se para, aunque no toque por evaluar_cada.
+    assert [v["iteracion"] for v in resumen["validaciones"]] == [parada]
 
 
 def test_validar_no_cambia_el_entrenamiento():

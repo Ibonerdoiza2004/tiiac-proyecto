@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 import src.training.trpo as trpo
@@ -421,6 +422,93 @@ def test_el_experto_es_reproducible():
     assert resumen_a["evaluaciones"] == resumen_b["evaluaciones"]
     estado_b = modelo_b.policy.state_dict()
     assert all(torch.equal(v, estado_b[k]) for k, v in modelo_a.policy.state_dict().items())
+
+
+class _ContadorPasos(BaseCallback):
+    """Callback de sb3 que solo cuenta los pasos que ve."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pasos = 0
+
+    def _on_step(self) -> bool:
+        self.pasos += 1
+        return True
+
+
+def _pesos_iguales(a, b) -> bool:
+    estado_b = b.policy.state_dict()
+    return all(torch.equal(v, estado_b[k]) for k, v in a.policy.state_dict().items())
+
+
+@pytest.mark.parametrize("n_entornos", [1, 2])
+def test_iteracion_trpo_pasa_el_callback_sin_cambiar_lo_que_entrena(n_entornos):
+    cfg = _cfg(n_entornos=n_entornos)
+    contador = _ContadorPasos()
+
+    def entrenar(callback):
+        # Uno detrás de otro: los dos usan el generador global de PyTorch.
+        agente, venv = _agente(cfg)
+        try:
+            return agente, [iteracion_trpo(agente, callback) for _ in range(2)]
+        finally:
+            venv.close()
+
+    sin, medidas_sin = entrenar(None)
+    con, medidas_con = entrenar(contador)
+    assert medidas_sin == medidas_con
+    assert _pesos_iguales(sin, con)
+    # Un paso del VecEnv por llamada: 64 pasos por iteración repartidos entre los entornos.
+    assert contador.pasos == 2 * 64 // n_entornos
+
+
+def test_parar_nunca_y_un_callback_no_cambian_el_experto():
+    """Los enganches del dashboard no tocan lo que se entrena ni lo que se evalúa."""
+    cfg = _cfg()
+    modelo_a, resumen_a = entrenar_experto(cfg)
+    contador = _ContadorPasos()
+    modelo_b, resumen_b = entrenar_experto(cfg, parar=lambda: False, callback=contador)
+    assert _pesos_iguales(modelo_a, modelo_b)
+    assert resumen_a["evaluaciones"] == resumen_b["evaluaciones"]
+    assert resumen_a["iteraciones"] == resumen_b["iteraciones"] == 4
+    # Solo los pasos de entrenamiento: evaluar no pasa por el callback.
+    assert contador.pasos == resumen_b["pasos"] == 256
+
+
+@pytest.mark.parametrize("parada,evaluadas,mejor", [(1, [1], 1), (3, [2, 3], 2)])
+def test_el_experto_para_cuando_se_pide_y_evalua_esa_iteracion(parada, evaluadas, mejor,
+                                                                monkeypatch):
+    cfg = _cfg()
+    cfg["experto"].update(pasos_totales=64 * 10, evaluar_cada=2, retorno_objetivo=1000)
+    llamadas = _evaluaciones_falsas(monkeypatch, [5.0, 1.0])
+    consultas = []
+
+    def parar() -> bool:
+        consultas.append(1)
+        return len(consultas) >= parada
+
+    modelo, resumen = entrenar_experto(cfg, parar=parar)
+    assert len(consultas) == resumen["iteraciones"] == parada
+    assert resumen["pasos"] == 64 * parada
+    assert [e["iteracion"] for e in resumen["evaluaciones"]] == evaluadas
+    assert resumen["mejor_iteracion"] == mejor and not resumen["objetivo_alcanzado"]
+    # Se queda con la mejor evaluada hasta entonces, como al terminar.
+    estado = modelo.policy.state_dict()
+    assert all(torch.equal(v, llamadas[0]["pesos"][k]) for k, v in estado.items())
+
+
+def test_el_experto_parado_es_como_si_esa_fuera_la_ultima_iteracion():
+    cfg = _cfg()
+    cfg["experto"].update(pasos_totales=64 * 10, evaluar_cada=5)
+    consultas = []
+    parado, resumen_parado = entrenar_experto(
+        cfg, parar=lambda: consultas.append(1) or len(consultas) >= 2)
+    corto = copy.deepcopy(cfg)
+    corto["experto"]["pasos_totales"] = 128
+    completo, resumen_completo = entrenar_experto(corto)
+    assert _pesos_iguales(parado, completo)
+    assert resumen_parado["evaluaciones"] == resumen_completo["evaluaciones"]
+    assert resumen_parado["pasos"] == resumen_completo["pasos"] == 128
 
 
 def test_el_experto_normaliza_si_lo_pide_el_perfil():

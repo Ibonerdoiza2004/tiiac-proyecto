@@ -17,7 +17,7 @@ import json
 import math
 import pickle
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -114,7 +114,8 @@ def evaluar_bc(politica: PoliticaBC, loader: DataLoader) -> dict[str, float]:
 
 
 def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: DataLoader,
-                cfg: dict, run: Any = None) -> dict[str, float | int]:
+                cfg: dict, run: Any = None, parar: Callable[[], bool] | None = None,
+                ) -> dict[str, float | int]:
     """Entrena la política de BC con parada temprana y deja los mejores pesos.
 
     Si bc.normalizar_observaciones es true, antes de entrenar ajusta la
@@ -139,6 +140,9 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
             bc.epocas_maximas, bc.paciencia y bc.normalizar_observaciones, y
             bc.epsilon_normalizacion si se normaliza.
         run: Run de W&B o None.
+        parar: Se consulta tras validar cada época; si devuelve True, se termina
+            ahí con los pesos de la mejor época hasta entonces (el «finalizar»
+            del dashboard). Con None se entrena hasta el final.
 
     Returns:
         mejor_epoca (desde 1), epocas entrenadas y las métricas de validación
@@ -191,6 +195,8 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
             sin_mejora += 1
             if sin_mejora >= paciencia:
                 break
+        if parar is not None and parar():
+            break
 
     politica.load_state_dict(mejor_estado)
     return {"mejor_epoca": mejor_epoca, "epocas": epoca,
@@ -200,7 +206,7 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
 def entrenar_bc_subconjunto(
     trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones, cantidad: int,
     espacio_observacion: spaces.Space, espacio_accion: spaces.Space, cfg: dict,
-    generador: np.random.Generator, run: Any = None,
+    generador: np.random.Generator, run: Any = None, parar: Callable[[], bool] | None = None,
 ) -> tuple[PoliticaBC, dict[str, float | int]]:
     """Recorrido completo de BC para un subconjunto de partidas de train.
 
@@ -221,6 +227,7 @@ def entrenar_bc_subconjunto(
         cfg: Configuración resuelta con la sección bc completa.
         generador: Generador de src.utils.seed.crear_generador.
         run: Run de W&B o None.
+        parar: Como en entrenar_bc.
 
     Returns:
         La política con los pesos de la mejor época y un resumen con cantidad,
@@ -233,7 +240,7 @@ def entrenar_bc_subconjunto(
     train_loader, val_loader = construir_loaders_bc(
         trayectorias, splits, cantidad, espacio_accion, cfg, generador)
     politica = construir_politica_bc(cfg, espacio_observacion, espacio_accion)
-    resultado = entrenar_bc(politica, train_loader, val_loader, cfg, run)
+    resultado = entrenar_bc(politica, train_loader, val_loader, cfg, run, parar)
     return politica, {"cantidad": int(cantidad), "pares_train": len(train_loader.dataset),
                       "pares_validacion": len(val_loader.dataset), **resultado}
 

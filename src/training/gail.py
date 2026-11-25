@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,7 @@ import torch.nn.functional as F
 from gymnasium import spaces
 from sb3_contrib import TRPO
 from stable_baselines3.common.buffers import RolloutBuffer
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper, VecNormalize
 from stable_baselines3.common.vec_env.base_vec_env import VecEnvObs, VecEnvStepReturn
@@ -565,7 +566,8 @@ def _comprobar_piezas_iteracion(agente: TRPO, envoltorio: EntornoRecompensaGAIL,
 
 def iteracion_gail(agente: TRPO, envoltorio: EntornoRecompensaGAIL,
                    optimizador: torch.optim.Optimizer, pares_expertos: LoteTransiciones,
-                   generador: np.random.Generator, cfg: dict) -> dict[str, float]:
+                   generador: np.random.Generator, cfg: dict,
+                   callback: BaseCallback | None = None) -> dict[str, float]:
     """Da una iteración de GAIL: un bloque de TRPO, el discriminador y la red de valor.
 
     1. Juega un bloque de TRPO (iteracion_trpo) en el que cada paso recibe la
@@ -589,6 +591,7 @@ def iteracion_gail(agente: TRPO, envoltorio: EntornoRecompensaGAIL,
         pares_expertos: Pares expertos del subconjunto de train.
         generador: Generador de crear_generador; elige los pares expertos.
         cfg: Configuración resuelta con la sección gail.
+        callback: Callback de sb3 para cada paso del bloque (iteracion_trpo).
 
     Returns:
         Medidas de la iteración: las de iteracion_trpo (pasos, partidas,
@@ -603,7 +606,7 @@ def iteracion_gail(agente: TRPO, envoltorio: EntornoRecompensaGAIL,
     _comprobar_piezas_iteracion(agente, envoltorio, optimizador, pares_expertos, generador, cfg)
     discriminador, espacio_accion = envoltorio.discriminador, envoltorio.action_space
     envoltorio.iniciar_bloque()
-    medidas = iteracion_trpo(agente)
+    medidas = iteracion_trpo(agente, callback)
     lote, anteriores = envoltorio.extraer_bloque()
     expertos = muestrear_expertos(pares_expertos, lote.numero_transiciones, generador)
     medidas_discriminador = actualizar_discriminador(discriminador, optimizador, lote, expertos,
@@ -640,6 +643,7 @@ def comprobar_config_barrido(cfg: dict) -> None:
 
 def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones,
                   cantidad: int, repeticion: int, run: Any = None,
+                  parar: Callable[[], bool] | None = None, callback: BaseCallback | None = None,
                   ) -> tuple[TRPO, Discriminador, dict[str, Any]]:
     """Entrena GAIL con un subconjunto de partidas expertas, en una repetición.
 
@@ -672,11 +676,16 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         repeticion: Número de repetición, entero no negativo.
         run: Run de W&B o None; recibe las medidas de cada iteración y las de
             validación (prefijo validacion/), con el paso de entorno acumulado.
+        parar: Se consulta tras cada iteración; si devuelve True, se valida esa
+            iteración y se termina como si fuera la última, con su modelo (el
+            «finalizar» del dashboard). Con None se dan todas las iteraciones.
+        callback: Callback de sb3 para cada paso de entrenamiento (la vista del
+            dashboard); no se usa al validar.
 
     Returns:
         El agente, el discriminador y un resumen: entorno, cantidad, repeticion,
         IDs de las partidas, número de pares expertos, huella del dataset,
-        semillas, iteraciones, pasos, medidas de cada iteración, validaciones,
+        semillas, iteraciones dadas (menos que gail.iteraciones si se paró), pasos, medidas de cada iteración, validaciones,
         segundos medidos y estadísticas de normalización (None si no normaliza).
 
     Raises:
@@ -706,11 +715,15 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
                                 clip_obs=float(tcfg["limite_normalizacion"]))
         agente = crear_trpo(cfg, capa)
         historial, validaciones = [], []
+        iteracion = 0
         for iteracion in range(1, gcfg["iteraciones"] + 1):
-            medidas = iteracion_gail(agente, envoltorio, optimizador, pares, generador, cfg)
+            medidas = iteracion_gail(agente, envoltorio, optimizador, pares, generador, cfg,
+                                     callback)
             registrar(run, con_seccion(medidas, SECCION_TRPO), paso=agente.num_timesteps)
             historial.append({"iteracion": iteracion, **medidas})
-            if iteracion % gcfg["evaluar_cada"] and iteracion < gcfg["iteraciones"]:
+            detener = parar is not None and parar()
+            if (iteracion % gcfg["evaluar_cada"] and iteracion < gcfg["iteraciones"]
+                    and not detener):
                 continue
             validacion = evaluar_retorno(agente, cfg, gcfg["episodios_evaluacion"],
                                          semillas["evaluacion"],
@@ -721,6 +734,8 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
             registrar(run, {f"validacion/{clave}": validacion[clave] for clave in
                             ("retorno_medio", "retorno_desviacion", "longitud_media")},
                       paso=agente.num_timesteps)
+            if detener:
+                break
         segundos = time.perf_counter() - inicio
         normalizacion = estadisticas_normalizacion(capa)
     finally:
@@ -733,7 +748,7 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         "pares_expertos": pares.numero_transiciones,
         "huella_dataset": splits.huella_dataset,
         "semillas": {"base": int(ecfg["semilla_repeticiones"]), **semillas},
-        "iteraciones": gcfg["iteraciones"],
+        "iteraciones": iteracion,
         "pasos": int(agente.num_timesteps),
         "historial": historial,
         "validaciones": validaciones,

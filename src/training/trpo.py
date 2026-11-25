@@ -23,12 +23,14 @@ import hashlib
 import json
 import time
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from gymnasium import spaces
 from sb3_contrib import TRPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 
 from src.data.demostraciones import Politica, comprobar_espacios, config_demostraciones
@@ -110,7 +112,7 @@ def crear_trpo(cfg: dict, venv: VecEnv) -> TRPO:
     )
 
 
-def iteracion_trpo(modelo: TRPO) -> dict[str, float]:
+def iteracion_trpo(modelo: TRPO, callback: BaseCallback | None = None) -> dict[str, float]:
     """Da una iteración de TRPO: una recogida de n_steps × n_envs pasos y una actualización.
 
     Usa learn con reset_num_timesteps=False, así que el entorno no se reinicia
@@ -120,6 +122,11 @@ def iteracion_trpo(modelo: TRPO) -> dict[str, float]:
     de partidas de sb3 (ep_info_buffer), que si no acumula las últimas 100: así
     las medidas son solo de las partidas que terminan en esta iteración.
 
+    Args:
+        modelo: Agente TRPO de sb3-contrib.
+        callback: Callback de sb3 que recibe cada paso de la recogida (lo usa la
+            vista del dashboard); no cambia lo que se entrena.
+
     Returns:
         pasos acumulados, partidas terminadas en la iteración y su
         retorno_real_medio y longitud_media (nan si no terminó ninguna).
@@ -128,7 +135,8 @@ def iteracion_trpo(modelo: TRPO) -> dict[str, float]:
         raise ValueError("modelo debe ser un TRPO de sb3-contrib")
     if modelo.ep_info_buffer is not None:
         modelo.ep_info_buffer.clear()
-    modelo.learn(total_timesteps=modelo.n_steps * modelo.n_envs, reset_num_timesteps=False)
+    modelo.learn(total_timesteps=modelo.n_steps * modelo.n_envs, reset_num_timesteps=False,
+                 callback=callback)
     partidas = list(modelo.ep_info_buffer)
     return {
         "pasos": float(modelo.num_timesteps),
@@ -211,7 +219,8 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
     return evaluar_politica(modelo, cfg, episodios, semilla, determinista, estadisticas)
 
 
-def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
+def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | None = None,
+                     callback: BaseCallback | None = None) -> tuple[TRPO, dict[str, Any]]:
     """Entrena el experto TRPO con la recompensa real del entorno.
 
     Usa la sección trpo con los cambios de experto.trpo (config_trpo_experto).
@@ -228,6 +237,11 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
     Args:
         cfg: Configuración resuelta con las secciones entorno, trpo y experto.
         run: Run de W&B o None; recibe las medidas de cada iteración.
+        parar: Se consulta tras cada iteración; si devuelve True, se evalúa el
+            modelo de esa iteración y se termina como si fuera la última (el
+            «finalizar» del dashboard). Con None se entrena hasta el final.
+        callback: Callback de sb3 para cada paso de entrenamiento (la vista del
+            dashboard); no se usa al evaluar.
 
     Returns:
         El modelo y un resumen: pasos, iteraciones, mejor retorno y su
@@ -260,10 +274,11 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
         iteracion, alcanzado = 0, False
         while modelo.num_timesteps < ecfg["pasos_totales"]:
             iteracion += 1
-            medidas = iteracion_trpo(modelo)
+            medidas = iteracion_trpo(modelo, callback)
             registrar(run, con_seccion(medidas, SECCION_TRPO), paso=modelo.num_timesteps)
+            detener = parar is not None and parar()
             if (iteracion % ecfg["evaluar_cada"]
-                    and modelo.num_timesteps < ecfg["pasos_totales"]):
+                    and modelo.num_timesteps < ecfg["pasos_totales"] and not detener):
                 continue
             estadisticas = estadisticas_normalizacion(venv)
             evaluacion = evaluar_retorno(modelo, cfg, ecfg["episodios_evaluacion"],
@@ -279,6 +294,8 @@ def entrenar_experto(cfg: dict, run: Any = None) -> tuple[TRPO, dict[str, Any]]:
                          "estadisticas": copy.deepcopy(estadisticas)}
             if evaluacion["retorno_medio"] >= ecfg["retorno_objetivo"]:
                 alcanzado = True
+                break
+            if detener:
                 break
         modelo.policy.load_state_dict(mejor["pesos"])
         segundos = time.perf_counter() - inicio

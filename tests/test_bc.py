@@ -850,6 +850,51 @@ def test_entrenar_bc_no_supera_las_epocas_maximas(epocas_maximas):
     assert resultado["epocas"] == epocas_maximas
 
 
+def _entrenar_bc_con(continua: bool, parar=None, **cambios):
+    """Entrena BC con datos y semilla fijos; devuelve los pesos y el resultado."""
+    espacio = CONTINUO if continua else DISCRETO
+    estados, acciones = _datos_aprendibles(continua, n=64)
+    fijar_seed(3)
+    politica = _politica(continua)
+    resultado = entrenar_bc(politica, _loader(estados, acciones, espacio, barajar=True),
+                            _loader(estados, acciones, espacio),
+                            _cfg(**{"epocas_maximas": 6, "paciencia": 100, **cambios}),
+                            parar=parar)
+    return politica.state_dict(), resultado
+
+
+def _mismos_pesos(a: dict, b: dict) -> bool:
+    return a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
+
+
+@TIPOS
+def test_entrenar_bc_parar_nunca_no_cambia_nada(continua):
+    """El enganche del dashboard no toca lo que se entrena."""
+    pesos_a, resultado_a = _entrenar_bc_con(continua)
+    pesos_b, resultado_b = _entrenar_bc_con(continua, parar=lambda: False)
+    assert _mismos_pesos(pesos_a, pesos_b) and resultado_a == resultado_b
+    assert resultado_b["epocas"] == 6
+
+
+@TIPOS
+@pytest.mark.parametrize("parada", [1, 2, 4])
+def test_entrenar_bc_parado_es_como_si_esa_fuera_la_ultima_epoca(continua, parada):
+    consultas = []
+    pesos, resultado = _entrenar_bc_con(
+        continua, parar=lambda: consultas.append(1) or len(consultas) >= parada)
+    pesos_corto, resultado_corto = _entrenar_bc_con(continua, epocas_maximas=parada)
+    assert len(consultas) == resultado["epocas"] == parada
+    # Con los pesos de la mejor época hasta entonces, como al terminar.
+    assert _mismos_pesos(pesos, pesos_corto) and resultado == resultado_corto
+
+
+def test_entrenar_bc_parar_no_alarga_la_parada_temprana():
+    """Con la paciencia agotada para igual, aunque parar diga que no."""
+    _, resultado = _entrenar_bc_con(False, parar=lambda: False, epocas_maximas=50, paciencia=1)
+    _, sin_parar = _entrenar_bc_con(False, epocas_maximas=50, paciencia=1)
+    assert resultado == sin_parar
+
+
 @TIPOS
 def test_entrenar_bc_restaura_los_pesos_de_la_mejor_epoca(continua):
     """Validación con las acciones contrarias a train: empeora al aprender train."""
@@ -1074,6 +1119,17 @@ def test_entrenar_bc_subconjunto_resume_cantidad_y_pares(cantidad, continua):
                                          for i in splits.subconjuntos[cantidad])
     assert resumen["pares_validacion"] == sum(por_id[i].numero_pasos for i in splits.validacion)
     assert {"mejor_epoca", "epocas", "val_perdida"} <= resumen.keys()
+
+
+def test_entrenar_bc_subconjunto_pasa_parar_a_entrenar_bc():
+    trayectorias = _quince()
+    splits = _splits(trayectorias)
+    consultas = []
+    fijar_seed(0)
+    _, resumen = entrenar_bc_subconjunto(
+        trayectorias, splits, 4, OBSERVACION, DISCRETO, _cfg(epocas_maximas=10, paciencia=100),
+        crear_generador(0), parar=lambda: consultas.append(1) or len(consultas) >= 2)
+    assert len(consultas) == resumen["epocas"] == 2
 
 
 def test_entrenar_bc_subconjunto_normaliza_con_las_partidas_del_subconjunto():
