@@ -1,0 +1,27 @@
+{
+  "acrobot": {
+    "episodios": 50,
+    "semilla": 9000,
+    "determinista": true
+  },
+  "cartpole": {
+    "episodios": 50,
+    "semilla": 9000,
+    "determinista": true
+  },
+  "halfcheetah": {
+    "episodios": 50,
+    "semilla": 9000,
+    "determinista": true
+  },
+  "mountaincar": {
+    "episodios": 50,
+    "semilla": 9000,
+    "determinista": true
+  },
+  "reacher": {
+    "episodios": 50,
+    "semilla": 9000,
+    "determinista": true
+  }
+}

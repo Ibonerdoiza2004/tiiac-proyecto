@@ -16,8 +16,8 @@ const CONTENIDO = { laboratorio: Laboratorio, comparar: Comparar, biblioteca: Bi
  * Raíz del dashboard: pestaña activa y entorno elegido, comunes a todas las pestañas.
  *
  * Las tres pestañas siguen montadas aunque no se vean, para que una sesión del
- * Laboratorio no se pierda al cambiar de pestaña. Con una sesión abierta no se puede
- * cambiar de entorno.
+ * Laboratorio no se pierda al cambiar de pestaña. Con algo en marcha en cualquier
+ * pestaña (una sesión, un entrenamiento o una comparación) no se puede cambiar de entorno.
  *
  * @param {object} [props]
  * @param {string} [props.vistaInicial] Pestaña con la que arranca.
@@ -26,18 +26,25 @@ const CONTENIDO = { laboratorio: Laboratorio, comparar: Comparar, biblioteca: Bi
  *   jugar y ver al agente (por defecto, el que indique VITE_API).
  * @param {import('./api/entrenamiento.js').ApiEntrenamiento} [props.apiEntrenamiento] Backend
  *   de los entrenamientos (por defecto, el que indique VITE_API).
+ * @param {import('./api/comparar.js').ApiComparar} [props.apiComparar] Backend de Comparar
+ *   (por defecto, el que indique VITE_API).
  * @returns {JSX.Element} La aplicación.
  */
 export default function App({ vistaInicial = VISTA_INICIAL, entornoInicial = ENTORNO_INICIAL,
-  apiLaboratorio, apiEntrenamiento }) {
+  apiLaboratorio, apiEntrenamiento, apiComparar }) {
   const [vista, setVista] = useState(() => buscarVista(vistaInicial).id);
   const [entorno, setEntorno] = useState(() => buscarEntorno(entornoInicial).id);
   const [apis] = useState(() => {
-    const porDefecto = apiLaboratorio && apiEntrenamiento ? null : crearApisPorDefecto();
+    const porDefecto = apiLaboratorio && apiEntrenamiento && apiComparar ? null : crearApisPorDefecto();
     return { laboratorio: apiLaboratorio ?? porDefecto.laboratorio,
-      entrenamiento: apiEntrenamiento ?? porDefecto.entrenamiento };
+      entrenamiento: apiEntrenamiento ?? porDefecto.entrenamiento,
+      comparar: apiComparar ?? porDefecto.comparar };
   });
-  const [ocupado, setOcupado] = useState(false);
+  // Cada pestaña avisa por separado: si una se libera, las demás siguen bloqueando.
+  const [ocupadas, setOcupadas] = useState({});
+  const ocupado = Object.values(ocupadas).some(Boolean);
+  const [avisos] = useState(() => Object.fromEntries(VISTAS.map(({ id }) => [id,
+    (valor) => setOcupadas((antes) => (antes[id] === valor ? antes : { ...antes, [id]: valor }))])));
   const { titulo, subtitulo } = buscarVista(vista);
 
   return (
@@ -57,7 +64,7 @@ export default function App({ vistaInicial = VISTA_INICIAL, entornoInicial = ENT
           return (
             <div key={id} hidden={id !== vista}>
               <Contenido entorno={entorno} api={apis.laboratorio} apiEntrenamiento={apis.entrenamiento}
-                alCambiarOcupado={setOcupado} />
+                apiComparar={apis.comparar} alCambiarOcupado={avisos[id]} />
             </div>
           );
         })}

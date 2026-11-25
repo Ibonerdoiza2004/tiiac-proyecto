@@ -1,9 +1,10 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import App from './App.jsx';
 import { ENTORNOS } from './entornos.js';
+import { modelosIniciales } from './simulado/comparar.js';
 import { crearApiLaboratorioSimulada } from './simulado/laboratorio.js';
 import { VISTAS } from './vistas.js';
 
@@ -135,4 +136,36 @@ describe('App', () => {
       await waitFor(() => expect(selector()).toBeEnabled());
       expect(screen.getByRole('alert')).toHaveTextContent('sin ninguna partida completa');
     });
+
+  it('el entorno sigue bloqueado mientras quede algo en marcha en cualquier pestaña', async () => {
+    const usuario = userEvent.setup();
+    // Una comparación que se queda preparando: bloquea hasta que responda.
+    const apiComparar = { modelos: async (entorno) => modelosIniciales(entorno), comparaciones: async () => [],
+      crear: vi.fn(() => new Promise(() => {})), seguir: vi.fn() };
+    render(<App apiLaboratorio={crearApiLaboratorioSimulada({ dibujar: dibujoFalso })} apiComparar={apiComparar} />);
+    await usuario.click(screen.getByRole('button', { name: 'Iniciar sesión' }));
+    await waitFor(() => expect(selector()).toBeDisabled());
+
+    await usuario.click(pestana('Comparar'));
+    await usuario.click(await screen.findByRole('checkbox', { name: /Experto congelado/ }));
+    await usuario.click(screen.getByRole('button', { name: 'Iniciar comparación' }));
+    expect(apiComparar.crear).toHaveBeenCalledOnce();
+
+    await usuario.click(pestana('Laboratorio'));
+    await usuario.click(screen.getByRole('button', { name: 'Finalizar' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('sin ninguna partida completa'));
+    // La sesión ya no bloquea, pero la comparación sí.
+    expect(selector()).toBeDisabled();
+  });
+
+  it('la pestaña Comparar usa la API que recibe', async () => {
+    const usuario = userEvent.setup();
+    const apiComparar = { modelos: vi.fn(async () => []), comparaciones: vi.fn(async () => []), crear: vi.fn(),
+      seguir: vi.fn() };
+    render(<App vistaInicial="comparar" entornoInicial="acrobot" apiComparar={apiComparar} />);
+    expect(await screen.findByText(/No hay modelos de este entorno/)).toBeInTheDocument();
+    expect(apiComparar.modelos).toHaveBeenCalledWith('acrobot');
+    await usuario.selectOptions(selector(), 'reacher');
+    await waitFor(() => expect(apiComparar.comparaciones).toHaveBeenLastCalledWith('reacher'));
+  });
 });
