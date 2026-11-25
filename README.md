@@ -459,7 +459,14 @@ La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `ficha.json` con el nombre, el origen (congelado, entrega o dashboard) y la fecha. Un
 subconjunto de demostraciones no copia datos: su `subconjunto.json` dice de qué conjunto
 sale (con la huella de su NPZ) y qué partidas toma, enteras; si el conjunto falta o
-cambia, deja de ser válido. Para
+cambia, deja de ser válido. Para entrenar BC o GAIL, un solo conjunto con splits (como
+los congelados) se usa tal cual, igual que en la E1; cualquier otra elección se combina
+en un conjunto nuevo («combinado», sin partidas repetidas) con validación proporcional
+a cada origen, que se guarda en la biblioteca y se reutiliza si se vuelven a pedir los
+mismos datos (`src/data/seleccion.py`). Cada partida se reconoce por su NPZ y su partida
+originales, también si llega a través de un combinado, así que nunca cuenta dos veces ni
+acaba a la vez en train y en validación. Un conjunto cuyo `splits.json` no es de su NPZ
+sale como no válido. Para
 llenarla con los expertos y las demostraciones congelados y los BC y GAIL de la entrega,
 con una sesión de W&B (`wandb login`):
 

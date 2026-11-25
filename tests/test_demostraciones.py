@@ -1393,3 +1393,15 @@ def test_cargar_comprueba_los_metadatos_con_las_partidas(tmp_path):
     with pytest.raises(ValueError, match="9 no es de ninguna partida"):
         resumen_demostraciones(ruta)
 
+
+@pytest.mark.parametrize("recompensas", [np.array(["1", "2", "3"]), np.ones((3, 1)),
+                                         np.array([1.0, np.nan, 1.0])],
+                         ids=["texto", "dos_dimensiones", "nan"])
+def test_retornos_por_partida_rechaza_recompensas_raras(tmp_path, metadatos, recompensas):
+    from src.data.demostraciones import retornos_por_partida
+    valido = _guardar(tmp_path / "valido.npz", [_trayectoria(identificador=0)], metadatos)
+    ruta = _manipular(valido, tmp_path / "raro.npz",
+                      lambda c: c.update(trayectoria_0_recompensas_originales=recompensas))
+    with pytest.raises(ValueError, match="no son un vector de números finitos"):
+        retornos_por_partida(ruta)
+

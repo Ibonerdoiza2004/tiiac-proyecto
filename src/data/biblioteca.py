@@ -319,17 +319,26 @@ def _detalles_bc(carpeta: Path, gym: str) -> dict[str, Any]:
 
 
 def _detalles_demostraciones(carpeta: Path, gym: str) -> dict[str, Any]:
-    """Partidas, pares y fuente del manifiesto del NPZ."""
+    """Partidas, pares y fuente del manifiesto del NPZ; sus splits, si los tiene, tienen
+    que ser de ese NPZ y de sus partidas (si no, el conjunto no es válido: entrenar con él
+    fallaría)."""
     from src.data.demostraciones import (fuente_demostraciones,  # noqa: PLC0415
                                          resumen_demostraciones)
+    from src.data.splits import cargar_splits, huella_archivo  # noqa: PLC0415
 
     resumen = resumen_demostraciones(carpeta / "demostraciones.npz")
     entorno = resumen["metadatos"].get("entorno")
     if entorno != gym:
         raise ValueError(f"demostraciones.npz es de {entorno!r}, no de {gym}")
+    splits = carpeta / "splits.json"
+    if splits.is_file():
+        try:
+            cargar_splits(splits, huella_archivo(carpeta / "demostraciones.npz"),
+                          list(resumen["pasos_por_partida"]))
+        except (OSError, ValueError) as error:
+            raise ValueError(f"splits.json no corresponde a su NPZ: {error}") from None
     return {"tipo": "conjunto", "partidas": resumen["partidas"], "pares": resumen["pares"],
-            "fuente": fuente_demostraciones(resumen["metadatos"]),
-            "splits": (carpeta / "splits.json").is_file()}
+            "fuente": fuente_demostraciones(resumen["metadatos"]), "splits": splits.is_file()}
 
 
 def es_subconjunto(carpeta: Path) -> bool:

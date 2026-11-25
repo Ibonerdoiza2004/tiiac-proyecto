@@ -460,6 +460,40 @@ def resumen_demostraciones(ruta: str | Path) -> dict[str, Any]:
             "metadatos": manifiesto["metadatos"]}
 
 
+def retornos_por_partida(ruta: str | Path) -> dict[int, float]:
+    """Retorno de cada partida de un NPZ, leyendo solo sus recompensas.
+
+    Más ligero que cargar_demostraciones: no carga los estados ni las acciones ni
+    valida frente al entorno. Suma como retorno_partida, paso a paso.
+
+    Args:
+        ruta: Archivo NPZ guardado con guardar_demostraciones.
+
+    Returns:
+        El retorno de cada partida, por su id_episodio.
+
+    Raises:
+        ValueError: Si el archivo no se puede leer o sus recompensas no valen.
+    """
+    try:
+        archivo = np.load(Path(ruta), allow_pickle=False)
+    except (OSError, EOFError, ValueError, zipfile.BadZipFile) as error:
+        raise ValueError(f"No se pudo leer {Path(ruta).name} como NPZ: {error}") from error
+    retornos: dict[int, float] = {}
+    with archivo:
+        for episodio in _leer_manifiesto(archivo)["episodios"]:
+            recompensas = _leer_array(archivo, f"{episodio['prefijo']}_recompensas_originales")
+            if (recompensas.ndim != 1 or not np.issubdtype(recompensas.dtype, np.number)
+                    or not np.all(np.isfinite(recompensas))):
+                raise ValueError(f"Las recompensas de la partida {episodio['id_episodio']} "
+                                 "no son un vector de números finitos")
+            retorno = 0.0
+            for recompensa in recompensas.tolist():
+                retorno += recompensa
+            retornos[episodio["id_episodio"]] = retorno
+    return retornos
+
+
 def cargar_demostraciones(
     ruta: str | Path,
     espacio_observacion: spaces.Space,

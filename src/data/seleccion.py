@@ -15,6 +15,7 @@ el subconjunto deja de ser válido.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
@@ -24,16 +25,25 @@ from typing import Any
 import numpy as np
 from gymnasium import spaces
 
-from src.data.biblioteca import ARCHIVO_SUBCONJUNTO, Biblioteca, agregar_nuevo, es_id
-from src.data.demostraciones import (ARCHIVO_DEMOSTRACIONES, cargar_demostraciones,
-                                     config_demostraciones, resumen_demostraciones)
-from src.data.splits import (SplitsDemostraciones, comprobar_huella, huella_archivo,
-                             validar_splits)
+from src.data.biblioteca import (ARCHIVO_FICHA, ARCHIVO_SUBCONJUNTO, Biblioteca, agregar_nuevo,
+                                 es_id)
+from src.data.demostraciones import (ARCHIVO_DEMOSTRACIONES, ARCHIVO_SPLITS,
+                                     cargar_demostraciones, config_demostraciones,
+                                     fuente_demostraciones, guardar_demostraciones,
+                                     resumen_demostraciones, retornos_por_partida)
+from src.data.entornos import espacios_entorno
+from src.data.splits import (SplitsDemostraciones, cargar_splits, comprobar_huella,
+                             guardar_splits, huella_archivo, validar_splits)
 from src.data.tipos import Trayectoria, es_id_episodio
+from src.utils.archivos import turno_exclusivo
+from src.utils.seed import crear_generador, semillas_independientes, validar_semilla
 
 FORMATO_SUBCONJUNTO = "tiiac-subconjunto"
 VERSION_SUBCONJUNTO = 1
 CLAVES_SUBCONJUNTO = frozenset({"formato", "version", "conjunto", "huella_dataset", "partidas"})
+# Cerrojo de los combinados, en la carpeta de la biblioteca (oculto para el índice): dos
+# entrenamientos que piden los mismos datos a la vez no crean dos combinados iguales.
+ARCHIVO_CERROJO_COMBINADOS = ".combinados.lock"
 
 
 def comprobar_subconjunto(datos: object) -> dict[str, Any]:
@@ -327,4 +337,229 @@ def repartir_combinado(metadatos: Mapping[str, Any], huella_dataset: str, propor
         huella_dataset=huella_dataset)
     validar_splits(splits, [i for ids in grupos.values() for i in ids])
     return splits
+
+
+# --- datos de una petición de entrenamiento --------------------------------------------
+
+def _elemento_datos(biblioteca: Biblioteca, id_elemento: object, entorno: str) -> dict[str, Any]:
+    """Un conjunto o subconjunto válido de demostraciones del entorno."""
+    if not isinstance(id_elemento, str):
+        raise ValueError(f"Los datos se indican por su id de la biblioteca, no {id_elemento!r}")
+    try:
+        elemento = biblioteca.obtener(id_elemento)
+    except KeyError:
+        raise ValueError(f"No existen las demostraciones {id_elemento}") from None
+    if elemento["tipo"] != "demostraciones":
+        raise ValueError(f"{id_elemento} no son demostraciones")
+    if elemento["entorno"] != entorno:
+        raise ValueError(f"{id_elemento} son demostraciones de {elemento['entorno']}, no de "
+                         f"{entorno}")
+    if not elemento["valido"]:
+        raise ValueError(f"Las demostraciones {id_elemento} no son válidas: {elemento['motivo']}")
+    return elemento
+
+
+def _comprobar_ids(ids: object) -> list[str]:
+    """Lista no vacía de ids sin repetir."""
+    if isinstance(ids, (str, bytes, Mapping)) or not isinstance(ids, Sequence) or not ids:
+        raise ValueError("Hay que elegir al menos un conjunto de demostraciones")
+    if len(set(ids)) != len(ids):
+        raise ValueError("Hay datos repetidos en la selección")
+    return list(ids)
+
+
+def clave_seleccion(metadatos: Mapping[str, Any], proporcion: float, semilla: int) -> str:
+    """Huella de unos datos combinados y de su reparto: con la misma, el mismo combinado.
+
+    Depende solo de qué partidas hay (huella del NPZ de origen e id) y de con qué se
+    reparten (proporción y semilla), no del orden en que se eligieron.
+    """
+    contenido = {"partidas": sorted([p["huella_dataset"], int(p["id_original"])]
+                                    for p in metadatos["partidas"]),
+                 "proporcion": proporcion, "semilla": int(semilla)}
+    return hashlib.sha256(json.dumps(contenido, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _combinado_existente(biblioteca: Biblioteca, entorno: str, clave: str) -> str | None:
+    """Id de un combinado válido con sus splits y esa clave, si ya está en la biblioteca."""
+    for elemento in biblioteca.listar(entorno, ("demostraciones",)):
+        if not (elemento["valido"] and elemento["fuente"] == "combinado"
+                and elemento["detalles"].get("splits")):
+            continue
+        ficha = json.loads((biblioteca.ruta(elemento["id"]) / ARCHIVO_FICHA)
+                           .read_text(encoding="utf-8"))
+        if ficha.get("seleccion") == clave:
+            return elemento["id"]
+    return None
+
+
+def identidades_originales(metadatos: Mapping[str, Any], huella: str,
+                           ids: Sequence[int]) -> dict[int, tuple[str, int]]:
+    """De qué NPZ y partida originales sale cada partida de unas demostraciones.
+
+    Una partida de un combinado es una copia de otra: su identidad es la de su origen
+    (sus metadatos dicen la huella y el id originales). Las de cualquier otro NPZ son
+    originales: su huella y su id. Así, una partida elegida por dos caminos (un conjunto
+    y un combinado que la incluye, o un subconjunto de ese combinado) cuenta una vez y
+    nunca acaba a la vez en train y en validación.
+
+    Args:
+        metadatos: Metadatos del NPZ.
+        huella: Huella del NPZ.
+        ids: id_episodio de las partidas que se toman de él.
+
+    Returns:
+        (huella original, id original) de cada id.
+    """
+    if fuente_demostraciones(metadatos) == "combinado":
+        origen = {p["id_episodio"]: (p["huella_dataset"], int(p["id_original"]))
+                  for p in metadatos["partidas"]}
+        return {int(i): origen[i] for i in ids}
+    return {int(i): (huella, int(i)) for i in ids}
+
+
+def _por_origen(partidas: Sequence[Trayectoria], identidades: Mapping[int, tuple[str, int]],
+                ) -> list[tuple[str, list[Trayectoria]]]:
+    """Partidas agrupadas por su NPZ original, con su id original."""
+    grupos: dict[str, list[Trayectoria]] = {}
+    for partida in partidas:
+        huella, original = identidades[partida.id_episodio]
+        grupos.setdefault(huella, []).append(dataclasses.replace(partida, id_episodio=original))
+    return list(grupos.items())
+
+
+def _npz_de(biblioteca: Biblioteca, elemento: Mapping[str, Any]) -> tuple[Path, list[int] | None]:
+    """NPZ del que salen unas demostraciones y las partidas que toman (None: todas)."""
+    carpeta = biblioteca.ruta(elemento["id"])
+    if elemento["detalles"].get("tipo") == "subconjunto":
+        datos = leer_subconjunto(carpeta)
+        return biblioteca.ruta(datos["conjunto"]) / ARCHIVO_DEMOSTRACIONES, datos["partidas"]
+    return carpeta / ARCHIVO_DEMOSTRACIONES, None
+
+
+def _origenes(biblioteca: Biblioteca, elementos: Sequence[Mapping[str, Any]],
+              espacios: tuple[spaces.Space, spaces.Space]) -> list[tuple[str, list[Trayectoria]]]:
+    """(huella del NPZ original, partidas con su id original) de lo elegido."""
+    origenes = []
+    for elemento in elementos:
+        npz, _ = _npz_de(biblioteca, elemento)
+        if elemento["detalles"].get("tipo") == "subconjunto":
+            partidas, datos = cargar_subconjunto(biblioteca, elemento["id"], *espacios)
+            huella = datos["huella_dataset"]
+            metadatos = resumen_demostraciones(npz)["metadatos"]
+        else:
+            partidas, metadatos = cargar_demostraciones(npz, *espacios)
+            huella = huella_archivo(npz)
+        identidades = identidades_originales(metadatos, huella,
+                                             [p.id_episodio for p in partidas])
+        origenes.extend(_por_origen(partidas, identidades))
+    return origenes
+
+
+def preparar_datos(biblioteca: Biblioteca, ids: Sequence[str], cfg: Mapping[str, Any]) -> str:
+    """Conjunto con splits con el que se entrena una petición de BC o GAIL.
+
+    - Un solo conjunto que ya tiene splits (como los congelados): ese mismo, así que
+      se entrena exactamente como en la E1.
+    - En otro caso (varios, un subconjunto o un conjunto sin splits): se combinan sus
+      partidas sin repetir, por su NPZ y partida originales también si alguna llega a
+      través de un combinado (identidades_originales, combinar_demostraciones); se
+      reparten por NPZ original
+      (repartir_combinado, con la proporción del perfil y la semilla de los splits de
+      la E1, la segunda de semillas_independientes(demostraciones.semilla, 2)) y se
+      guarda en la biblioteca como conjunto combinado, con origen «dashboard». Si ya
+      hay uno con las mismas partidas y el mismo reparto, se reutiliza.
+
+    Args:
+        biblioteca: Índice de la biblioteca.
+        ids: Conjuntos y subconjuntos elegidos (la lista ``datos`` de la petición).
+        cfg: Configuración resuelta del entorno (origen.entorno, entorno.id y
+            demostraciones).
+
+    Returns:
+        El id del conjunto con splits que hay que cargar (barrido.cargar_datos con su
+        carpeta).
+
+    Raises:
+        ValueError: Si la selección está vacía, repite, o algún elemento no existe, no
+            es de demostraciones o de ese entorno, o no es válido.
+    """
+    entorno, gym = cfg["origen"]["entorno"], cfg["entorno"]["id"]
+    ids = _comprobar_ids(ids)
+    elementos = [_elemento_datos(biblioteca, i, entorno) for i in ids]
+    if (len(elementos) == 1 and elementos[0]["detalles"].get("tipo") == "conjunto"
+            and elementos[0]["detalles"].get("splits")):
+        return elementos[0]["id"]
+    proporcion = proporcion_validacion(cfg)
+    semilla_splits = semillas_independientes(
+        validar_semilla(config_demostraciones(cfg)["semilla"]), 2)[1]
+    espacios = espacios_entorno(dict(cfg))
+    with turno_exclusivo(biblioteca.raiz / ARCHIVO_CERROJO_COMBINADOS):
+        partidas, metadatos = combinar_demostraciones(_origenes(biblioteca, elementos, espacios),
+                                                      gym)
+        clave = clave_seleccion(metadatos, proporcion, semilla_splits)
+        existente = _combinado_existente(biblioteca, entorno, clave)
+        if existente is not None:
+            return existente
+
+        def escribir(carpeta: Path) -> None:
+            """Guarda el NPZ combinado y sus splits."""
+            npz = guardar_demostraciones(carpeta / ARCHIVO_DEMOSTRACIONES, partidas, metadatos,
+                                         *espacios)
+            guardar_splits(carpeta / ARCHIVO_SPLITS,
+                           repartir_combinado(metadatos, huella_archivo(npz), proporcion,
+                                              crear_generador(semilla_splits)))
+
+        nombre = f"Combinado · {gym.split('-v')[0]} · {len(partidas)} partidas"
+        return agregar_nuevo(biblioteca.raiz, entorno, "demostraciones", nombre, "dashboard",
+                             escribir, fuente="combinado", seleccion=clave)["id"]
+
+
+def resumen_seleccion(biblioteca: Biblioteca, ids: Sequence[str],
+                      entorno: str) -> dict[str, int]:
+    """Partidas y pares de unos datos elegidos, sin repetir, sin cargar las partidas.
+
+    Una partida que llega por varios caminos (un conjunto y un subconjunto suyo, o un
+    combinado que la incluye) cuenta una vez, como al combinar (identidades_originales).
+
+    Args:
+        biblioteca: Índice de la biblioteca.
+        ids: Conjuntos y subconjuntos elegidos.
+        entorno: Clave del entorno.
+
+    Returns:
+        ``{"partidas", "pares"}``.
+
+    Raises:
+        ValueError: Como preparar_datos.
+    """
+    pasos_de: dict[tuple[str, int], int] = {}
+    for elemento in (_elemento_datos(biblioteca, i, entorno) for i in _comprobar_ids(ids)):
+        npz, elegidas = _npz_de(biblioteca, elemento)
+        resumen = resumen_demostraciones(npz)
+        pasos = resumen["pasos_por_partida"]
+        elegidas = list(pasos) if elegidas is None else elegidas
+        identidades = identidades_originales(resumen["metadatos"], huella_archivo(npz),
+                                             elegidas)
+        pasos_de.update({identidades[i]: pasos[i] for i in elegidas})
+    return {"partidas": len(pasos_de), "pares": sum(pasos_de.values())}
+
+
+def retornos_train(biblioteca: Biblioteca, id_conjunto: str) -> list[float]:
+    """Retorno de cada partida de train de un conjunto con splits, en el orden de train.
+
+    Ayuda a elegir cuántas partidas usar en BC y GAIL: con N, se entrena con las N
+    primeras de esta lista.
+
+    Raises:
+        ValueError: Si no es un conjunto válido con splits.
+    """
+    elemento = _conjunto(biblioteca, id_conjunto)
+    if not elemento["detalles"].get("splits"):
+        raise ValueError(f"El conjunto {id_conjunto} no tiene splits")
+    carpeta = biblioteca.ruta(id_conjunto)
+    npz = carpeta / ARCHIVO_DEMOSTRACIONES
+    retornos = retornos_por_partida(npz)
+    splits = cargar_splits(carpeta / ARCHIVO_SPLITS, huella_archivo(npz), list(retornos))
+    return [retornos[i] for i in splits.train]
 

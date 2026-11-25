@@ -19,14 +19,19 @@ from src.app.rutas_biblioteca import como_demostracion
 from src.data.biblioteca import (ARCHIVO_SUBCONJUNTO, Biblioteca, agregar, agregar_nuevo,
                                  crear_ficha, nuevo_id)
 from src.data.demostraciones import (cargar_demostraciones, fuente_demostraciones,
-                                     guardar_demostraciones, resumen_demostraciones)
+                                     guardar_demostraciones, resumen_demostraciones,
+                                     retorno_partida, retornos_por_partida)
 from src.data.seleccion import (FORMATO_SUBCONJUNTO, VERSION_SUBCONJUNTO, cargar_subconjunto,
-                                combinar_demostraciones, comprobar_subconjunto,
-                                crear_subconjunto, proporcion_validacion, repartir_combinado)
-from src.data.splits import huella_archivo, validar_splits
+                                clave_seleccion, combinar_demostraciones,
+                                comprobar_subconjunto, crear_subconjunto,
+                                identidades_originales, preparar_datos,
+                                proporcion_validacion, repartir_combinado, resumen_seleccion,
+                                retornos_train)
+from src.data.splits import (cargar_splits, crear_splits, guardar_splits, huella_archivo,
+                             validar_splits)
 from src.data.tipos import Trayectoria
 from src.utils.configuracion import resolver_configuracion
-from src.utils.seed import crear_generador
+from src.utils.seed import crear_generador, semillas_independientes
 
 OBSERVACION = spaces.Box(-np.inf, np.inf, (4,), np.float32)
 DISCRETA = spaces.Discrete(3)
@@ -500,8 +505,7 @@ def test_repartir_comprueba_la_huella_del_combinado():
                                                ("acrobot", UN_TERCIO), ("reacher", UN_SEXTO),
                                                ("halfcheetah", UN_SEXTO)])
 def test_la_proporcion_es_la_de_cada_perfil(entorno, esperada):
-    cfg = resolver_configuracion(Path(__file__).resolve().parent.parent / "configs" / "default.yaml",
-                                 entorno)
+    cfg = resolver_configuracion(CONFIG, entorno)
     assert proporcion_validacion(cfg) == pytest.approx(esperada)
 
 
@@ -509,3 +513,293 @@ def test_la_proporcion_necesita_la_seccion_demostraciones():
     with pytest.raises(ValueError, match="demostraciones"):
         proporcion_validacion({})
 
+
+# --- datos de una petición de entrenamiento --------------------------------------------
+
+CONFIG = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+CARTPOLE_OBS = spaces.Box(np.array([-4.8, -np.inf, -0.418, -np.inf], np.float32),
+                          np.array([4.8, np.inf, 0.418, np.inf], np.float32))
+
+
+def _cfg() -> dict:
+    return resolver_configuracion(CONFIG, "cartpole")
+
+
+def _partida_cartpole(pasos: int, identificador: int, base: float = 0.0) -> Trayectoria:
+    """Partida que cabe en los espacios de CartPole, con recompensas 1, 2, 3..."""
+    estados = (np.arange((pasos + 1) * 4, dtype=np.float32).reshape(pasos + 1, 4) * 1e-3
+               + np.float32(base))
+    terminados = np.zeros(pasos, dtype=bool)
+    terminados[-1] = True
+    return Trayectoria(identificador, estados[:-1], np.arange(pasos, dtype=np.int64) % 2,
+                       estados[1:], np.arange(1, pasos + 1, dtype=np.float32), terminados,
+                       np.zeros(pasos, dtype=bool))
+
+
+def _anadir_cartpole(biblioteca: Biblioteca, pasos: dict[int, int], base: float = 0.0,
+                     splits: bool = False) -> str:
+    """Conjunto de CartPole en la biblioteca; con splits, de 2/3 train y 1/3 validación."""
+    partidas = [_partida_cartpole(p, i, base) for i, p in pasos.items()]
+
+    def escribir(carpeta: Path) -> None:
+        npz = guardar_demostraciones(carpeta / "demostraciones.npz", partidas,
+                                     _metadatos_experto(), CARTPOLE_OBS, spaces.Discrete(2))
+        if splits:
+            validacion = len(partidas) // 3
+            guardar_splits(carpeta / "splits.json", crear_splits(
+                partidas, len(partidas) - validacion, validacion, [1], crear_generador(0),
+                huella_archivo(npz)))
+
+    return agregar_nuevo(biblioteca.raiz, "cartpole", "demostraciones", "C", "dashboard",
+                         escribir)["id"]
+
+
+def _cargar(biblioteca: Biblioteca, id_conjunto: str):
+    carpeta = biblioteca.ruta(id_conjunto)
+    partidas, metadatos = cargar_demostraciones(carpeta / "demostraciones.npz", CARTPOLE_OBS,
+                                                spaces.Discrete(2))
+    splits = cargar_splits(carpeta / "splits.json", huella_archivo(carpeta / "demostraciones.npz"),
+                           [p.id_episodio for p in partidas])
+    return partidas, metadatos, splits
+
+
+def test_un_conjunto_con_splits_se_usa_tal_cual(biblioteca):
+    """Como los congelados: se entrena exactamente como en la E1."""
+    conjunto = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5}, splits=True)
+    assert preparar_datos(biblioteca, [conjunto], _cfg()) == conjunto
+    assert [e["id"] for e in biblioteca.listar()] == [conjunto]  # no crea nada
+
+
+def test_un_conjunto_sin_splits_se_reparte_en_un_combinado(biblioteca):
+    conjunto = _anadir_cartpole(biblioteca, {i: 3 + i for i in range(6)})
+    nuevo = preparar_datos(biblioteca, [conjunto], _cfg())
+    assert nuevo != conjunto
+    elemento = biblioteca.obtener(nuevo)
+    assert elemento["valido"] and elemento["fuente"] == "combinado"
+    assert elemento["origen"] == "dashboard" and elemento["detalles"]["splits"]
+    assert elemento["nombre"] == "Combinado · CartPole · 6 partidas"
+    partidas, metadatos, splits = _cargar(biblioteca, nuevo)
+    assert [p.numero_pasos for p in partidas] == [3, 4, 5, 6, 7, 8]
+    assert len(splits.validacion) == 2 and len(splits.train) == 4  # 1/3 de CartPole
+    # Con la semilla de los splits de la E1 y la proporción del perfil.
+    semilla = semillas_independientes(_cfg()["demostraciones"]["semilla"], 2)[1]
+    assert splits == repartir_combinado(metadatos, splits.huella_dataset, 5 / 15,
+                                        crear_generador(semilla))
+
+
+def test_varios_conjuntos_y_subconjuntos_se_combinan_sin_repetir(biblioteca):
+    a = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5})
+    b = _anadir_cartpole(biblioteca, {0: 6, 1: 7, 2: 8}, base=0.2)
+    sub_a = crear_subconjunto(biblioteca, a, [1, 2], "s")["id"]
+    combinado = preparar_datos(biblioteca, [sub_a, a, b], _cfg())
+    partidas, metadatos, splits = _cargar(biblioteca, combinado)
+    assert len(partidas) == 6  # las de sub_a ya estaban en a
+    assert resumen_seleccion(biblioteca, [sub_a, a, b], "cartpole") == {
+        "partidas": 6, "pares": 3 + 4 + 5 + 6 + 7 + 8}
+    huellas = {p["huella_dataset"] for p in metadatos["partidas"]}
+    assert huellas == {huella_archivo(biblioteca.ruta(x) / "demostraciones.npz") for x in (a, b)}
+    # Cada origen aporta a validación su tercio.
+    origen = {p["id_episodio"]: p["huella_dataset"] for p in metadatos["partidas"]}
+    assert sorted(origen[i] for i in splits.validacion) == sorted(huellas)
+
+
+def test_los_mismos_datos_reutilizan_el_combinado(biblioteca):
+    a = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5})
+    b = _anadir_cartpole(biblioteca, {0: 6, 1: 7}, base=0.2)
+    primero = preparar_datos(biblioteca, [a, b], _cfg())
+    total = len(biblioteca.listar())
+    assert preparar_datos(biblioteca, [b, a], _cfg()) == primero  # en otro orden
+    sub_b = crear_subconjunto(biblioteca, b, [0, 1], "todo b")["id"]
+    assert preparar_datos(biblioteca, [a, sub_b], _cfg()) == primero  # las mismas partidas
+    assert len(biblioteca.listar()) == total + 1  # solo el subconjunto nuevo
+    # Otras partidas: otro combinado.
+    assert preparar_datos(biblioteca, [a], _cfg()) not in (primero, a)
+
+
+def test_otro_reparto_es_otro_combinado(biblioteca):
+    a = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5})
+    cfg = _cfg()
+    primero = preparar_datos(biblioteca, [a], cfg)
+    cfg["demostraciones"]["semilla"] = cfg["demostraciones"]["semilla"] + 1
+    assert preparar_datos(biblioteca, [a], cfg) != primero
+
+
+def test_la_clave_de_seleccion_no_depende_del_orden():
+    metadatos = {"partidas": [{"huella_dataset": HUELLA_A, "id_original": 2},
+                              {"huella_dataset": HUELLA_B, "id_original": 0}]}
+    al_reves = {"partidas": metadatos["partidas"][::-1]}
+    assert clave_seleccion(metadatos, 0.5, 1) == clave_seleccion(al_reves, 0.5, 1)
+    assert clave_seleccion(metadatos, 0.5, 1) != clave_seleccion(metadatos, 0.5, 2)
+    assert clave_seleccion(metadatos, 0.5, 1) != clave_seleccion(metadatos, 0.4, 1)
+
+
+def test_preparar_rechaza_datos_que_no_valen(biblioteca):
+    conjunto = _anadir_cartpole(biblioteca, {0: 3, 1: 4})
+    acrobot = agregar_nuevo(biblioteca.raiz, "acrobot", "demostraciones", "A", "dashboard",
+                            lambda c: _guardar_conjunto(c / "demostraciones.npz",
+                                                        gym="Acrobot-v1"))["id"]
+    roto = agregar_nuevo(biblioteca.raiz, "cartpole", "demostraciones", "roto", "dashboard",
+                         lambda c: (c / "demostraciones.npz").write_bytes(b"no"))["id"]
+    casos = [([], "al menos un conjunto"), ("a" * 12, "al menos un conjunto"),
+             ([conjunto, conjunto], "repetidos"), (["b" * 12], "No existen"),
+             ([3], "por su id"), ([acrobot], "de acrobot, no de cartpole"),
+             ([roto], "no son válidas")]
+    for ids, mensaje in casos:
+        with pytest.raises(ValueError, match=mensaje):
+            preparar_datos(biblioteca, ids, _cfg())
+        with pytest.raises(ValueError, match=mensaje):
+            resumen_seleccion(biblioteca, ids, "cartpole")
+
+
+def test_preparar_con_un_modelo_no_vale(biblioteca):
+    def escribir_experto(carpeta: Path) -> None:
+        (carpeta / "modelo.zip").write_bytes(b"x")
+        (carpeta / "experto.json").write_text("{}")
+
+    experto = agregar_nuevo(biblioteca.raiz, "cartpole", "experto", "e", "dashboard",
+                            escribir_experto)["id"]
+    with pytest.raises(ValueError, match="no son demostraciones"):
+        preparar_datos(biblioteca, [experto], _cfg())
+
+
+def test_retornos_de_train_en_su_orden(biblioteca):
+    conjunto = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5, 3: 6, 4: 7, 5: 8}, splits=True)
+    partidas, _, splits = _cargar(biblioteca, conjunto)
+    por_id = {p.id_episodio: p for p in partidas}
+    assert retornos_train(biblioteca, conjunto) == [retorno_partida(por_id[i])
+                                                    for i in splits.train]
+    # Recompensas 1, 2, 3...: una partida de n pasos devuelve n(n+1)/2.
+    assert sorted(retornos_train(biblioteca, conjunto)) == sorted(
+        n * (n + 1) / 2 for n in (por_id[i].numero_pasos for i in splits.train))
+
+
+def test_retornos_de_train_necesitan_un_conjunto_con_splits(biblioteca):
+    sin_splits = _anadir_cartpole(biblioteca, {0: 3, 1: 4})
+    with pytest.raises(ValueError, match="no tiene splits"):
+        retornos_train(biblioteca, sin_splits)
+    sub = crear_subconjunto(biblioteca, sin_splits, [0], "s")["id"]
+    with pytest.raises(ValueError, match="no es un conjunto"):
+        retornos_train(biblioteca, sub)
+
+
+def test_retornos_por_partida_suma_como_retorno_partida(tmp_path):
+    partidas = [_partida_cartpole(5, 0), _partida_cartpole(3, 9)]
+    ruta = guardar_demostraciones(tmp_path / "d.npz", partidas, _metadatos_experto(),
+                                  CARTPOLE_OBS, spaces.Discrete(2))
+    assert retornos_por_partida(ruta) == {0: retorno_partida(partidas[0]),
+                                          9: retorno_partida(partidas[1])}
+    (tmp_path / "malo.npz").write_bytes(b"no es un npz")
+    with pytest.raises(ValueError, match="No se pudo leer"):
+        retornos_por_partida(tmp_path / "malo.npz")
+
+
+
+def test_preparar_un_combinado_se_hace_por_turnos(biblioteca, monkeypatch):
+    """Dos entrenamientos con los mismos datos a la vez no crean dos combinados."""
+    from contextlib import contextmanager
+
+    from src.data import seleccion
+    usados = []
+
+    @contextmanager
+    def espia(cerrojo):
+        usados.append(Path(cerrojo))
+        yield
+
+    monkeypatch.setattr(seleccion, "turno_exclusivo", espia)
+    conjunto = _anadir_cartpole(biblioteca, {0: 3, 1: 4})
+    preparar_datos(biblioteca, [conjunto], _cfg())
+    assert usados == [biblioteca.raiz / seleccion.ARCHIVO_CERROJO_COMBINADOS]
+    # El cerrojo está oculto: no sale en la biblioteca.
+    assert all(not e["id"].startswith(".") for e in biblioteca.listar())
+
+
+def test_solo_se_reutilizan_combinados(biblioteca):
+    """Un conjunto de otra fuente con la misma clave en su ficha no se toma por el combinado."""
+    a = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5})
+    cfg = _cfg()
+    semilla = semillas_independientes(cfg["demostraciones"]["semilla"], 2)[1]
+    huella = huella_archivo(biblioteca.ruta(a) / "demostraciones.npz")
+    clave = clave_seleccion({"partidas": [{"huella_dataset": huella, "id_original": i}
+                                          for i in range(3)]}, 5 / 15, semilla)
+    partidas = [_partida_cartpole(p, i) for i, p in {0: 3, 1: 4, 2: 5}.items()]
+
+    def escribir(carpeta: Path) -> None:
+        npz = guardar_demostraciones(carpeta / "demostraciones.npz", partidas,
+                                     _metadatos_experto(), CARTPOLE_OBS, spaces.Discrete(2))
+        guardar_splits(carpeta / "splits.json", crear_splits(
+            partidas, 2, 1, [1], crear_generador(0), huella_archivo(npz)))
+
+    impostor = agregar_nuevo(biblioteca.raiz, "cartpole", "demostraciones", "I", "dashboard",
+                             escribir, seleccion=clave)["id"]
+    combinado = preparar_datos(biblioteca, [a], cfg)
+    assert combinado not in (a, impostor)
+    assert biblioteca.obtener(combinado)["fuente"] == "combinado"
+
+
+def test_el_resumen_de_un_subconjunto_cuenta_solo_sus_partidas(biblioteca):
+    a = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5})
+    sub = crear_subconjunto(biblioteca, a, [0, 2], "s")["id"]
+    assert resumen_seleccion(biblioteca, [sub], "cartpole") == {"partidas": 2, "pares": 3 + 5}
+
+
+# --- partidas que llegan a través de un combinado (auditoría del 2026-11-26) -------------
+
+def test_un_combinado_con_su_conjunto_original_no_repite_partidas(biblioteca):
+    """Regresión: el combinado traía las mismas partidas con otra huella; 6 contaban 12
+    y una misma partida podía acabar a la vez en train y en validación."""
+    a = _anadir_cartpole(biblioteca, {i: 3 + i for i in range(6)})
+    combinado = preparar_datos(biblioteca, [a], _cfg())
+    assert resumen_seleccion(biblioteca, [a, combinado], "cartpole") == {
+        "partidas": 6, "pares": sum(3 + i for i in range(6))}
+    total = len(biblioteca.listar())
+    # Son los mismos datos que [a]: se reutiliza el mismo combinado.
+    assert preparar_datos(biblioteca, [a, combinado], _cfg()) == combinado
+    assert preparar_datos(biblioteca, [combinado], _cfg()) == combinado  # tiene splits
+    assert len(biblioteca.listar()) == total
+
+
+def test_un_subconjunto_de_un_combinado_cuenta_por_sus_partidas_originales(biblioteca):
+    a = _anadir_cartpole(biblioteca, {i: 3 + i for i in range(6)})
+    combinado = preparar_datos(biblioteca, [a], _cfg())
+    sub = crear_subconjunto(biblioteca, combinado, [0, 1], "del combinado")["id"]
+    assert resumen_seleccion(biblioteca, [a, sub], "cartpole")["partidas"] == 6
+    assert preparar_datos(biblioteca, [a, sub], _cfg()) == combinado
+    assert resumen_seleccion(biblioteca, [sub], "cartpole") == {"partidas": 2, "pares": 3 + 4}
+
+
+def test_un_combinado_de_un_combinado_apunta_a_los_npz_originales(biblioteca):
+    a = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5})
+    b = _anadir_cartpole(biblioteca, {0: 6, 1: 7, 2: 8}, base=0.2)
+    de_a = preparar_datos(biblioteca, [a], _cfg())
+    nuevo = preparar_datos(biblioteca, [de_a, b], _cfg())
+    partidas, metadatos, splits = _cargar(biblioteca, nuevo)
+    originales = {huella_archivo(biblioteca.ruta(x) / "demostraciones.npz") for x in (a, b)}
+    assert {p["huella_dataset"] for p in metadatos["partidas"]} == originales
+    assert len(partidas) == 6
+    # Cada partida original, una sola vez: ninguna puede estar en train y en validación.
+    identidades = [(p["huella_dataset"], p["id_original"]) for p in metadatos["partidas"]]
+    assert len(set(identidades)) == len(identidades)
+    assert not set(splits.train) & set(splits.validacion)
+
+
+def test_identidades_originales():
+    experto = {"entorno": "CartPole-v1", "experto": "x", "procedencia": {},
+               "configuracion_experto": {}}
+    assert identidades_originales(experto, HUELLA_A, [3, 0]) == {3: (HUELLA_A, 3),
+                                                                 0: (HUELLA_A, 0)}
+    combinado = {"fuente": "combinado", "entorno": "CartPole-v1", "partidas": [
+        {"id_episodio": 0, "huella_dataset": HUELLA_B, "id_original": 7},
+        {"id_episodio": 1, "huella_dataset": HUELLA_C, "id_original": 2}]}
+    assert identidades_originales(combinado, HUELLA_A, [1]) == {1: (HUELLA_C, 2)}
+
+
+
+def test_las_partidas_de_un_combinado_recuperan_su_id_original(biblioteca):
+    """En un combinado de A y B, las de B tienen ids nuevos (3, 4, 5): elegirlo con B
+    tiene que reconocerlas por su id en B (0, 1, 2), no por el del combinado."""
+    a = _anadir_cartpole(biblioteca, {0: 3, 1: 4, 2: 5})
+    b = _anadir_cartpole(biblioteca, {0: 6, 1: 7, 2: 8}, base=0.2)
+    de_ab = preparar_datos(biblioteca, [a, b], _cfg())
+    assert resumen_seleccion(biblioteca, [de_ab, b], "cartpole")["partidas"] == 6
+    assert preparar_datos(biblioteca, [de_ab, b], _cfg()) == de_ab
