@@ -475,11 +475,20 @@ Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, �
 contadores de partidas y pares y la revisión de qué partidas y pares guardar; y
 «Entrenar experto» y «Entrenar e imitar» (GAIL y BC): formulario con todos los
 hiperparámetros del perfil, elección de demostraciones, curvas en directo, vista de las
-partidas (experto y GAIL) y pausar, reanudar y finalizar. Mientras no existe el backend, la
+partidas (experto y GAIL) y pausar, reanudar y finalizar. En Comparar: elegir modelos de la
+biblioteca (y el agente aleatorio como referencia) y cuántas partidas (por defecto, las de
+la evaluación de la E1, con su semilla), verlas jugar si se quiere, pausar, reanudar,
+finalizar con lo jugado o cancelar, y resultados en directo (media ± desviación, última
+partida, puntuación de cada partida e historial de entrenamiento de cada modelo); las
+comparaciones anteriores se vuelven a abrir desde la lista. Comparar usa ya la API real
+para la biblioteca y para seguir el trabajo (protocolo de `/api/trabajos`); crearla
+(`POST /api/comparaciones`) llega con `comparar-api`, y lo que espera la interfaz está
+descrito en `web/src/api/comparar.js`. Mientras no existe el backend, la
 interfaz usa uno simulado en el navegador (`web/src/simulado/`): CartPole y MountainCar
 con las ecuaciones de Gymnasium, animaciones de ejemplo en los demás y curvas de
-entrenamiento inventadas; no entrena ni guarda nada de verdad. Los hiperparámetros del
-simulado salen de `configs/` con `npm run perfiles` (un test avisa si no están al día). Con
+entrenamiento y retornos inventados; no entrena ni guarda nada de verdad. Los
+hiperparámetros del simulado y las partidas y la semilla de la evaluación salen de
+`configs/` con `npm run perfiles` (un test avisa si no están al día). Con
 `VITE_API=real npm run dev` usa el backend real.
 
 ## Estructura del repositorio

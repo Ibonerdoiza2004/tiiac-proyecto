@@ -582,6 +582,195 @@ button:not(:disabled):hover {
   margin: 14px 0;
 }
 
+.comparar form,
+.comparar {
+  display: grid;
+  gap: 4px;
+}
+
+.enlace {
+  padding: 0;
+  font-size: 12px;
+  color: var(--apagado);
+  text-decoration: underline;
+  background: transparent;
+  border: 0;
+}
+
+.modelos {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--linea);
+}
+
+.modelos legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--apagado);
+}
+
+.modelos-grupos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.modelos-grupo h3,
+.resultados-bloque h3,
+.anteriores h3 {
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.eleccion {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.eleccion > span {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.resultados {
+  display: grid;
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.resultados-bloque {
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--superficie);
+  border: 1px solid var(--linea);
+}
+
+.barras {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+
+.barra-fila {
+  display: grid;
+  grid-template-columns: minmax(0, 12em) minmax(0, 1fr) 5em;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.barra-fila > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barra-pista {
+  height: 10px;
+  background: var(--suave);
+}
+
+.barra-pista span {
+  display: block;
+  height: 100%;
+  background: var(--tinta);
+}
+
+.cifra {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabla-envoltorio {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.tabla-envoltorio table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabla-envoltorio th,
+.tabla-envoltorio td {
+  padding: 5px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--suave);
+  white-space: nowrap;
+}
+
+.tabla-envoltorio th:first-child {
+  text-align: left;
+  font-weight: 400;
+}
+
+.tabla-envoltorio thead th {
+  color: var(--apagado);
+  font-weight: 600;
+  border-bottom-color: var(--linea);
+}
+
+.detalle-partidas {
+  margin-top: 10px;
+}
+
+.detalle-partidas summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--apagado);
+}
+
+.solo-lectores {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.anteriores {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--linea);
+}
+
+.anteriores-cabecera {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.anteriores-lista {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.anteriores-lista li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--suave);
+}
+
+.anteriores-lista button {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .barra div {
     transition: none;
@@ -595,6 +784,15 @@ button:not(:disabled):hover {
 
   .contadores {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .barra-fila {
+    grid-template-columns: minmax(0, 1fr) 5em;
+  }
+
+  .barra-pista {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 
 

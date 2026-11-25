@@ -8,6 +8,9 @@
  *
  * Resuelve como src/utils/configuracion.py: default.yaml y encima el perfil del entorno;
  * para el experto, además, experto.trpo encima de trpo.
+ *
+ * Genera también src/simulado/evaluacion.json: la evaluación de la E1 de cada entorno
+ * (partidas, semilla y si es determinista), la que usa por defecto la comparación simulada.
  */
 
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -17,7 +20,9 @@ import { fileURLToPath } from 'node:url';
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'configs');
-const SALIDA = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'simulado', 'perfiles.json');
+const SIMULADO = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'simulado');
+const SALIDA = join(SIMULADO, 'perfiles.json');
+const SALIDA_EVALUACION = join(SIMULADO, 'evaluacion.json');
 
 /**
  * Valores admitidos de los campos de texto, por clave o por sección y clave (que manda).
@@ -146,10 +151,29 @@ export function generarPerfiles(raiz = RAIZ) {
   return perfiles;
 }
 
+/**
+ * Evaluación de la E1 de cada entorno, resuelta desde configs/ (sección evaluacion).
+ *
+ * @param {string} [raiz] Carpeta configs/.
+ * @returns {Record<string, {episodios: number, semilla: number, determinista: boolean}>}
+ */
+export function generarEvaluacion(raiz = RAIZ) {
+  const leer = (ruta) => leerNodo(parseDocument(readFileSync(ruta, 'utf-8')).contents);
+  const base = leer(join(raiz, 'default.yaml'));
+  const evaluacion = {};
+  for (const archivo of readdirSync(join(raiz, 'entornos')).filter((f) => f.endsWith('.yaml')).sort()) {
+    const { episodios, semilla, determinista } = combinar(base, leer(join(raiz, 'entornos', archivo))).evaluacion;
+    evaluacion[archivo.replace(/\.yaml$/, '')] = {
+      episodios: episodios.valor, semilla: semilla.valor, determinista: determinista.valor };
+  }
+  return evaluacion;
+}
+
 /** Texto del JSON tal como se guarda. */
 export const textoPerfiles = (perfiles) => `${JSON.stringify(perfiles, null, 2)}\n`;
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   writeFileSync(SALIDA, textoPerfiles(generarPerfiles()));
-  console.log(`Escrito ${SALIDA}`);
+  writeFileSync(SALIDA_EVALUACION, textoPerfiles(generarEvaluacion()));
+  console.log(`Escritos ${SALIDA} y ${SALIDA_EVALUACION}`);
 }
