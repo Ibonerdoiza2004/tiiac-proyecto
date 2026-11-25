@@ -18,7 +18,7 @@ from typing import Any
 
 from src.app.contrato import EsquemaAjustesApi
 from src.utils.configuracion import TipoEntorno, leer_configuracion_base, resolver_configuracion
-from src.utils.reglas_config import METODOS, comprobar_config_metodo
+from src.utils.reglas_config import METODOS, comprobar_calidad, comprobar_config_metodo
 from src.utils.validacion import es_entero, es_real_finito
 
 NIVELES = ("basico", "avanzado")
@@ -47,7 +47,7 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
         ValueError: Si falta algo o alguna descripción no es válida.
     """
     datos = leer_configuracion_base(Path(ruta))
-    for clave in ("laboratorio", "opciones", "secciones", "campos"):
+    for clave in ("laboratorio", "vista", "opciones", "secciones", "campos"):
         if not isinstance(datos.get(clave), dict):
             raise ValueError(f"{ruta}: falta la sección {clave}")
     laboratorio = datos["laboratorio"]
@@ -58,6 +58,10 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
         raise ValueError(f"{ruta}: laboratorio.jugar_a_mano solo admite {sorted(validos)}")
     if not es_entero(laboratorio.get("partidas_maximas")) or laboratorio["partidas_maximas"] < 1:
         raise ValueError(f"{ruta}: laboratorio.partidas_maximas debe ser un entero positivo")
+    try:
+        comprobar_calidad(datos["vista"].get("calidad_jpeg"))
+    except ValueError as error:
+        raise ValueError(f"{ruta}: vista.calidad_jpeg: {error}") from None
     grupo = datos.get("wandb", {}).get("grupo") if isinstance(datos.get("wandb"), dict) else None
     try:
         valido = isinstance(grupo, str) and bool(re.fullmatch(r"[A-Za-z0-9_.-]+",

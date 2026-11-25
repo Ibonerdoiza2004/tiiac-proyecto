@@ -644,7 +644,7 @@ def comprobar_config_barrido(cfg: dict) -> None:
 def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones,
                   cantidad: int, repeticion: int, run: Any = None,
                   parar: Callable[[], bool] | None = None, callback: BaseCallback | None = None,
-                  ) -> tuple[TRPO, Discriminador, dict[str, Any]]:
+                  dibujable: bool = False) -> tuple[TRPO, Discriminador, dict[str, Any]]:
     """Entrena GAIL con un subconjunto de partidas expertas, en una repetición.
 
     Las semillas son las de la repetición (semillas_repeticion con
@@ -681,6 +681,8 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
             «finalizar» del dashboard). Con None se dan todas las iteraciones.
         callback: Callback de sb3 para cada paso de entrenamiento (la vista del
             dashboard); no se usa al validar.
+        dibujable: Crea el primer entorno de entrenamiento con
+            render_mode="rgb_array", el que dibuja la vista (src/training/vista.py).
 
     Returns:
         El agente, el discriminador y un resumen: entorno, cantidad, repeticion,
@@ -703,7 +705,8 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
     _, pares = pares_de_subconjunto(trayectorias, splits, cantidad, cfg, generador)
 
     fijar_seed(semillas["modelo"])
-    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semillas["entornos"])
+    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semillas["entornos"],
+                                             dibujable)
     inicio = time.perf_counter()
     try:
         discriminador, optimizador = preparar_discriminador(

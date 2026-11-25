@@ -453,6 +453,13 @@ sesión al arrancar y lo dice en `/api/estado`; pedir un entrenamiento con W&B s
 da 503. Sus runs van al grupo `dashboard-<entorno>` (`configs/dashboard.yaml`) o al que
 se indique en la petición.
 
+La vista en directo de un entrenamiento dibuja una de sus partidas mientras entrena
+(`src/training/vista.py`), como mucho a las imágenes por segundo del entorno
+(`render_fps`); si el entrenamiento va más rápido, se salta imágenes. Cada imagen va en
+JPEG con la calidad de `vista.calidad_jpeg` en `configs/dashboard.yaml`. Dibujar no
+cambia el entrenamiento: con la vista encendida, apagada o cambiando en marcha salen los
+mismos pesos.
+
 La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `biblioteca/`, no se versiona), con una carpeta por elemento
 (`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una

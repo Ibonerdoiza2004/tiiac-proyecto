@@ -1518,6 +1518,22 @@ def test_parar_nunca_y_un_callback_no_cambian_gail():
     assert contador.pasos == 3 * 64 // 2
 
 
+@pytest.mark.parametrize("activa", [False, True])
+def test_gail_es_el_mismo_con_y_sin_vista(activa):
+    """Dibujar el entorno 0 mientras se entrena no cambia GAIL (vista del dashboard)."""
+    from src.training.gail import entrenar_gail
+    from src.training.vista import CallbackVista
+    trayectorias, splits = _datos_gail()
+    emitidas = []
+    reloj = iter(range(10**6))
+    vista = CallbackVista(emitidas.append, 50, 80, activa=activa, reloj=lambda: next(reloj))
+    sin = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0)
+    con = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0, callback=vista, dibujable=True)
+    _mismo_gail(sin, con)
+    # 3 iteraciones de 64 pasos en 2 entornos; el reloj avanza 1 s por lectura.
+    assert len(emitidas) == (3 * 64 // 2 if activa else 0)
+
+
 @pytest.mark.parametrize("parada", [1, 2])
 def test_gail_parado_es_como_si_esa_fuera_la_ultima_iteracion(parada):
     from src.training.gail import entrenar_gail

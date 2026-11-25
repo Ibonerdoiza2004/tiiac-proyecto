@@ -13,6 +13,12 @@ laboratorio:
   # Límite de partidas por sesión al grabar con el experto.
   partidas_maximas: 1000
 
+# Vista en directo de entrenamientos y comparaciones: calidad del JPEG de cada imagen
+# (1-95, la escala de Pillow; más alta, más nítida y más pesada). Las imágenes por
+# segundo, como mucho, son las del entorno (render_fps de Gymnasium).
+vista:
+  calidad_jpeg: 80
+
 # Grupo de W&B por defecto de los entrenamientos del dashboard; {entorno} se sustituye
 # por la clave del entorno (dashboard-cartpole…). El formulario puede indicar otro.
 wandb:

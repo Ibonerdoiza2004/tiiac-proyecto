@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from src.utils.validacion import es_entero_positivo, es_real_finito, es_semilla
+from src.utils.validacion import es_entero, es_entero_positivo, es_real_finito, es_semilla
 
 ACTIVACIONES = ("tanh", "relu")
 OPTIMIZADORES_BC = ("adam", "sgd", "rmsprop")
@@ -31,6 +31,10 @@ MODOS_RECOMPENSA = ("menos_log_uno_menos_d", "log_d")
 
 # Métodos que se entrenan sueltos desde el dashboard.
 METODOS = ("experto", "bc", "gail")
+
+# Calidad JPEG más alta que admite la vista (configs/dashboard.yaml, vista.calidad_jpeg):
+# Pillow desaconseja pasar de 95, que solo hace el archivo más pesado.
+CALIDAD_JPEG_MAXIMA = 95
 
 
 def comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
@@ -297,3 +301,20 @@ def comprobar_config_metodo(cfg: dict, metodo: str) -> None:
         comprobar_frecuencia_pares(cfg)
     else:
         raise ValueError(f"Método desconocido {metodo!r}; opciones: {', '.join(METODOS)}")
+
+
+def comprobar_calidad(calidad: object) -> int:
+    """Comprueba una calidad JPEG de la vista (vista.calidad_jpeg en configs/dashboard.yaml).
+
+    Args:
+        calidad: Valor a comprobar.
+
+    Returns:
+        La calidad como int.
+
+    Raises:
+        ValueError: Si no es un entero entre 1 y CALIDAD_JPEG_MAXIMA.
+    """
+    if not es_entero(calidad) or not 1 <= calidad <= CALIDAD_JPEG_MAXIMA:
+        raise ValueError(f"La calidad JPEG debe ser un entero entre 1 y {CALIDAD_JPEG_MAXIMA}")
+    return int(calidad)

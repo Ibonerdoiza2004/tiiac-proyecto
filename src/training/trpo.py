@@ -220,7 +220,8 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
 
 
 def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | None = None,
-                     callback: BaseCallback | None = None) -> tuple[TRPO, dict[str, Any]]:
+                     callback: BaseCallback | None = None, dibujable: bool = False,
+                     ) -> tuple[TRPO, dict[str, Any]]:
     """Entrena el experto TRPO con la recompensa real del entorno.
 
     Usa la sección trpo con los cambios de experto.trpo (config_trpo_experto).
@@ -242,6 +243,8 @@ def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | Non
             «finalizar» del dashboard). Con None se entrena hasta el final.
         callback: Callback de sb3 para cada paso de entrenamiento (la vista del
             dashboard); no se usa al evaluar.
+        dibujable: Crea el primer entorno de entrenamiento con
+            render_mode="rgb_array", el que dibuja la vista (src/training/vista.py).
 
     Returns:
         El modelo y un resumen: pasos, iteraciones, mejor retorno y su
@@ -262,7 +265,8 @@ def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | Non
     semilla_modelo, semilla_entornos, semilla_evaluacion = semillas_independientes(
         semilla_base, 3)
     fijar_seed(semilla_modelo)
-    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semilla_entornos)
+    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semilla_entornos,
+                                             dibujable)
     if tcfg["normalizar_observaciones"]:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=False,
                             clip_obs=float(tcfg["limite_normalizacion"]))
