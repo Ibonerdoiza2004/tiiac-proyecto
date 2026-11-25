@@ -24,7 +24,8 @@ from numpy.typing import NDArray
 from src.data.entornos import crear_entorno
 from src.data.splits import (comprobar_cantidades, comprobar_huella, crear_splits,
                              guardar_splits, huella_archivo)
-from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria, es_id_episodio
+from src.data.tipos import (ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria,
+                            comprobar_tramo, es_id_episodio)
 from src.utils.seed import (crear_generador, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes, validar_semilla)
 from src.utils.validacion import es_entero, es_semilla
@@ -158,12 +159,12 @@ def comprobar_metadatos(metadatos: object, pasos_por_partida: Mapping[int, int])
         if identificador in vistas:
             raise ValueError(f"{contexto}: id_episodio {identificador} repetido")
         vistas.add(identificador)
-        tramo = partida["tramo"]
-        if (not isinstance(tramo, (list, tuple)) or len(tramo) != 2
-                or not all(es_entero(v) and v >= 0 for v in tramo) or tramo[0] >= tramo[1]):
-            raise ValueError(f"{contexto}: tramo debe ser [inicio, fin) con 0 <= inicio < fin")
-        if tramo[1] - tramo[0] != pasos_por_partida[identificador]:
-            raise ValueError(f"{contexto}: el tramo {list(tramo)} tiene {tramo[1] - tramo[0]} "
+        try:
+            inicio, fin = comprobar_tramo(partida["tramo"])
+        except ValueError as error:
+            raise ValueError(f"{contexto}: {error}") from None
+        if fin - inicio != pasos_por_partida[identificador]:
+            raise ValueError(f"{contexto}: el tramo {[inicio, fin]} tiene {fin - inicio} "
                              f"pasos y la partida, {pasos_por_partida[identificador]}")
         if fuente == "humano" and not es_semilla(partida["semilla"]):
             raise ValueError(f"{contexto}: semilla no válida: {partida['semilla']!r}")
