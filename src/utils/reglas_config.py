@@ -169,7 +169,8 @@ def config_bc(cfg: dict) -> dict:
 
     Raises:
         ValueError: Si falta la sección o epocas_maximas, paciencia,
-            optimizador, learning_rate o normalizar_observaciones no son válidos.
+            optimizador, learning_rate, normalizar_observaciones o (si se normaliza)
+            epsilon_normalizacion no son válidos.
     """
     bcfg = _seccion(cfg, "bc")
     _entero_positivo_de_cfg(bcfg, "epocas_maximas")
@@ -184,6 +185,11 @@ def config_bc(cfg: dict) -> dict:
     normalizar = bcfg.get("normalizar_observaciones")
     if not isinstance(normalizar, (bool, np.bool_)):
         raise ValueError(f"bc.normalizar_observaciones debe ser booleano, no {normalizar!r}")
+    # La misma regla que aplica PoliticaBC al ajustar la normalización con train.
+    epsilon = bcfg.get("epsilon_normalizacion")
+    if normalizar and (not es_real_finito(epsilon) or epsilon <= 0):
+        raise ValueError("bc.epsilon_normalizacion debe ser un real positivo si se normaliza, "
+                         f"no {epsilon!r}")
     return bcfg
 
 

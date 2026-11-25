@@ -332,7 +332,11 @@ class SeccionAjustesApi(BaseModel):
 
 
 class DuracionApi(BaseModel):
-    """Lo que mide el progreso y cuánto dura con los valores del perfil."""
+    """Lo que mide el progreso y cuánto dura como mucho con los valores del perfil.
+
+    En el experto son los pasos reales, no el presupuesto: TRPO da bloques completos y
+    para en el primero que llega a experto.pasos_totales (pasos_reales_experto).
+    """
 
     unidad: UnidadDuracion
     total: Positivo

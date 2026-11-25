@@ -42,6 +42,9 @@ def test_es_entero_positivo(valor, esperado):
     (math.nan, False), (math.inf, False), (-math.inf, False), (np.float64("nan"), False),
     (np.float32("inf"), False), (True, False), (np.bool_(False), False), ("1.0", False),
     (None, False), (2 + 0j, False), ([1.0], False),
+    # Regresión: un entero de Python fuera de int64 hacía fallar np.isfinite (TypeError,
+    # un 500 en la API con retorno_objetivo 10**20). Vale si cabe en un float.
+    (10**20, True), (-10**20, True), (2**64, True), (10**400, False), (-10**400, False),
 ])
 def test_es_real_finito(valor, esperado):
     assert es_real_finito(valor) is esperado

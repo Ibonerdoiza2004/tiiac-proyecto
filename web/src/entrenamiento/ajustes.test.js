@@ -10,6 +10,12 @@ const REAL_MIN = { clave: 'g', tipo: 'real', min: 0, valor: 0.5 };
 const BOOLEANO = { clave: 'b', tipo: 'booleano', valor: true };
 const OPCION = { clave: 'activacion', tipo: 'opcion', opciones: ['relu', 'tanh'], valor: 'tanh' };
 const LISTA = { clave: 'capas', tipo: 'lista_enteros', min: 1, valor: [100, 100] };
+// Con máximo, como gamma (0 < gamma <= 1) o pasos_adam.
+const REAL_MAX = { clave: 'gamma', tipo: 'real', min: 0, max: 1, valor: 0.995 };
+const ENTERO_MAX = { clave: 'k', tipo: 'entero', min: 1, max: 10, valor: 3 };
+const LISTA_MAX = { clave: 'c', tipo: 'lista_enteros', min: 1, max: 512, valor: [64] };
+// El backend omite los límites que no hay; null también cuenta como «sin límite».
+const REAL_NULOS = { clave: 'objetivo', tipo: 'real', min: null, max: null, valor: -90 };
 
 const ESQUEMA = { metodo: 'gail', duracion: { unidad: 'iteraciones', total: 20 }, secciones: [
   { clave: 'gail', campos: [ENTERO, BOOLEANO] },
@@ -26,6 +32,8 @@ describe('leerCampo', () => {
     [BOOLEANO, false, false], [BOOLEANO, true, true],
     [OPCION, 'relu', 'relu'],
     [LISTA, '64, 64', [64, 64]], [LISTA, '256', [256]], [LISTA, '32 64;128', [32, 64, 128]],
+    [REAL_MAX, '1', 1], [REAL_MAX, '0', 0], [ENTERO_MAX, '10', 10], [LISTA_MAX, '512, 1', [512, 1]],
+    [REAL_NULOS, '-90', -90], [REAL_NULOS, '1e20', 1e20],
   ])('%j acepta %j', (campo, entrada, valor) => {
     expect(leerCampo(campo, entrada)).toEqual({ valor });
   });
@@ -36,6 +44,8 @@ describe('leerCampo', () => {
     [REAL, '', 'número'], [REAL, 'abc', 'número'], [REAL, '1e999', 'número'], [REAL, 'NaN', 'número'],
     [REAL, 'Infinity', 'número'], [REAL, '0,0,1', 'número'], [REAL, '1.2.3', 'número'],
     [REAL_MIN, '-0.1', 'mínimo 0'],
+    [REAL_MAX, '1.1', 'como mucho 1'], [REAL_MAX, '1,01', 'como mucho 1'],
+    [ENTERO_MAX, '11', 'como mucho 10'], [LISTA_MAX, '64, 513', 'Cada número tiene que ser como mucho 512'],
     [BOOLEANO, 'true', 'sí o no'],
     [OPCION, 'sigmoid', 'relu, tanh'], [OPCION, '', 'relu, tanh'],
     [LISTA, '', 'separados por comas'], [LISTA, '64, x', 'separados por comas'], [LISTA, '1.5', 'separados'],

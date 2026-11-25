@@ -395,6 +395,24 @@ def test_un_fallo_inesperado_al_leer_un_elemento_no_tumba_el_indice(biblioteca,
     assert not elementos[roto]["valido"] and "fallo raro" in elementos[roto]["motivo"]
 
 
+def test_fichas_con_descripcion_o_artefacto_que_no_son_texto() -> None:
+    for campo in ("descripcion", "artefacto"):
+        with pytest.raises(ValueError, match=f"{campo} debe ser un texto"):
+            crear_ficha("0" * 12, "cartpole", "bc", "BC", "dashboard", **{campo: 5})
+        crear_ficha("0" * 12, "cartpole", "bc", "BC", "dashboard", **{campo: None})
+
+
+def test_unas_demostraciones_sin_pares_no_son_validas(biblioteca, monkeypatch) -> None:
+    from src.data import demostraciones
+
+    id_ = nuevo(biblioteca.raiz, "demostraciones")
+    original = demostraciones.resumen_demostraciones
+    monkeypatch.setattr(demostraciones, "resumen_demostraciones",
+                        lambda ruta: {**original(ruta), "pares": 0})
+    elemento = biblioteca.obtener(id_)
+    assert not elemento["valido"] and "no tiene pares" in elemento["motivo"]
+
+
 def test_no_se_guarda_un_elemento_de_un_entorno_desconocido(biblioteca) -> None:
     """Regresión: agregar_nuevo aceptaba «cartpoel», escribía la carpeta y el índice, que
     solo mira los entornos conocidos, no la mostraba nunca."""
@@ -620,17 +638,78 @@ def test_la_huella_es_la_del_congelado_del_perfil(biblioteca, congelados_falsos)
     assert len(anadidos) == 1
 
 
-def test_un_elemento_presente_pero_roto_se_vuelve_a_descargar(biblioteca,
-                                                             congelados_falsos) -> None:
-    """Regresión: si faltaba modelo.zip, la precarga decía que el experto ya estaba."""
+def _huellas_falsas(cfg: dict, datos: Path, experto: Path) -> None:
+    """Como comprobar_datos_congelados, con lo que miran sus huellas: un modelo.zip con
+    contenido y unos splits.json que existan."""
+    if not (experto / "modelo.zip").is_file() or not (experto / "modelo.zip").stat().st_size:
+        raise ValueError("la huella del experto no coincide")
+    if not (datos / "splits.json").is_file():
+        raise ValueError("no están los splits")
+
+
+@pytest.mark.parametrize("estropear, por_huellas", [
+    (lambda e, d: (e / "modelo.zip").unlink(), False),  # el índice ya lo da por no válido
+    (lambda e, d: (e / "modelo.zip").write_bytes(b""), True),  # existe, pero vacío
+    (lambda e, d: (d / "splits.json").unlink(), True),  # opcional para el índice
+], ids=["sin_modelo", "modelo_vacio", "sin_splits"])
+def test_unos_congelados_estropeados_se_sustituyen(biblioteca, monkeypatch, estropear,
+                                                   por_huellas) -> None:
+    """Regresión: la precarga solo miraba que existieran los archivos; con modelo.zip
+    vacío o sin splits.json decía «ya están». Ahora comprueba sus huellas y, si no pasan,
+    borra los dos y los vuelve a descargar."""
+    monkeypatch.setattr(precarga, "comprobar_datos_congelados", _huellas_falsas)
     precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None)
-    experto = biblioteca.experto_por_defecto("cartpole")
-    (biblioteca.ruta(experto["id"]) / "modelo.zip").unlink()
+    antes = {e["tipo"]: e["id"] for e in biblioteca.listar()}
+    estropear(biblioteca.ruta(antes["experto"]), biblioteca.ruta(antes["demostraciones"]))
     lineas = []
     anadidos = precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lineas.append)
-    assert len(anadidos) == 1
-    nuevo_experto = biblioteca.experto_por_defecto("cartpole")
-    assert nuevo_experto["valido"] and nuevo_experto["id"] != experto["id"]
+    assert len(anadidos) == 2
+    despues = {e["tipo"]: e for e in biblioteca.listar()}
+    assert set(despues) == {"experto", "demostraciones"}  # sin restos de los estropeados
+    assert all(e["valido"] and e["id"] not in antes.values() for e in despues.values())
+    assert any("no pasan sus huellas" in l for l in lineas) is por_huellas
+    # Y ya íntegros, repetir no descarga nada.
+    assert precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None) == []
+
+
+def test_quitar_un_elemento_libera_su_id(biblioteca) -> None:
+    id_ = nuevo(biblioteca.raiz, "experto")
+    biblioteca.quitar(id_)
+    assert biblioteca.listar() == []
+    assert not (biblioteca.raiz / CARPETA_IDS / id_).exists()
+    with pytest.raises(KeyError):
+        biblioteca.quitar(id_)
+
+
+def test_un_fallo_al_descargar_un_modelo_no_impide_los_demas(biblioteca,
+                                                            congelados_falsos) -> None:
+    """Regresión: un CommError de W&B al descargar un BC salía del script y dejaba sin
+    procesar lo que quedaba."""
+    class CommError(Exception):
+        pass
+
+    class Roto(ArtefactoFalso):
+        def download(self, root: str) -> str:
+            raise CommError("red caída")
+
+    precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None)
+    huella = precarga.huella_demostraciones_congeladas(_cfg(), biblioteca)
+    lineas = []
+    with pytest.raises(RuntimeError, match="no se pudieron descargar bc-roto:v0"):
+        precarga.precargar_entrega(_cfg(), biblioteca,
+                                   [Roto("bc-roto:v0", "bc", huella),
+                                    ArtefactoFalso("gail-a:v0", "gail", huella)], lineas.append)
+    assert [e["artefacto"] for e in biblioteca.listar(tipos=("bc", "gail"))] == ["gail-a:v0"]
+    assert any("no se pudo descargar bc-roto:v0: red caída" in l for l in lineas)
+
+
+def test_el_mismo_artefacto_dos_veces_se_anade_una(biblioteca, congelados_falsos) -> None:
+    """Regresión: recibir el mismo artefacto dos veces en una llamada creaba dos elementos."""
+    precarga.precargar_congelados(_cfg(), biblioteca, _descargar, lambda _: None)
+    huella = precarga.huella_demostraciones_congeladas(_cfg(), biblioteca)
+    dos = [ArtefactoFalso("bc-a:v0", "bc", huella), ArtefactoFalso("bc-a:v0", "bc", huella)]
+    assert len(precarga.precargar_entrega(_cfg(), biblioteca, dos, lambda _: None)) == 1
+    assert dos[1].descargas == 0
 
 
 def test_dos_precargas_a_la_vez_no_duplican(biblioteca, congelados_falsos) -> None:
@@ -702,6 +781,75 @@ def test_rutas_de_la_biblioteca(cliente) -> None:
     assert c.get("/api/biblioteca/modelos", params={"entorno": "pong"}).status_code == 422
 
 
+def test_una_ficha_rara_no_tumba_los_listados(cliente, monkeypatch) -> None:
+    """Regresión: una ficha con descripción numérica (escrita a mano) o un manifiesto sin
+    pares daban 500 en el listado entero. Ahora ese elemento sale como no válido."""
+    from src.data import demostraciones
+
+    c, raiz = cliente
+    sano = nuevo(raiz, "experto")
+    raro = nuevo(raiz, "bc")
+    ficha = Biblioteca(raiz, ENTORNOS).ruta(raro) / ARCHIVO_FICHA
+    ficha.write_text(json.dumps({**json.loads(ficha.read_text(encoding="utf-8")),
+                                 "descripcion": 5}), encoding="utf-8")
+    respuesta = c.get("/api/biblioteca/modelos")
+    assert respuesta.status_code == 200
+    elementos = {e["id"]: e for e in respuesta.json()}
+    assert elementos[sano]["valido"] and not elementos[raro]["valido"]
+    assert "descripcion" in elementos[raro]["motivo"]
+    assert c.get(f"/api/biblioteca/{raro}").status_code == 200
+
+    demos = nuevo(raiz, "demostraciones")
+    original = demostraciones.resumen_demostraciones
+    monkeypatch.setattr(demostraciones, "resumen_demostraciones",
+                        lambda ruta: {**original(ruta), "pares": 0})
+    respuesta = c.get("/api/biblioteca/demostraciones")
+    assert respuesta.status_code == 200
+    assert respuesta.json()[0]["id"] == demos and not respuesta.json()[0]["valido"]
+
+
+@pytest.mark.parametrize("ruta", ["/api/biblioteca/modelos", "/api/biblioteca/demostraciones",
+                                  "/api/biblioteca/{id}"])
+def test_las_rutas_no_dan_500_aunque_el_indice_devuelva_algo_raro(cliente, monkeypatch,
+                                                                  ruta) -> None:
+    """Las tres rutas pasan cada elemento por su modelo de respuesta: aunque el índice
+    devolviera algo que no encaja (un caso que hoy ya filtra la ficha), sale no válido."""
+    c, raiz = cliente
+    tipo = "demostraciones" if "demostraciones" in ruta else "bc"
+    id_ = nuevo(raiz, tipo)
+    leer = Biblioteca._leer
+
+    def raro(self, carpeta, entorno, tipo_carpeta):
+        elemento = leer(self, carpeta, entorno, tipo_carpeta)
+        return {**elemento, "nombre": 3, "detalles": {**elemento["detalles"], "partidas": 0}}
+
+    monkeypatch.setattr(Biblioteca, "_leer", raro)
+    respuesta = c.get(ruta.format(id=id_))
+    assert respuesta.status_code == 200
+    datos = respuesta.json()
+    elemento = datos[0] if isinstance(datos, list) else datos
+    assert elemento["id"] == id_ and elemento["valido"] is False
+
+
+def test_como_respuesta_convierte_lo_que_no_encaja_en_no_valido() -> None:
+    from src.app.contrato import DemostracionApi, ElementoBibliotecaApi
+    from src.app.rutas_biblioteca import como_respuesta
+
+    raro = {"id": "a" * 12, "entorno": "cartpole", "tipo": "bc", "nombre": 3, "origen": "x",
+            "creado": None, "descripcion": None, "fuente": None, "artefacto": None,
+            "valido": True, "motivo": None, "detalles": {"a": 1}}
+    salida = como_respuesta(ElementoBibliotecaApi, raro)
+    assert salida["valido"] is False and salida["nombre"] == "a" * 12
+    assert salida["detalles"] == {} and "nombre" in salida["motivo"]
+    demos = {"id": "b" * 12, "entorno": "cartpole", "nombre": "d", "tipo": "conjunto",
+             "partidas": 0, "pares": 3, "fuente": None, "origen": None, "valido": True,
+             "motivo": None}
+    salida = como_respuesta(DemostracionApi, demos)
+    assert salida["valido"] is False and salida["partidas"] is None
+    bueno = {**demos, "partidas": 2}
+    assert como_respuesta(DemostracionApi, bueno) == {**bueno, "entorno": "cartpole"}
+
+
 def test_un_elemento_roto_sale_por_la_api_como_no_valido(cliente) -> None:
     c, raiz = cliente
     demos = nuevo(raiz, "demostraciones")
@@ -752,6 +900,28 @@ def test_script_precarga_cada_entorno_y_sigue_si_uno_falla(tmp_path, monkeypatch
     hechos.clear()
     assert script.main(["--config", str(config), "--entorno", "cartpole", "--sin-entrega"]) == 0
     assert hechos == [("congelados", "cartpole")]
+
+
+def test_script_sigue_con_los_demas_entornos_ante_cualquier_error(monkeypatch, capsys) -> None:
+    """Regresión: un error que no era ValueError, RuntimeError ni OSError (como el
+    CommError de W&B) salía del script y los entornos siguientes no se procesaban."""
+    script = _script()
+    hechos = []
+
+    class CommError(Exception):
+        pass
+
+    def congelados(cfg, biblioteca):
+        if cfg["origen"]["entorno"] == "cartpole":
+            raise CommError("red caída")
+        hechos.append(cfg["origen"]["entorno"])
+
+    monkeypatch.setattr(script, "precargar_congelados", congelados)
+    config = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+    assert script.main(["--config", str(config), "--entorno", "cartpole", "--entorno",
+                        "reacher", "--sin-entrega"]) == 1
+    assert hechos == ["reacher"]
+    assert "error en cartpole: red caída" in capsys.readouterr().err
 
 
 def test_script_con_config_que_no_vale_sale_con_2(tmp_path, capsys) -> None:

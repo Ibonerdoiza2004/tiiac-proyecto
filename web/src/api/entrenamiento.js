@@ -51,7 +51,8 @@ export const ESTADOS_ENTRENAMIENTO = Object.freeze({ EN_MARCHA: 'en_marcha', PAU
  * @property {string} clave Nombre de la clave en configs/, como learning_rate.
  * @property {'entero' | 'real' | 'booleano' | 'opcion' | 'lista_enteros'} tipo
  * @property {number | boolean | string | number[]} valor Valor del perfil.
- * @property {number} [min] Mínimo admitido (enteros y reales).
+ * @property {number} [min] Mínimo admitido (enteros, reales y listas); falta si no hay.
+ * @property {number} [max] Máximo admitido; falta si no hay.
  * @property {string[]} [opciones] Valores admitidos (tipo opcion).
  * @property {string} [ayuda] De dónde sale el valor (el comentario de configs/).
  */

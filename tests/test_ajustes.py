@@ -16,7 +16,8 @@ import pytest
 import yaml
 
 from src.app.ajustes import (METODOS, campo, cargar_dashboard, comprobar_ajustes,
-                             esquema_ajustes, secciones_de_metodo, semilla_por_defecto)
+                             esquema_ajustes, pasos_reales_experto, secciones_de_metodo,
+                             semilla_por_defecto)
 from src.utils.configuracion import TipoEntorno, resolver_configuracion
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -48,13 +49,29 @@ def test_cada_valor_del_esquema_es_el_del_perfil(entorno, metodo) -> None:
 def test_duracion_y_semilla_por_defecto(entorno, metodo) -> None:
     cfg = resolver_configuracion(CONFIG, entorno)
     esquema = esquema_ajustes(CONFIG, entorno, metodo, DASHBOARD)
-    unidad, total = {"experto": ("pasos", cfg["experto"]["pasos_totales"]),
+    unidad, total = {"experto": ("pasos", pasos_reales_experto(cfg)),
                      "bc": ("epocas", cfg["bc"]["epocas_maximas"]),
                      "gail": ("iteraciones", cfg["gail"]["iteraciones"])}[metodo]
     assert esquema["duracion"] == {"unidad": unidad, "total": total}
     assert esquema["semilla"] == (cfg["experto"]["semilla"] if metodo == "experto"
                                   else cfg["experimento"]["semilla_repeticiones"])
     assert esquema["semilla"] == semilla_por_defecto(cfg, metodo)
+
+
+@pytest.mark.parametrize("presupuesto, bloque, esperado", [
+    (25_000_000, 2048, 25_001_984), (100_000, 5000, 100_000), (1, 8, 8), (8, 8, 8),
+    (9, 8, 16), (5000, 1, 5000),
+])
+def test_pasos_reales_del_experto(presupuesto, bloque, esperado) -> None:
+    """Regresión: se anunciaba el presupuesto (25 000 000 en Reacher y HalfCheetah) y TRPO
+    da bloques completos hasta pasarlo (25 001 984). Mismo bucle que entrenar_experto."""
+    cfg = resolver_configuracion(CONFIG, "cartpole")
+    cfg["experto"]["pasos_totales"] = presupuesto
+    cfg["experto"]["trpo"] = {"pasos_por_iteracion": bloque}
+    pasos = 0
+    while pasos < presupuesto:  # como el bucle de entrenar_experto
+        pasos += bloque
+    assert pasos_reales_experto(cfg) == pasos == esperado
 
 
 @pytest.mark.parametrize("entorno, metodo", TODOS)
@@ -253,3 +270,20 @@ def _dashboard_con(tmp_path: Path, cambiar) -> Path:
 def test_dashboard_que_no_vale(tmp_path, cambiar, mensaje) -> None:
     with pytest.raises(ValueError, match=mensaje):
         cargar_dashboard(_dashboard_con(tmp_path, cambiar))
+
+
+def test_comprobar_esquemas_valida_contra_el_modelo_de_la_respuesta(monkeypatch) -> None:
+    """El arranque comprueba cada esquema con EsquemaAjustesApi, no solo que se genere:
+    lo que daría 500 al pedirlo impide arrancar."""
+    from src.app import ajustes
+
+    original = ajustes.esquema_ajustes
+
+    def con_titulo_numerico(*args, **kwargs):
+        esquema = original(*args, **kwargs)
+        esquema["secciones"][0]["titulo"] = 7
+        return esquema
+
+    monkeypatch.setattr(ajustes, "esquema_ajustes", con_titulo_numerico)
+    with pytest.raises(ValueError, match="Formulario de experto en cartpole"):
+        ajustes.comprobar_esquemas(CONFIG, DASHBOARD)

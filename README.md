@@ -467,8 +467,11 @@ python scripts/preparar_biblioteca.py
 Descarga de los cinco entornos unos 42 MB en un minuto y medio (medido el 2026-11-24 en
 este portátil) y comprueba las huellas de los congelados y, en cada BC y GAIL, la del
 NPZ con el que se entrenó, tanto la del artefacto como la de sus propios metadatos. Se
-puede repetir: lo que ya está y es válido no se descarga otra vez (lo roto, sí), y dos a
-la vez se turnan. `--entorno` elige entornos y `--sin-entrega` deja solo los congelados.
+puede repetir: lo que ya está no se descarga otra vez; los congelados se vuelven a
+comprobar con sus huellas y, si alguno está estropeado (un `modelo.zip` vaciado, un
+`splits.json` borrado), se sustituyen. Dos a la vez se turnan, y si falla la descarga
+de un modelo o de un entorno, sigue con los demás y sale con 1. `--entorno` elige
+entornos y `--sin-entrega` deja solo los congelados.
 
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con

@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from src.app.contrato import EsquemaAjustesApi
 from src.utils.configuracion import TipoEntorno, leer_configuracion_base, resolver_configuracion
 from src.utils.reglas_config import METODOS, comprobar_config_metodo
 from src.utils.validacion import es_entero, es_real_finito
@@ -64,6 +65,9 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
     if not valido:
         raise ValueError(f"{ruta}: wandb.grupo debe ser un nombre de grupo de W&B, con "
                          "{entorno} si se quiere el del entorno")
+    for seccion, titulo in datos["secciones"].items():
+        if not isinstance(titulo, str) or not titulo.strip():
+            raise ValueError(f"{ruta}: el título de la sección {seccion} debe ser un texto")
     for seccion, campos in datos["campos"].items():
         if seccion not in datos["secciones"]:
             raise ValueError(f"{ruta}: la sección {seccion} no tiene título en secciones")
@@ -186,6 +190,24 @@ def semilla_por_defecto(cfg: dict[str, Any], metodo: str) -> int:
                else cfg["experimento"]["semilla_repeticiones"])
 
 
+def pasos_reales_experto(cfg: dict[str, Any]) -> int:
+    """Pasos que da como mucho el experto: bloques completos hasta pasar el presupuesto.
+
+    TRPO recoge cada iteración un bloque entero de ``trpo.pasos_por_iteracion`` (con los
+    cambios de ``experto.trpo``) y entrenar_experto para en el primero que llega a
+    ``experto.pasos_totales``: con 25 000 000 y bloques de 2048, 25 001 984.
+
+    Args:
+        cfg: Configuración resuelta del entorno.
+
+    Returns:
+        El múltiplo de pasos_por_iteracion igual o inmediatamente superior al presupuesto.
+    """
+    presupuesto = int(cfg["experto"]["pasos_totales"])
+    bloque = int({**cfg["trpo"], **cfg["experto"].get("trpo", {})}["pasos_por_iteracion"])
+    return -(-presupuesto // bloque) * bloque
+
+
 def esquema_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str,
                     dashboard: dict[str, Any], ajustes: dict[str, Any] | None = None
                     ) -> dict[str, Any]:
@@ -210,7 +232,10 @@ def esquema_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str,
                              for clave, valor in valores.items()]}
                  for seccion, valores in secciones_de_metodo(cfg, metodo)]
     unidad, (seccion, clave) = DURACION[metodo]
-    return {"metodo": metodo, "duracion": {"unidad": unidad, "total": int(cfg[seccion][clave])},
+    total = int(cfg[seccion][clave])
+    if metodo == "experto":
+        total = pasos_reales_experto(cfg)
+    return {"metodo": metodo, "duracion": {"unidad": unidad, "total": total},
             "semilla": semilla_por_defecto(cfg, metodo), "secciones": secciones}
 
 
@@ -296,8 +321,9 @@ def comprobar_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str
 def comprobar_esquemas(ruta_config: Path, dashboard: dict[str, Any]) -> None:
     """Genera el esquema de cada entorno y método, para no descubrir un fallo al pedirlo.
 
-    Lo llama la API al crearse: si dashboard.yaml no describe algún campo o un perfil
-    no vale, no arranca (en lugar de responder 500 al abrir ese formulario).
+    Lo llama la API al crearse: si dashboard.yaml no describe algún campo, un perfil
+    no vale o el esquema no encaja con el modelo de la respuesta (EsquemaAjustesApi),
+    no arranca (en lugar de responder 500 al abrir ese formulario).
 
     Raises:
         ValueError: Con el entorno, el método y el motivo del primero que falle.
@@ -305,6 +331,7 @@ def comprobar_esquemas(ruta_config: Path, dashboard: dict[str, Any]) -> None:
     for entorno in TipoEntorno:
         for metodo in METODOS:
             try:
-                esquema_ajustes(ruta_config, entorno, metodo, dashboard)
+                EsquemaAjustesApi.model_validate(
+                    esquema_ajustes(ruta_config, entorno, metodo, dashboard))
             except (ValueError, KeyError, TypeError) as error:
                 raise ValueError(f"Formulario de {metodo} en {entorno.value}: {error}") from error

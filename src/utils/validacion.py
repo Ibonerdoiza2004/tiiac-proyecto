@@ -22,9 +22,21 @@ def es_entero_positivo(valor: object) -> bool:
 
 
 def es_real_finito(valor: object) -> bool:
-    """Indica si valor es un número real finito de Python o de NumPy que no sea booleano."""
-    return (isinstance(valor, (int, float, np.integer, np.floating))
-            and not isinstance(valor, (bool, np.bool_)) and bool(np.isfinite(valor)))
+    """Indica si valor es un número real finito de Python o de NumPy que no sea booleano.
+
+    Un entero de Python vale si cabe en un float (los más grandes, como 10**400, darían
+    error al convertirlos); NumPy no admite enteros de Python fuera de int64, así que no
+    se le pasan.
+    """
+    if isinstance(valor, (bool, np.bool_)):
+        return False
+    if isinstance(valor, int):
+        try:
+            float(valor)
+        except OverflowError:
+            return False
+        return True
+    return isinstance(valor, (float, np.integer, np.floating)) and bool(np.isfinite(valor))
 
 
 def es_semilla(valor: object) -> bool:

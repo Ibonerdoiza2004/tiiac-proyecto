@@ -139,6 +139,20 @@ def test_sin_credenciales_no_llama_a_login(monkeypatch, tmp_path):
         comprobar_wandb(_cfg("online"), exigir_sesion=True)
 
 
+def test_un_token_de_identidad_cuenta_como_credencial(monkeypatch, tmp_path):
+    """Regresión: con WANDB_IDENTITY_TOKEN_FILE y sin clave, que el SDK admite, se
+    rechazaba antes de llamar a wandb.login."""
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.setenv("NETRC", str(tmp_path / "netrc"))
+    monkeypatch.setenv("WANDB_IDENTITY_TOKEN_FILE", str(tmp_path / "token"))
+    import wandb
+
+    llamadas = []
+    monkeypatch.setattr(wandb, "login", lambda **kwargs: llamadas.append(kwargs) or True)
+    assert comprobar_wandb(_cfg("online"), exigir_sesion=True) is wandb
+    assert len(llamadas) == 1
+
+
 def test_con_credenciales_en_netrc_si_valida_la_sesion(monkeypatch, tmp_path):
     monkeypatch.delenv("WANDB_API_KEY", raising=False)
     netrc = tmp_path / "netrc"

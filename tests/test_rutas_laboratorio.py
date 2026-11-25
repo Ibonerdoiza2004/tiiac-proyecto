@@ -307,6 +307,10 @@ def test_entrenamiento_con_ajustes_que_no_valen(cliente, cuerpo, mensaje) -> Non
      "gail.discriminador.learning_rate debe ser positivo"),
     ("reacher", "experto", {"experto": {"trpo": {"n_entornos": 7}}},
      "trpo.pasos_por_iteracion debe ser divisible por trpo.n_entornos"),
+    # Regresión: con la normalización activada, BC aceptaba épsilon 0 y la política lo
+    # rechazaba al ajustar la normalización.
+    ("cartpole", "bc", {"bc": {"epsilon_normalizacion": 0}},
+     "bc.epsilon_normalizacion debe ser un real positivo si se normaliza"),
 ])
 def test_entrenamiento_que_el_entrenador_rechazaria(cliente, raiz, entorno, metodo, ajustes,
                                                     mensaje) -> None:
@@ -315,6 +319,34 @@ def test_entrenamiento_que_el_entrenador_rechazaria(cliente, raiz, entorno, meto
         "entorno": entorno, "metodo": metodo, "datos": datos, "ajustes": ajustes})
     assert respuesta.status_code == 422
     assert mensaje in respuesta.json()["detail"]
+
+
+def test_bc_sin_normalizar_no_mira_el_epsilon(cliente, raiz) -> None:
+    datos = [elemento(raiz, "demostraciones", "cartpole")]
+    respuesta = cliente.post("/api/entrenamientos", json={
+        "entorno": "cartpole", "metodo": "bc", "datos": datos,
+        "ajustes": {"bc": {"normalizar_observaciones": False, "epsilon_normalizacion": 0}}})
+    assert respuesta.status_code == 501
+
+
+@pytest.mark.parametrize("objetivo", [10**20, 1e20, -10**20])
+def test_un_objetivo_enorme_no_da_500(cliente, objetivo) -> None:
+    """Regresión: 10**20 como entero daba 500 (np.isfinite no admite enteros de Python
+    tan grandes) y como 1e20 pasaba."""
+    respuesta = cliente.post("/api/entrenamientos", json={
+        "entorno": "mountaincar", "metodo": "experto",
+        "ajustes": {"experto": {"retorno_objetivo": objetivo}}})
+    assert respuesta.status_code == 501
+
+
+def test_un_objetivo_que_no_cabe_en_un_float_da_422(cliente) -> None:
+    respuesta = cliente.post(
+        "/api/entrenamientos",
+        content=('{"entorno": "mountaincar", "metodo": "experto", "ajustes": '
+                 '{"experto": {"retorno_objetivo": 1' + "0" * 400 + "}}}"),
+        headers={"content-type": "application/json"})
+    assert respuesta.status_code == 422
+    assert "retorno_objetivo" in respuesta.json()["detail"]
 
 
 # --- Referencias a la biblioteca -------------------------------------------------------------
@@ -390,6 +422,10 @@ def test_la_documentacion_tiene_todo_el_contrato(cliente) -> None:
     (lambda d: d["laboratorio"].update(jugar_a_mano="cartpole"), "jugar_a_mano"),
     (lambda d: d["laboratorio"].update(jugar_a_mano=["pong"]), "jugar_a_mano"),
     (lambda d: d["laboratorio"].update(jugar_a_mano=5), "jugar_a_mano"),
+    # Regresión: con un título de sección numérico la app arrancaba y el formulario de
+    # BC daba 500 (el arranque no validaba contra el modelo de la respuesta).
+    (lambda d: d["secciones"].update(bc=7), "título de la sección bc"),
+    (lambda d: d["secciones"].update(bc="  "), "título de la sección bc"),
 ])
 def test_un_formulario_roto_impide_crear_la_app(tmp_path, cambio, mensaje) -> None:
     """Regresión: sin la descripción de un campo, la app arrancaba y ese formulario daba
