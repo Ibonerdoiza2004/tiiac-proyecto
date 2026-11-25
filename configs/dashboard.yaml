@@ -1,0 +1,109 @@
+# Cómo presenta el dashboard la configuración: textos para el usuario, qué es básico y
+# qué avanzado, y rangos para los controles del formulario. No cambia ningún valor de
+# los perfiles: esos siguen en default.yaml y en entornos/. Un test comprueba que cada
+# hiperparámetro que ofrece el formulario tiene aquí su descripción.
+#
+# En cada campo: etiqueta (nombre corto), ayuda (una frase para el usuario), nivel
+# (basico o avanzado) y, si hace falta, tipo (cuando el valor del perfil no basta para
+# deducirlo), min, max y paso (para deslizadores y para validar).
+
+laboratorio:
+  # Entornos que se pueden jugar con el teclado; en los demás solo se ve al experto.
+  jugar_a_mano: [cartpole, mountaincar]
+  # Límite de partidas por sesión al grabar con el experto.
+  partidas_maximas: 1000
+
+# Grupo de W&B por defecto de los entrenamientos del dashboard; {entorno} se sustituye
+# por la clave del entorno (dashboard-cartpole…). El formulario puede indicar otro.
+wandb:
+  grupo: "dashboard-{entorno}"
+
+# Valores admitidos de los campos de texto. Copian ACTIVACIONES (src/models/factory.py),
+# OPTIMIZADORES (src/training/bc.py), el único optimizador del discriminador y
+# MODOS_RECOMPENSA (src/training/gail.py); un test comprueba que coinciden.
+opciones:
+  activacion: [relu, tanh]
+  bc.optimizador: [adam, rmsprop, sgd]
+  gail.discriminador.optimizador: [adam]
+  recompensa: [log_d, menos_log_uno_menos_d]
+
+# Títulos de las secciones del formulario.
+secciones:
+  experto: Entrenamiento del experto
+  experto.trpo: Algoritmo del experto (TRPO)
+  bc: Behavioral Cloning
+  gail: GAIL
+  gail.discriminador: Discriminador
+  trpo: Algoritmo del agente (TRPO)
+  demostraciones: Demostraciones
+
+campos:
+  experto:
+    pasos_totales: {etiqueta: "Pasos de entrenamiento", ayuda: "Cuántos pasos del entorno juega como mucho.", nivel: basico, min: 1}
+    retorno_objetivo: {etiqueta: "Puntuación objetivo", ayuda: "Para antes si llega a esta puntuación media.", nivel: basico, tipo: real}
+    evaluar_cada: {etiqueta: "Evaluar cada", ayuda: "Cada cuántas iteraciones mide su puntuación.", nivel: avanzado, min: 1}
+    episodios_evaluacion: {etiqueta: "Partidas por evaluación", ayuda: "Partidas con las que se mide la puntuación.", nivel: avanzado, min: 1}
+    evaluacion_determinista: {etiqueta: "Evaluar sin azar", ayuda: "Elige siempre la acción más probable al medir.", nivel: avanzado}
+
+  trpo:
+    capas_ocultas: {etiqueta: "Capas de la red", ayuda: "Neuronas de cada capa oculta.", nivel: avanzado, min: 1}
+    activacion: {etiqueta: "Activación", ayuda: "Función entre las capas de la red.", nivel: avanzado}
+    gamma: {etiqueta: "Descuento", ayuda: "Cuánto pesan las recompensas futuras (cerca de 1, mucho).", nivel: basico, min: 0, max: 1, paso: 0.001}
+    gae_lambda: {etiqueta: "Lambda de GAE", ayuda: "Equilibrio entre sesgo y varianza al estimar ventajas.", nivel: avanzado, min: 0, max: 1, paso: 0.01}
+    target_kl: {etiqueta: "Cambio máximo por iteración", ayuda: "Cuánto puede cambiar la política en cada paso (KL).", nivel: basico, min: 0, paso: 0.001}
+    cg_damping: {etiqueta: "Amortiguación", ayuda: "Estabiliza el cálculo de la dirección de mejora.", nivel: avanzado, min: 0, paso: 0.01}
+    pasos_por_iteracion: {etiqueta: "Pasos por iteración", ayuda: "Experiencia que recoge antes de cada actualización.", nivel: basico, min: 1}
+    n_entornos: {etiqueta: "Partidas en paralelo", ayuda: "Entornos que juegan a la vez (más rápido, igual de válido).", nivel: avanzado, min: 1}
+    normalizar_observaciones: {etiqueta: "Normalizar observaciones", ayuda: "Escala lo que ve el agente a valores parecidos.", nivel: avanzado}
+    limite_normalizacion: {etiqueta: "Límite de la normalización", ayuda: "Recorta las observaciones normalizadas a este valor.", nivel: avanzado, min: 0}
+    normalizar_ventajas: {etiqueta: "Normalizar ventajas", ayuda: "Escala las ventajas antes de actualizar.", nivel: avanzado}
+    log_std_inicial: {etiqueta: "Exploración inicial", ayuda: "Cuánto azar tienen al principio las acciones continuas (logaritmo).", nivel: avanzado}
+    inicializacion_ortogonal: {etiqueta: "Inicialización ortogonal", ayuda: "Cómo se eligen los pesos iniciales de la red.", nivel: avanzado}
+    pasos_gradiente_conjugado: {etiqueta: "Pasos de gradiente conjugado", ayuda: "Iteraciones para calcular la dirección de mejora.", nivel: avanzado, min: 1}
+    busqueda_lineal_factor: {etiqueta: "Factor de la búsqueda lineal", ayuda: "Cuánto se acorta el paso si no mejora.", nivel: avanzado, min: 0, max: 1, paso: 0.05}
+    busqueda_lineal_maximo: {etiqueta: "Intentos de la búsqueda lineal", ayuda: "Veces que se acorta el paso como mucho.", nivel: avanzado, min: 1}
+    learning_rate_valor: {etiqueta: "Aprendizaje del crítico", ayuda: "Velocidad con la que aprende a valorar los estados.", nivel: avanzado, min: 0, paso: 0.0001}
+    pasos_valor: {etiqueta: "Pasadas del crítico", ayuda: "Veces que repasa la experiencia para aprender a valorar.", nivel: avanzado, min: 1}
+    batch_size_valor: {etiqueta: "Lote del crítico", ayuda: "Pasos que usa en cada actualización del crítico.", nivel: avanzado, min: 1}
+
+  bc:
+    capas_ocultas: {etiqueta: "Capas de la red", ayuda: "Neuronas de cada capa oculta.", nivel: avanzado, min: 1}
+    activacion: {etiqueta: "Activación", ayuda: "Función entre las capas de la red.", nivel: avanzado}
+    log_std_inicial: {etiqueta: "Exploración inicial", ayuda: "Cuánto azar tienen al principio las acciones continuas (logaritmo).", nivel: avanzado}
+    normalizar_observaciones: {etiqueta: "Normalizar observaciones", ayuda: "Escala lo que ve el agente con los datos de entrenamiento.", nivel: avanzado}
+    epsilon_normalizacion: {etiqueta: "Épsilon de la normalización", ayuda: "Evita dividir entre cero al normalizar.", nivel: avanzado, min: 0}
+    optimizador: {etiqueta: "Optimizador", ayuda: "Método con el que se ajustan los pesos.", nivel: avanzado}
+    batch_size: {etiqueta: "Tamaño de lote", ayuda: "Pares que usa en cada actualización.", nivel: basico, min: 1}
+    learning_rate: {etiqueta: "Velocidad de aprendizaje", ayuda: "Cuánto cambia la red en cada actualización.", nivel: basico, min: 0, paso: 0.0001}
+    epocas_maximas: {etiqueta: "Épocas como máximo", ayuda: "Pasadas completas por los datos.", nivel: basico, min: 1}
+    paciencia: {etiqueta: "Paciencia", ayuda: "Épocas sin mejorar en validación antes de parar.", nivel: basico, min: 1}
+
+  gail:
+    iteraciones: {etiqueta: "Iteraciones", ayuda: "Rondas de jugar, aprender y corregir al discriminador.", nivel: basico, min: 1}
+    evaluar_cada: {etiqueta: "Evaluar cada", ayuda: "Cada cuántas iteraciones mide su puntuación.", nivel: avanzado, min: 1}
+    episodios_evaluacion: {etiqueta: "Partidas por evaluación", ayuda: "Partidas con las que se mide la puntuación.", nivel: avanzado, min: 1}
+    evaluacion_determinista: {etiqueta: "Evaluar sin azar", ayuda: "Elige siempre la acción más probable al medir.", nivel: avanzado}
+    recompensa: {etiqueta: "Recompensa", ayuda: "Cómo convierte la opinión del discriminador en recompensa.", nivel: avanzado}
+
+  gail.discriminador:
+    capas_ocultas: {etiqueta: "Capas del discriminador", ayuda: "Neuronas de cada capa oculta.", nivel: avanzado, min: 1}
+    activacion: {etiqueta: "Activación", ayuda: "Función entre las capas de la red.", nivel: avanzado}
+    optimizador: {etiqueta: "Optimizador", ayuda: "Método con el que se ajustan sus pesos.", nivel: avanzado}
+    learning_rate: {etiqueta: "Aprendizaje del discriminador", ayuda: "Cuánto cambia en cada actualización.", nivel: basico, min: 0, paso: 0.001}
+    pasos_adam: {etiqueta: "Actualizaciones por iteración", ayuda: "Veces que se corrige en cada iteración.", nivel: avanzado, min: 1}
+    peso_entropia: {etiqueta: "Peso de la entropía", ayuda: "Evita que se confíe demasiado pronto.", nivel: avanzado, min: 0, paso: 0.0001}
+    normalizar_entrada: {etiqueta: "Normalizar entrada", ayuda: "Escala lo que recibe con los pares del experto.", nivel: avanzado}
+    epsilon_normalizacion: {etiqueta: "Épsilon de la normalización", ayuda: "Evita dividir entre cero al normalizar.", nivel: avanzado, min: 0}
+
+  demostraciones:
+    frecuencia_pares: {etiqueta: "Un par de cada", ayuda: "Usa uno de cada tantos pares de las demostraciones.", nivel: avanzado, min: 1}
+
+# Precarga de la biblioteca (scripts/preparar_biblioteca.py y Docker al arrancar): run de
+# comparación de W&B de la entrega de cada entorno; se añaden los BC y GAIL que evaluó.
+precarga:
+  comparaciones:
+    cartpole: ft49odps
+    mountaincar: ocgr7382
+    acrobot: bqaquz1w
+    reacher: u0imo43m
+    halfcheetah: k7v7i4fo

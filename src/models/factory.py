@@ -1,8 +1,4 @@
-"""Construccion del modelo.
-
-Aqui va tu replicacion. El objetivo de E1 es que el forward produzca las
-FORMAS que declara el paper, aunque los pesos sean aleatorios.
-"""
+"""Construcción de los modelos: la política de BC y el discriminador de GAIL."""
 
 from __future__ import annotations
 
@@ -14,46 +10,13 @@ import torch.nn as nn
 from gymnasium import spaces
 from torch.distributions import Categorical, Distribution, Independent, Normal
 
+from src.utils.reglas_config import comprobar_arquitectura
 from src.utils.validacion import es_entero_positivo, es_real_finito
 
 ACTIVACIONES = {
     "tanh": nn.Tanh,
     "relu": nn.ReLU,
 }
-
-
-class ModeloPlaceholder(nn.Module):
-    """Sustituye esto por la arquitectura del paper."""
-
-    def __init__(self, dim_entrada: int = 32, clases: int = 10):
-        super().__init__()
-        self.red = nn.Sequential(
-            nn.Linear(dim_entrada, 64),
-            nn.ReLU(),
-            nn.Linear(64, clases),
-        )
-
-    def forward(self, x):
-        return self.red(x)
-
-
-def comprobar_arquitectura(capas_ocultas: object, activacion: object) -> None:
-    """Comprueba la lista de capas ocultas y el nombre de la activación.
-
-    Es la comprobación que aplican PoliticaBC y Discriminador al crearse; sirve
-    también para validar una configuración antes de crear ninguna red.
-
-    Raises:
-        ValueError: Si capas_ocultas no es una lista de enteros positivos (puede
-            estar vacía) o activacion no es una clave de ACTIVACIONES.
-    """
-    if (isinstance(capas_ocultas, (str, bytes)) or not isinstance(capas_ocultas, Sequence)
-            or not all(es_entero_positivo(c) for c in capas_ocultas)):
-        raise ValueError(
-            f"capas_ocultas debe ser una lista de enteros positivos, no {capas_ocultas!r}")
-    if not isinstance(activacion, str) or activacion not in ACTIVACIONES:
-        raise ValueError(
-            f"activacion desconocida: {activacion!r}; opciones: {sorted(ACTIVACIONES)}")
 
 
 def _comprobar_dimensiones(dim_observacion: object, dim_accion: object,
@@ -443,9 +406,3 @@ def construir_discriminador(cfg: dict, espacio_observacion: spaces.Space,
     raise ValueError(
         "Espacio de acción no compatible: se admite Discrete o Box de una dimensión")
 
-
-def construir_modelo(cfg: dict) -> nn.Module:
-    nombre = cfg["modelo"]["nombre"]
-    if nombre == "mi_modelo":
-        return ModeloPlaceholder()
-    raise ValueError(f"modelo desconocido: {nombre}")

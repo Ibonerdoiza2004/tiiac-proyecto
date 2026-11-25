@@ -400,8 +400,75 @@ exactas de las dependencias están en `web/package-lock.json`. Desde `web/`:
 | Tests de punta a punta | `npm run e2e` |
 | Compilar para producción (`web/dist/`) | `npm run build` |
 
-En desarrollo, Vite reenvía `/api` (HTTP y WebSocket) a `http://127.0.0.1:8000`, o a la
-dirección de `TIIAC_API_URL`. En producción, FastAPI sirve `web/dist/`.
+El backend es una API FastAPI (`src/app/`). Desde la raíz, con el entorno de Python:
+
+```bash
+python -m src.app
+```
+
+Escucha en la dirección y el puerto de la sección `aplicativo` de `configs/default.yaml`
+(por defecto `http://127.0.0.1:8000`) y, si existe `web/dist/` (`npm run build`), sirve
+también el frontend en la raíz. En desarrollo, Vite reenvía `/api` (HTTP y WebSocket) a
+`http://127.0.0.1:8000`, o a la dirección de `TIIAC_API_URL`. El contrato de la API está en
+el código: con la API en marcha, la documentación de las rutas sale en `/docs`.
+
+Todo lo pesado (jugar, entrenar, comparar) corre como un *trabajo*, en su propio proceso,
+con como mucho `experimento.procesos` a la vez; los demás esperan en cola, salvo las
+sesiones de jugar, que sin hueco se rechazan (503). La API sigue una convención única
+(`src/app/contrato.py`): cada funcionalidad tiene su ruta para crear y todo lo demás es
+común a cualquier trabajo.
+
+| Ruta | Para qué |
+|---|---|
+| `GET /api/estado` | Entornos, trabajos a la vez, huecos libres y si se puede usar W&B |
+| `POST /api/wandb/comprobar` | Vuelve a comprobar la sesión de W&B (tras `wandb login`, sin reiniciar) |
+| `GET /api/laboratorio/{entorno}` | Velocidad del entorno, si se juega a mano y partidas por defecto |
+| `GET /api/laboratorio/{entorno}/ajustes/{metodo}` | Hiperparámetros del formulario (experto, bc o gail) con los valores del perfil; textos, nivel y rangos en `configs/dashboard.yaml` (un límite que no existe no aparece) |
+| `POST /api/sesiones` | Jugar a mano o ver al experto (llega con `laboratorio-jugar-api`; hasta entonces valida y responde 501) |
+| `POST /api/sesiones/{id}/guardar` | Guardar partidas y tramos de una sesión y cerrarla (ídem) |
+| `POST /api/entrenamientos` | Entrenar un experto, BC o GAIL, con nombre opcional para la biblioteca y W&B opcional (llega con `laboratorio-entrenar-api`; ídem) |
+| `GET /api/trabajos`, `GET /api/trabajos/{id}` | Listar y consultar trabajos |
+| `POST /api/trabajos/{id}/pausar`, `/reanudar`, `/cancelar` | Controlar cualquier trabajo |
+| WebSocket `/api/trabajos/{id}` | Seguir cualquier trabajo en directo |
+| `GET /api/biblioteca/modelos`, `/demostraciones`, `/{id}` | Modelos y demostraciones de la biblioteca (`?entorno=`, `?tipo=`) |
+
+| WebSocket | Mensaje |
+|---|---|
+| Al conectar | `{"tipo": "estado", "trabajo"}`, `{"tipo": "historial", "progreso": [...], "eventos": [...]}` con todo lo anterior y la última imagen |
+| En directo | `{"tipo": "progreso", "medidas"}`, imágenes JPEG en binario (si el navegador va lento, solo la última), `{"tipo": "estado", "trabajo"}` y los eventos propios de cada funcionalidad, como `{"tipo": "partida_terminada", "partida"}` |
+| Al terminar | El último estado, con el resultado, y cierre normal (1000); 4404 si el trabajo no existe |
+| Del navegador | Texto JSON: `pausar`, `reanudar` y `cancelar` en cualquier trabajo; `accion` y `finalizar` en una sesión; `vista` y `finalizar` en un entrenamiento (`finalizar` en pausa reanuda para poder terminar). Lo que no vale, también un mensaje binario, recibe `{"tipo": "error", "mensaje"}` |
+
+Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder ni repetir
+progreso; una sesión de jugar, en cambio, se descarta al cerrarse la última pestaña que
+la seguía.
+
+Al pedir un entrenamiento, la API comprueba los ajustes con las mismas reglas que los
+entrenadores (`src/utils/reglas_config.py`), también las que combinan campos, y que el
+experto o las demostraciones elegidos existan en la biblioteca, sean de su tipo y
+entorno y estén completos; si algo no vale, responde 422 antes de encolarlo.
+
+W&B es opcional en cada entrenamiento y está apagado por defecto. La API comprueba la
+sesión al arrancar y lo dice en `/api/estado`; pedir un entrenamiento con W&B sin sesión
+da 503. Sus runs van al grupo `dashboard-<entorno>` (`configs/dashboard.yaml`) o al que
+se indique en la petición.
+
+La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
+`biblioteca/`, no se versiona), con una carpeta por elemento
+(`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una
+`ficha.json` con el nombre, el origen (congelado, entrega o dashboard) y la fecha. Para
+llenarla con los expertos y las demostraciones congelados y los BC y GAIL de la entrega,
+con una sesión de W&B (`wandb login`):
+
+```bash
+python scripts/preparar_biblioteca.py
+```
+
+Descarga de los cinco entornos unos 42 MB en un minuto y medio (medido el 2026-11-24 en
+este portátil) y comprueba las huellas de los congelados y, en cada BC y GAIL, la del
+NPZ con el que se entrenó, tanto la del artefacto como la de sus propios metadatos. Se
+puede repetir: lo que ya está y es válido no se descarga otra vez (lo roto, sí), y dos a
+la vez se turnan. `--entorno` elige entornos y `--sin-entrega` deja solo los congelados.
 
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con
@@ -413,8 +480,7 @@ interfaz usa uno simulado en el navegador (`web/src/simulado/`): CartPole y Moun
 con las ecuaciones de Gymnasium, animaciones de ejemplo en los demás y curvas de
 entrenamiento inventadas; no entrena ni guarda nada de verdad. Los hiperparámetros del
 simulado salen de `configs/` con `npm run perfiles` (un test avisa si no están al día). Con
-`VITE_API=real npm run dev` usa el backend real. Las rutas y los mensajes propuestos están
-en [`docs/contrato-api.md`](docs/contrato-api.md).
+`VITE_API=real npm run dev` usa el backend real.
 
 ## Estructura del repositorio
 
@@ -425,7 +491,8 @@ src/data/               entornos, demostraciones, splits por trayectoria y loade
 src/models/factory.py   política de BC y discriminador
 src/training/           TRPO y experto, BC, GAIL, barridos, evaluación y flujo de run.py
 src/utils/              configuración, semillas, seguimiento W&B, archivos y validación
-src/app/                esqueleto del aplicativo (E2)
+src/app/                API FastAPI del aplicativo (E2): python -m src.app
+biblioteca/             modelos y demostraciones del dashboard (no se versiona)
 web/                    frontend del aplicativo (React con Vite) y sus tests
 scripts/                cada etapa por separado
 tests/                  tests (pytest)

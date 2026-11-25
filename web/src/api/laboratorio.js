@@ -1,8 +1,9 @@
 /**
  * Contrato con el backend de «Jugar tú» y «Ver agente» (laboratorio-jugar-api).
  *
- * Es una propuesta pendiente de acordar con el backend: todas las rutas y los mensajes
- * están en este archivo y en docs/contrato-api.md, así que cambiarlos solo toca aquí.
+ * Es una propuesta pendiente de acordar con el backend. En el frontend, todas las rutas y
+ * los mensajes están en este archivo, así que cambiarlos solo toca aquí; en el backend, el
+ * contrato está en el código de src/app (la documentación HTTP sale en /docs).
  *
  * HTTP (prefijo /api):
  * - GET  /laboratorio/{entorno}            → ConfiguracionJuego

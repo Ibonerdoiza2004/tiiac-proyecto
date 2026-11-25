@@ -104,6 +104,7 @@ def test_nombre_run_identifica_metodo_entorno_cantidad_y_repeticion():
 
 def test_comprobar_sesion_online_falla_si_login_devuelve_false(monkeypatch):
     """La ausencia de sesión se detecta en el principal antes de lanzar trabajo."""
+    monkeypatch.setenv("WANDB_API_KEY", "x" * 40)
     monkeypatch.setitem(sys.modules, "wandb", SimpleNamespace(
         login=lambda **kwargs: False))
     with pytest.raises(RuntimeError, match="wandb login"):
@@ -119,9 +120,38 @@ def test_comprobar_sesion_online_verifica_credenciales_sin_argumentos_no_compati
         return True
 
     falso = SimpleNamespace(login=login)
+    monkeypatch.setenv("WANDB_API_KEY", "x" * 40)
     monkeypatch.setitem(sys.modules, "wandb", falso)
     assert comprobar_wandb(_cfg("online"), exigir_sesion=True) is falso
     assert llamadas == [{"anonymous": "never", "timeout": 10, "verify": True}]
+
+
+def test_sin_credenciales_no_llama_a_login(monkeypatch, tmp_path):
+    """Regresión: sin credenciales, wandb.login pedía la clave por la terminal (y la API,
+    que lo comprueba en segundo plano al arrancar, se quedaba esperando)."""
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.setenv("NETRC", str(tmp_path / "netrc"))
+    monkeypatch.setenv("WANDB_CONFIG_DIR", str(tmp_path))
+    import wandb
+
+    monkeypatch.setattr(wandb, "login", lambda **kwargs: pytest.fail("no debería pedir nada"))
+    with pytest.raises(RuntimeError, match="no hay credenciales de W&B"):
+        comprobar_wandb(_cfg("online"), exigir_sesion=True)
+
+
+def test_con_credenciales_en_netrc_si_valida_la_sesion(monkeypatch, tmp_path):
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    netrc = tmp_path / "netrc"
+    netrc.write_text("machine api.wandb.ai\n  login user\n  password " + "k" * 40 + "\n",
+                     encoding="utf-8")
+    netrc.chmod(0o600)
+    monkeypatch.setenv("NETRC", str(netrc))
+    import wandb
+
+    llamadas = []
+    monkeypatch.setattr(wandb, "login", lambda **kwargs: llamadas.append(kwargs) or True)
+    assert comprobar_wandb(_cfg("online"), exigir_sesion=True) is wandb
+    assert len(llamadas) == 1
 
 
 def test_descargar_artefacto_usa_entidad_proyecto_y_devuelve_destino(monkeypatch, tmp_path):

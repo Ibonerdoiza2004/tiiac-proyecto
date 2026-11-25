@@ -22,8 +22,8 @@ const SALIDA = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'simul
 /**
  * Valores admitidos de los campos de texto, por clave o por sección y clave (que manda).
  * Copian ACTIVACIONES (src/models/factory.py, también para trpo), OPTIMIZADORES
- * (src/training/bc.py), el único optimizador del discriminador (src/training/gail.py) y
- * MODOS_RECOMPENSA (src/training/gail.py); un test comprueba que siguen coincidiendo.
+ * (src/training/bc.py), el único optimizador del discriminador y MODOS_RECOMPENSA
+ * (src/utils/reglas_config.py); un test comprueba que siguen coincidiendo.
  */
 export const OPCIONES = Object.freeze({
   activacion: ['relu', 'tanh'],

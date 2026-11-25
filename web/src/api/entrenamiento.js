@@ -2,8 +2,9 @@
  * Contrato con el backend de «Entrenar experto» y «Entrenar e imitar»
  * (laboratorio-entrenar-api) y la lista de demostraciones de la biblioteca.
  *
- * Es una propuesta pendiente de acordar con el backend: todas las rutas y los mensajes
- * están en este archivo y en docs/contrato-api.md, así que cambiarlos solo toca aquí.
+ * Es una propuesta pendiente de acordar con el backend. En el frontend, todas las rutas y
+ * los mensajes están en este archivo, así que cambiarlos solo toca aquí; en el backend, el
+ * contrato está en el código de src/app (la documentación HTTP sale en /docs).
  *
  * HTTP (prefijo /api):
  * - GET  /laboratorio/{entorno}/ajustes/{metodo}   → EsquemaAjustes (valores del perfil)

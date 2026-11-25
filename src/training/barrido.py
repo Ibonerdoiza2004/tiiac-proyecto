@@ -39,6 +39,7 @@ from src.data.tipos import Trayectoria
 from src.utils.archivos import comprobar_directorio_libre, marca_de_tiempo
 from src.utils.configuracion import crear_parser, resolver_configuracion
 from src.utils.procedencia import avisar_estado_git, estado_git, ruta_registrada
+from src.utils.reglas_config import comprobar_frecuencia_pares
 from src.utils.seed import validar_semilla
 from src.utils.tracking import CODIGO_INTERRUMPIDO, comprobar_wandb, crear_grupo
 from src.utils.validacion import es_entero_positivo
@@ -89,10 +90,8 @@ def comprobar_config_comun(cfg: dict) -> None:
     Raises:
         ValueError: Si falta alguna clave o algún valor no es válido.
     """
-    dcfg = config_demostraciones(cfg)
-    if not es_entero_positivo(dcfg.get("frecuencia_pares")):
-        raise ValueError("demostraciones.frecuencia_pares debe ser un entero positivo, no "
-                         f"{dcfg.get('frecuencia_pares')!r}")
+    config_demostraciones(cfg)
+    comprobar_frecuencia_pares(cfg)
     ecfg = cfg.get("experimento")
     if not isinstance(ecfg, dict):
         raise ValueError("La configuración necesita la sección experimento")

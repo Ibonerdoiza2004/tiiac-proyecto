@@ -83,6 +83,25 @@ def _leer_yaml(ruta: Path) -> dict[str, Any]:
     return contenido
 
 
+def leer_configuracion_base(ruta_config: Path) -> dict[str, Any]:
+    """Lee solo el YAML base, sin perfil de entorno.
+
+    Para lo que no depende del entorno, como las secciones experimento y
+    aplicativo que lee la API (sirve a los cinco entornos a la vez).
+
+    Args:
+        ruta_config: Ruta al YAML base.
+
+    Returns:
+        El diccionario del YAML base, sin resolver ni validar los valores nulos
+        que rellena cada perfil.
+
+    Raises:
+        ValueError: Si el archivo no se puede leer o no es un diccionario YAML.
+    """
+    return _leer_yaml(Path(ruta_config))
+
+
 # Secciones que cambian claves de otra solo para una parte del flujo: admiten las claves
 # de la sección de referencia (experto.trpo, las de trpo, solo al entrenar el experto).
 SOBRESCRITURAS = {"experto.trpo": "trpo"}

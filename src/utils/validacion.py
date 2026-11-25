@@ -25,3 +25,12 @@ def es_real_finito(valor: object) -> bool:
     """Indica si valor es un número real finito de Python o de NumPy que no sea booleano."""
     return (isinstance(valor, (int, float, np.integer, np.floating))
             and not isinstance(valor, (bool, np.bool_)) and bool(np.isfinite(valor)))
+
+
+def es_semilla(valor: object) -> bool:
+    """Indica si valor es una semilla válida: un entero (es_entero) no negativo.
+
+    Es la regla que aplica validar_semilla (seed.py), aquí sin importar PyTorch para
+    que la API pueda comprobar la configuración.
+    """
+    return es_entero(valor) and bool(valor >= 0)
