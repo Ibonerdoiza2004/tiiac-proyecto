@@ -22,11 +22,12 @@ from gymnasium import spaces
 from numpy.typing import NDArray
 
 from src.data.entornos import crear_entorno
-from src.data.splits import comprobar_cantidades, crear_splits, guardar_splits, huella_archivo
+from src.data.splits import (comprobar_cantidades, comprobar_huella, crear_splits,
+                             guardar_splits, huella_archivo)
 from src.data.tipos import ID_EPISODIO_MAXIMO, ID_EPISODIO_MINIMO, Trayectoria, es_id_episodio
 from src.utils.seed import (crear_generador, generador_torch_aislado, reiniciar_con_semilla,
                             semillas_independientes, validar_semilla)
-from src.utils.validacion import es_entero
+from src.utils.validacion import es_entero, es_semilla
 
 Politica = Callable[[NDArray[Any]], Any]
 """Recibe una observación en bruto del entorno y devuelve la acción que se le pasa a step."""
@@ -38,7 +39,23 @@ _CAMPOS = (
     "estados", "acciones", "siguientes_estados", "recompensas_originales",
     "terminados", "truncados",
 )
-_METADATOS_REQUERIDOS = {"entorno", "experto", "procedencia", "configuracion_experto"}
+# De dónde salen las partidas. Un archivo sin el campo fuente es de un experto: así se
+# guardaron los de la E1, y sus huellas no cambian.
+FUENTES = ("experto", "humano", "combinado")
+# Metadatos obligatorios de cada fuente (puede haber más).
+METADATOS_POR_FUENTE = {
+    "experto": frozenset({"entorno", "experto", "procedencia", "configuracion_experto"}),
+    # Grabadas jugando en el dashboard: fecha de la sesión y, de cada partida guardada,
+    # su semilla y el tramo [inicio, fin) de la partida jugada que se conserva.
+    "humano": frozenset({"fuente", "entorno", "fecha", "partidas"}),
+    # Hechas con combinar_demostraciones: de qué archivo (huella), partida y tramo sale
+    # cada partida.
+    "combinado": frozenset({"fuente", "entorno", "partidas"}),
+}
+# Claves de cada partida en metadatos["partidas"], según la fuente.
+CLAVES_PARTIDA = {"humano": frozenset({"id_episodio", "semilla", "tramo"}),
+                  "combinado": frozenset({"id_episodio", "huella_dataset", "id_original",
+                                          "tramo"})}
 _FORMATO = "tiiac-demostraciones"
 _VERSION = 1
 
@@ -80,6 +97,84 @@ def comprobar_espacios(espacio_observacion: spaces.Space, espacio_accion: spaces
     if not (discreto or continuo):
         raise ValueError(
             "Espacio de acción no compatible: se admite Discrete o Box de una dimensión")
+
+
+def fuente_demostraciones(metadatos: Mapping[str, Any]) -> str:
+    """Fuente de unas demostraciones según sus metadatos: experto si no lo dicen."""
+    return metadatos.get("fuente", "experto")
+
+
+def comprobar_metadatos(metadatos: object, pasos_por_partida: Mapping[int, int]) -> str:
+    """Comprueba los metadatos de unas demostraciones según su fuente.
+
+    - experto (o sin fuente): entorno, experto, procedencia y configuracion_experto,
+      como en la E1.
+    - humano: fuente, entorno (id de Gymnasium), fecha y partidas, con una entrada
+      ``{"id_episodio", "semilla", "tramo"}`` por partida del archivo.
+    - combinado: fuente, entorno y partidas, con una entrada
+      ``{"id_episodio", "huella_dataset", "id_original", "tramo"}`` por partida.
+
+    El tramo es ``[inicio, fin)`` en los pasos de la partida original, así que tiene
+    tantos pasos como la partida guardada.
+
+    Args:
+        metadatos: Metadatos del manifiesto.
+        pasos_por_partida: Pasos de cada partida del archivo, por su id_episodio.
+
+    Returns:
+        La fuente.
+
+    Raises:
+        ValueError: Si falta algo, sobra o no corresponde a las partidas.
+    """
+    if not isinstance(metadatos, Mapping):
+        raise ValueError(f"Metadatos obligatorios: {sorted(METADATOS_POR_FUENTE['experto'])}")
+    fuente = fuente_demostraciones(metadatos)
+    if fuente not in FUENTES:
+        raise ValueError(f"fuente no válida: {fuente!r}; opciones: {list(FUENTES)}")
+    requeridos = METADATOS_POR_FUENTE[fuente]
+    if not requeridos <= metadatos.keys():
+        raise ValueError(f"Metadatos obligatorios: {sorted(requeridos)}")
+    if fuente == "experto":
+        return fuente
+    if not isinstance(metadatos["entorno"], str) or not metadatos["entorno"].strip():
+        raise ValueError("entorno debe ser el id de Gymnasium del entorno")
+    if fuente == "humano" and (not isinstance(metadatos["fecha"], str)
+                               or not metadatos["fecha"].strip()):
+        raise ValueError("fecha debe ser un texto con la fecha de la sesión")
+    partidas = metadatos["partidas"]
+    if not isinstance(partidas, list):
+        raise ValueError("partidas debe ser una lista con una entrada por partida")
+    vistas: set[int] = set()
+    for indice, partida in enumerate(partidas):
+        contexto = f"partidas[{indice}]"
+        if not isinstance(partida, Mapping) or set(partida) != CLAVES_PARTIDA[fuente]:
+            raise ValueError(f"{contexto} debe tener exactamente "
+                             f"{sorted(CLAVES_PARTIDA[fuente])}")
+        identificador = partida["id_episodio"]
+        if not es_id_episodio(identificador) or identificador not in pasos_por_partida:
+            raise ValueError(f"{contexto}: id_episodio {identificador!r} no es de ninguna "
+                             "partida del archivo")
+        if identificador in vistas:
+            raise ValueError(f"{contexto}: id_episodio {identificador} repetido")
+        vistas.add(identificador)
+        tramo = partida["tramo"]
+        if (not isinstance(tramo, (list, tuple)) or len(tramo) != 2
+                or not all(es_entero(v) and v >= 0 for v in tramo) or tramo[0] >= tramo[1]):
+            raise ValueError(f"{contexto}: tramo debe ser [inicio, fin) con 0 <= inicio < fin")
+        if tramo[1] - tramo[0] != pasos_por_partida[identificador]:
+            raise ValueError(f"{contexto}: el tramo {list(tramo)} tiene {tramo[1] - tramo[0]} "
+                             f"pasos y la partida, {pasos_por_partida[identificador]}")
+        if fuente == "humano" and not es_semilla(partida["semilla"]):
+            raise ValueError(f"{contexto}: semilla no válida: {partida['semilla']!r}")
+        if fuente == "combinado":
+            comprobar_huella(partida["huella_dataset"])
+            if not es_id_episodio(partida["id_original"]):
+                raise ValueError(f"{contexto}: id_original debe ser un id de partida")
+    if vistas != set(pasos_por_partida):
+        faltan = sorted(set(pasos_por_partida) - vistas)
+        raise ValueError(f"Faltan en partidas las partidas {faltan}")
+    return fuente
 
 
 def _dentro_de_caja(valores: NDArray[Any], caja: spaces.Box) -> bool:
@@ -213,8 +308,9 @@ def guardar_demostraciones(
     entorno. Los arrays conservan sus valores, dtype, orden y separación por
     episodio; no se normalizan.
 
-    Los metadatos JSON incluyen entorno, experto, procedencia y
-    configuracion_experto. Los escalares NumPy se guardan como números de
+    Los metadatos JSON dependen de su fuente (comprobar_metadatos): los de un
+    experto incluyen entorno, experto, procedencia y configuracion_experto; los
+    humanos y los combinados, una entrada por partida. Los escalares NumPy se guardan como números de
     Python y las tuplas se leerán como listas. La ruta termina en .npz y se
     crean sus directorios. El manifiesto de formato y versión vive dentro del
     mismo archivo comprimido, legible con np.load(..., allow_pickle=False).
@@ -238,10 +334,12 @@ def guardar_demostraciones(
     destino = Path(ruta)
     if destino.suffix != ".npz":
         raise ValueError("La ruta de demostraciones debe terminar en .npz")
-    if not isinstance(metadatos, Mapping) or not _METADATOS_REQUERIDOS <= metadatos.keys():
-        raise ValueError(f"Metadatos obligatorios: {sorted(_METADATOS_REQUERIDOS)}")
+    if not isinstance(metadatos, Mapping):
+        comprobar_metadatos(metadatos, {})  # da el error con los obligatorios
     _comprobar_claves_json(metadatos, set())
     validadas = _validar_coleccion(trayectorias, espacio_observacion, espacio_accion)
+    comprobar_metadatos(metadatos, {identificador: len(arrays["estados"])
+                                    for identificador, arrays in validadas})
 
     contenidos: dict[str, NDArray[Any]] = {}
     episodios: list[dict[str, object]] = []
@@ -315,8 +413,8 @@ def _leer_manifiesto(archivo: np.lib.npyio.NpzFile) -> dict[str, Any]:
         raise ValueError(
             f"Versión no soportada: {manifiesto.get('version')!r}; se admite {_VERSION}")
     metadatos = manifiesto.get("metadatos")
-    if not isinstance(metadatos, dict) or not _METADATOS_REQUERIDOS <= metadatos.keys():
-        raise ValueError(f"Metadatos obligatorios: {sorted(_METADATOS_REQUERIDOS)}")
+    if not isinstance(metadatos, dict):
+        comprobar_metadatos(metadatos, {})  # da el error con los obligatorios
     episodios = manifiesto.get("episodios")
     if not isinstance(episodios, list) or not episodios:
         raise ValueError("El manifiesto debe listar al menos un episodio")
@@ -329,6 +427,9 @@ def _leer_manifiesto(archivo: np.lib.npyio.NpzFile) -> dict[str, Any]:
     prefijos = [episodio["prefijo"] for episodio in episodios]
     if len(set(prefijos)) != len(prefijos):
         raise ValueError("El manifiesto repite prefijos de episodio")
+    comprobar_metadatos(metadatos, {episodio["id_episodio"]: int(episodio["numero_pasos"])
+                                    for episodio in episodios
+                                    if es_id_episodio(episodio["id_episodio"])})
     esperados = {"manifiesto"} | {f"{prefijo}_{campo}"
                                   for prefijo in prefijos for campo in _CAMPOS}
     if set(archivo.files) != esperados:

@@ -314,14 +314,16 @@ def _detalles_bc(carpeta: Path, gym: str) -> dict[str, Any]:
 
 
 def _detalles_demostraciones(carpeta: Path, gym: str) -> dict[str, Any]:
-    """Partidas y pares del manifiesto del NPZ."""
-    from src.data.demostraciones import resumen_demostraciones  # noqa: PLC0415
+    """Partidas, pares y fuente del manifiesto del NPZ."""
+    from src.data.demostraciones import (fuente_demostraciones,  # noqa: PLC0415
+                                         resumen_demostraciones)
 
     resumen = resumen_demostraciones(carpeta / "demostraciones.npz")
     entorno = resumen["metadatos"].get("entorno")
     if entorno != gym:
         raise ValueError(f"demostraciones.npz es de {entorno!r}, no de {gym}")
     return {"partidas": resumen["partidas"], "pares": resumen["pares"],
+            "fuente": fuente_demostraciones(resumen["metadatos"]),
             "splits": (carpeta / "splits.json").is_file()}
 
 
@@ -357,12 +359,17 @@ class Biblioteca:
             elemento.update({clave: ficha.get(clave) for clave in
                              ("nombre", "origen", "creado", "descripcion", "fuente",
                               "artefacto")})
-            if tipo == "demostraciones" and elemento["fuente"] is None:
-                elemento["fuente"] = "experto"
             faltan = [a for a in ARCHIVOS[tipo] if not (carpeta / a).is_file()]
             if faltan:
                 raise ValueError(f"faltan {', '.join(faltan)}")
             elemento["detalles"] = DETALLES[tipo](carpeta, self.entornos[entorno])
+            if tipo == "demostraciones":
+                # La fuente la dice el NPZ; la ficha, si la da, tiene que coincidir.
+                fuente = elemento["detalles"]["fuente"]
+                if elemento["fuente"] not in (None, fuente):
+                    raise ValueError(f"la ficha dice fuente {elemento['fuente']!r} y el NPZ, "
+                                     f"{fuente!r}")
+                elemento["fuente"] = fuente
             elemento["valido"] = True
         except ValueError as error:
             elemento["motivo"] = str(error)

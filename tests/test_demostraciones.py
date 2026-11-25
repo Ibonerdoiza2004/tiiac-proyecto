@@ -20,7 +20,8 @@ import torch
 from gymnasium.envs.classic_control import CartPoleEnv
 
 from src.data.demostraciones import (
-    ARCHIVO_DEMOSTRACIONES, ARCHIVO_SPLITS, cargar_demostraciones, config_demostraciones,
+    ARCHIVO_DEMOSTRACIONES, ARCHIVO_SPLITS, FUENTES, METADATOS_POR_FUENTE, cargar_demostraciones,
+    comprobar_metadatos, config_demostraciones, fuente_demostraciones, resumen_demostraciones,
     generar_dataset, grabar_demostraciones, guardar_demostraciones, huella_partidas,
     jugar_partida, retorno_partida, validar_demostraciones,
 )
@@ -698,6 +699,11 @@ _MANIPULACIONES = {
     "formato_distinto": (lambda c: c["manifiesto"].update(formato="otro"),
                          "Formato desconocido: se esperaba 'tiiac-demostraciones'"),
     "version_2": (lambda c: c["manifiesto"].update(version=2), "Versión no soportada: 2"),
+    "fuente_desconocida": (lambda c: c["manifiesto"]["metadatos"].update(fuente="robot"),
+                           "fuente no válida: 'robot'"),
+    "humano_sin_partidas": (lambda c: c["manifiesto"]["metadatos"].update(
+        fuente="humano", fecha="hoy"), "Metadatos obligatorios: ['entorno', 'fecha', "
+                                        "'fuente', 'partidas']"),
     "version_true": (lambda c: c["manifiesto"].update(version=True), "Versión no soportada: True"),
     "metadatos_incompletos": (lambda c: c["manifiesto"]["metadatos"].pop("experto"),
                               _OBLIGATORIOS_LISTA),
@@ -1272,3 +1278,124 @@ def test_generar_dataset_falla_sin_crear_archivos(
         generar_dataset(_cfg_demostraciones(**cfg_cambios), _equilibrio, tmp_path / "datos",
                         _metadatos_grabacion() if metadatos is None else metadatos)
     assert not (tmp_path / "datos").exists()
+
+
+# --- metadatos según la fuente ---------------------------------------------------------
+
+HUELLA = "ab" * 32
+PASOS = {0: 3, 5: 2}  # partidas del archivo de prueba: id 0 con 3 pasos e id 5 con 2
+
+
+def _humano() -> dict[str, Any]:
+    return {"fuente": "humano", "entorno": "CartPole-v1", "fecha": "2026-11-25T10:00:00+01:00",
+            "partidas": [{"id_episodio": 0, "semilla": 11, "tramo": [0, 3]},
+                         {"id_episodio": 5, "semilla": 12, "tramo": [4, 6]}]}
+
+
+def _combinado() -> dict[str, Any]:
+    return {"fuente": "combinado", "entorno": "CartPole-v1", "partidas": [
+        {"id_episodio": 0, "huella_dataset": HUELLA, "id_original": 3, "tramo": [10, 13]},
+        {"id_episodio": 5, "huella_dataset": "cd" * 32, "id_original": 3, "tramo": [0, 2]}]}
+
+
+def _partidas_de_prueba() -> list[Trayectoria]:
+    return [_trayectoria(3, identificador=0), _trayectoria(2, identificador=5)]
+
+
+def test_las_fuentes_y_sus_obligatorios():
+    assert FUENTES == ("experto", "humano", "combinado")
+    assert set(METADATOS_POR_FUENTE) == set(FUENTES)
+
+
+@pytest.mark.parametrize("fabrica, fuente", [(_humano, "humano"), (_combinado, "combinado")])
+def test_guardar_y_cargar_demostraciones_humanas_y_combinadas(tmp_path, fabrica, fuente):
+    metadatos = fabrica()
+    ruta = _guardar(tmp_path / "d.npz", _partidas_de_prueba(), metadatos)
+    trayectorias, leidos = cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
+    assert [t.id_episodio for t in trayectorias] == [0, 5]
+    assert leidos == metadatos and fuente_demostraciones(leidos) == fuente
+    resumen = resumen_demostraciones(ruta)
+    assert (resumen["partidas"], resumen["pares"]) == (2, 5)
+
+
+def test_sin_fuente_es_de_experto(metadatos):
+    """Como los NPZ de la E1: sin el campo fuente, de experto y con sus obligatorios."""
+    assert fuente_demostraciones(metadatos) == "experto"
+    assert comprobar_metadatos(metadatos, PASOS) == "experto"
+    assert comprobar_metadatos({**metadatos, "fuente": "experto"}, PASOS) == "experto"
+
+
+def _sin(clave):
+    return lambda m: m.pop(clave)
+
+
+def _partida(indice, **cambios):
+    return lambda m: m["partidas"][indice].update(cambios)
+
+
+@pytest.mark.parametrize("fabrica, cambio, mensaje", [
+    (_humano, lambda m: m.update(fuente="robot"), "fuente no válida"),
+    (_humano, _sin("fecha"), "Metadatos obligatorios"),
+    (_humano, _sin("partidas"), "Metadatos obligatorios"),
+    (_humano, _sin("entorno"), "Metadatos obligatorios"),
+    (_combinado, _sin("partidas"), "Metadatos obligatorios"),
+    (_humano, lambda m: m.update(entorno=""), "entorno"),
+    (_combinado, lambda m: m.update(entorno={"id": "CartPole-v1"}), "entorno"),
+    (_humano, lambda m: m.update(fecha="  "), "fecha"),
+    (_humano, lambda m: m.update(partidas={"0": {}}), "una entrada por partida"),
+    (_humano, lambda m: m["partidas"][0].pop("semilla"), "exactamente"),
+    (_humano, _partida(0, otra=1), "exactamente"),
+    (_combinado, lambda m: m["partidas"][0].pop("id_original"), "exactamente"),
+    (_humano, lambda m: m["partidas"].__setitem__(0, [0, 3]), "exactamente"),
+    (_humano, _partida(0, id_episodio=9), "no es de ninguna partida"),
+    (_humano, _partida(0, id_episodio="0"), "no es de ninguna partida"),
+    # False == 0 en Python: sin es_id_episodio pasaría por la partida 0.
+    (_humano, _partida(0, id_episodio=False), "no es de ninguna partida"),
+    (_humano, _partida(1, id_episodio=0, tramo=[0, 3]), "repetido"),
+    (_humano, lambda m: m["partidas"].pop(), "Faltan en partidas las partidas [5]"),
+    (_humano, _partida(0, tramo=[0, 2]), "tiene 2 pasos y la partida, 3"),
+    (_humano, _partida(0, tramo=[3, 0]), "0 <= inicio < fin"),
+    (_humano, _partida(0, tramo=[2, 2]), "0 <= inicio < fin"),
+    (_humano, _partida(0, tramo=[-1, 2]), "0 <= inicio < fin"),
+    (_humano, _partida(0, tramo=[0, 3, 4]), "0 <= inicio < fin"),
+    (_humano, _partida(0, tramo=[0.0, 3]), "0 <= inicio < fin"),
+    (_humano, _partida(0, tramo=[False, True]), "0 <= inicio < fin"),
+    (_humano, _partida(0, tramo="0-3"), "0 <= inicio < fin"),
+    (_humano, _partida(0, semilla=-1), "semilla no válida"),
+    (_humano, _partida(0, semilla=True), "semilla no válida"),
+    (_combinado, _partida(0, huella_dataset="corta"), "huella"),
+    (_combinado, _partida(0, id_original=1.5), "id_original"),
+    (_combinado, _partida(0, id_original=True), "id_original"),
+])
+def test_metadatos_que_no_valen(fabrica, cambio, mensaje):
+    metadatos = fabrica()
+    cambio(metadatos)
+    with pytest.raises(ValueError, match=re.escape(mensaje)):
+        comprobar_metadatos(metadatos, PASOS)
+
+
+@pytest.mark.parametrize("metadatos", [[], None, "humano"])
+def test_metadatos_que_no_son_un_diccionario(metadatos):
+    with pytest.raises(ValueError, match="Metadatos obligatorios"):
+        comprobar_metadatos(metadatos, PASOS)
+
+
+def test_guardar_comprueba_los_metadatos_con_las_partidas(tmp_path):
+    """Una partida del archivo sin su entrada no se guarda, y no queda nada a medias."""
+    metadatos = _humano()
+    metadatos["partidas"].pop()
+    ruta = tmp_path / "d.npz"
+    with pytest.raises(ValueError, match="Faltan en partidas"):
+        _guardar(ruta, _partidas_de_prueba(), metadatos)
+    assert not ruta.exists()
+
+
+def test_cargar_comprueba_los_metadatos_con_las_partidas(tmp_path):
+    valido = _guardar(tmp_path / "valido.npz", _partidas_de_prueba(), _humano())
+    ruta = _manipular(valido, tmp_path / "manipulado.npz",
+                      lambda c: c["manifiesto"]["metadatos"]["partidas"][1].update(tramo=[0, 5]))
+    with pytest.raises(ValueError, match="tiene 5 pasos y la partida, 2"):
+        cargar_demostraciones(ruta, OBSERVACION, DISCRETA)
+    with pytest.raises(ValueError, match="tiene 5 pasos y la partida, 2"):
+        resumen_demostraciones(ruta)
+
