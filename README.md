@@ -460,6 +460,18 @@ JPEG con la calidad de `vista.calidad_jpeg` en `configs/dashboard.yaml`. Dibujar
 cambia el entrenamiento: con la vista encendida, apagada o cambiando en marcha salen los
 mismos pesos.
 
+Los entrenamientos del dashboard los hacen los trabajadores de
+`src/training/trabajadores.py`, que el gestor ejecuta en un proceso propio con las
+mismas funciones que los scripts de la E1 (de momento, el del experto; la ruta
+`POST /api/entrenamientos` responde 501 hasta la rama `laboratorio-entrenar-api`).
+Mandan un progreso por iteración, `{"paso", "iteracion", ...}`, con `paso` en la unidad
+de la duración y las mismas medidas que van a W&B con su sección (`trpo/…`), más las de
+la evaluación (`evaluacion/…`) si toca evaluar. Obedecen `vista` y `finalizar`: este
+termina tras la iteración en curso y guarda lo que daría el entrenamiento al acabar (en
+el experto, el mejor evaluado), marcado como incompleto. El modelo se guarda en la
+biblioteca con origen «dashboard» y, con W&B, se registran las medidas, el resumen y el
+modelo como artefacto.
+
 La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `biblioteca/`, no se versiona), con una carpeta por elemento
 (`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una
