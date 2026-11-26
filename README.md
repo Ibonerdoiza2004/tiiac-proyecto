@@ -489,6 +489,17 @@ entorno); apagada, a toda velocidad. `finalizar` corta la partida en curso, y el
 resultado, `{"partidas", "semilla", "incompleta", "modelos": [{"id", "retornos"}]}`, se
 queda solo con las rondas que jugaron todos. No se guarda nada fuera del trabajo.
 
+Un entrenamiento cortado (se cae el proceso o se cierra la aplicación) se puede reanudar
+desde su último checkpoint. Cada entrenamiento con checkpoints tiene su carpeta en
+`<biblioteca>/.en_curso/`, con los argumentos con los que empezó y el último estado
+(`src/training/checkpoints.py`). Relanzarlo con los mismos argumentos sigue desde ahí:
+vuelve a mandar el progreso guardado, entrena el resto y anota en el resumen desde
+dónde se reanudó. Con W&B, abre un run nuevo con la etiqueta `reanudado`. No se puede
+reanudar si cambian los argumentos que definen el entrenamiento o la configuración
+resuelta. Al terminar bien, la carpeta se borra. Por ahora solo BC guarda checkpoints:
+uno por época, y como no juega partidas, reanudado acaba exactamente igual que sin
+cortar.
+
 La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `biblioteca/`, no se versiona), con una carpeta por elemento
 (`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una

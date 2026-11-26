@@ -37,7 +37,8 @@ from src.models.factory import PoliticaBC, comprobar_arquitectura, construir_pol
 from src.training.barrido import MetodoBarrido, comprobar_config_comun
 from src.utils.archivos import escribir_archivo_nuevo
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
-from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion, validar_semilla
+from src.utils.seed import (crear_generador, estado_aleatorio, fijar_seed,
+                            restaurar_estado_aleatorio, semillas_repeticion, validar_semilla)
 from src.utils.tracking import (abrir_run_barrido, nombre_artefacto, registrar,
                                 registrar_resumen, subir_artefacto, terminar_run,
                                 usar_artefacto)
@@ -115,6 +116,8 @@ def evaluar_bc(politica: PoliticaBC, loader: DataLoader) -> dict[str, float]:
 
 def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: DataLoader,
                 cfg: dict, run: Any = None, parar: Callable[[], bool] | None = None,
+                estado_inicial: dict[str, Any] | None = None,
+                guardar_estado: Callable[[dict[str, Any]], None] | None = None,
                 ) -> dict[str, float | int]:
     """Entrena la política de BC con parada temprana y deja los mejores pesos.
 
@@ -143,6 +146,12 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
         parar: Se consulta tras validar cada época; si devuelve True, se termina
             ahí con los pesos de la mejor época hasta entonces (el «finalizar»
             del dashboard). Con None se entrena hasta el final.
+        estado_inicial: Estado que dio guardar_estado (checkpoint): sigue desde la
+            época siguiente con los mismos pesos, optimizador, parada temprana y
+            generadores aleatorios, así que acaba igual que sin cortar. La política y
+            los loaders se crean como en la ejecución original.
+        guardar_estado: Recibe el estado al acabar cada época tras la que el
+            entrenamiento sigue (no la última, ni al parar).
 
     Returns:
         mejor_epoca (desde 1), epocas entrenadas y las métricas de validación
@@ -150,7 +159,8 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
 
     Raises:
         ValueError: Configuración no válida, train_loader sin pares o con un
-            sampler del que no se sabe qué pares recorre (al normalizar).
+            sampler del que no se sabe qué pares recorre (al normalizar), o un
+            estado_inicial que no corresponde a esta política y configuración.
         FloatingPointError: Si la pérdida de train o alguna métrica de
             validación no es finita.
     """
@@ -169,7 +179,10 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
     mejores: dict[str, float] = {}
     mejor_estado = copy.deepcopy(politica.state_dict())
     mejor_epoca, sin_mejora, paso, epoca = 0, 0, 0, 0
-    for epoca in range(1, epocas_maximas + 1):
+    if estado_inicial is not None:
+        mejores, mejor_estado, mejor_epoca, sin_mejora, paso, epoca = _reanudar_bc(
+            estado_inicial, politica, opt, epocas_maximas, paciencia)
+    for epoca in range(epoca + 1, epocas_maximas + 1):
         politica.train()
         for estados, acciones in train_loader:
             opt.zero_grad()
@@ -197,16 +210,64 @@ def entrenar_bc(politica: PoliticaBC, train_loader: DataLoader, val_loader: Data
                 break
         if parar is not None and parar():
             break
+        if guardar_estado is not None and epoca < epocas_maximas:
+            guardar_estado({"epoca": epoca, "paso": paso,
+                            "politica": copy.deepcopy(politica.state_dict()),
+                            "optimizador": copy.deepcopy(opt.state_dict()),
+                            "mejor_estado": copy.deepcopy(mejor_estado),
+                            "mejores": dict(mejores), "mejor_epoca": mejor_epoca,
+                            "sin_mejora": sin_mejora, "aleatorio": estado_aleatorio()})
 
     politica.load_state_dict(mejor_estado)
     return {"mejor_epoca": mejor_epoca, "epocas": epoca,
             **{f"val_{k}": v for k, v in mejores.items()}}
 
 
+_CLAVES_ESTADO_BC = frozenset({"epoca", "paso", "politica", "optimizador", "mejor_estado",
+                               "mejores", "mejor_epoca", "sin_mejora", "aleatorio"})
+
+
+def _reanudar_bc(estado: dict[str, Any], politica: PoliticaBC, opt: torch.optim.Optimizer,
+                 epocas_maximas: int, paciencia: int,
+                 ) -> tuple[dict[str, float], dict[str, Any], int, int, int, int]:
+    """Carga un estado de guardar_estado en la política, el optimizador y los generadores.
+
+    Returns:
+        mejores, mejor_estado, mejor_epoca, sin_mejora, paso y la época ya hecha.
+
+    Raises:
+        ValueError: Si el estado no es de esta política y configuración.
+    """
+    if not isinstance(estado, dict) or set(estado) != _CLAVES_ESTADO_BC:
+        raise ValueError("El estado de BC no tiene las claves de un checkpoint")
+    epoca, paso = estado["epoca"], estado["paso"]
+    mejor_epoca, sin_mejora = estado["mejor_epoca"], estado["sin_mejora"]
+    if not (es_entero_positivo(epoca) and epoca < epocas_maximas and es_entero_positivo(paso)
+            and es_entero_positivo(mejor_epoca) and mejor_epoca <= epoca
+            and isinstance(sin_mejora, int) and 0 <= sin_mejora < paciencia
+            and mejor_epoca + sin_mejora == epoca):
+        raise ValueError("El estado de BC no encaja con bc.epocas_maximas y bc.paciencia")
+    mejores = estado["mejores"]
+    if not isinstance(mejores, dict) or not all(isinstance(v, float) for v in mejores.values()):
+        raise ValueError("El estado de BC no tiene las métricas de su mejor época")
+    try:
+        politica.load_state_dict(estado["politica"])
+        opt.load_state_dict(estado["optimizador"])
+        mejor_estado = copy.deepcopy(estado["mejor_estado"])
+        politica_mejor = copy.deepcopy(politica)
+        politica_mejor.load_state_dict(mejor_estado)
+    except (RuntimeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"El estado de BC no corresponde a esta política: {error}") from error
+    restaurar_estado_aleatorio(estado["aleatorio"])
+    return dict(mejores), mejor_estado, int(mejor_epoca), int(sin_mejora), int(paso), int(epoca)
+
+
 def entrenar_bc_subconjunto(
     trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones, cantidad: int,
     espacio_observacion: spaces.Space, espacio_accion: spaces.Space, cfg: dict,
     generador: np.random.Generator, run: Any = None, parar: Callable[[], bool] | None = None,
+    estado_inicial: dict[str, Any] | None = None,
+    guardar_estado: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[PoliticaBC, dict[str, float | int]]:
     """Recorrido completo de BC para un subconjunto de partidas de train.
 
@@ -228,6 +289,8 @@ def entrenar_bc_subconjunto(
         generador: Generador de src.utils.seed.crear_generador.
         run: Run de W&B o None.
         parar: Como en entrenar_bc.
+        estado_inicial: Como en entrenar_bc.
+        guardar_estado: Como en entrenar_bc.
 
     Returns:
         La política con los pesos de la mejor época y un resumen con cantidad,
@@ -240,7 +303,8 @@ def entrenar_bc_subconjunto(
     train_loader, val_loader = construir_loaders_bc(
         trayectorias, splits, cantidad, espacio_accion, cfg, generador)
     politica = construir_politica_bc(cfg, espacio_observacion, espacio_accion)
-    resultado = entrenar_bc(politica, train_loader, val_loader, cfg, run, parar)
+    resultado = entrenar_bc(politica, train_loader, val_loader, cfg, run, parar,
+                            estado_inicial, guardar_estado)
     return politica, {"cantidad": int(cantidad), "pares_train": len(train_loader.dataset),
                       "pares_validacion": len(val_loader.dataset), **resultado}
 
@@ -385,6 +449,8 @@ def comprobar_config_barrido_bc(cfg: dict) -> None:
 def entrenar_bc_repeticion(cfg: dict, trayectorias: Sequence[Trayectoria],
                            splits: SplitsDemostraciones, cantidad: int, repeticion: int,
                            run: Any = None, parar: Callable[[], bool] | None = None,
+                           estado_inicial: dict[str, Any] | None = None,
+                           guardar_estado: Callable[[dict[str, Any]], None] | None = None,
                            ) -> tuple[PoliticaBC, dict[str, Any]]:
     """Entrena un BC con las semillas de su repetición, como en el barrido de la E1.
 
@@ -401,10 +467,13 @@ def entrenar_bc_repeticion(cfg: dict, trayectorias: Sequence[Trayectoria],
         repeticion: Número de repetición.
         run: Run de W&B (o algo con su log) o None.
         parar: Como en entrenar_bc.
+        estado_inicial: Como en entrenar_bc; las semillas se fijan igual, así que
+            la política y los pares salen como en la ejecución original.
+        guardar_estado: Como en entrenar_bc.
 
     Returns:
         La política y el resumen de entrenar_bc_subconjunto con la repetición, las
-        semillas y los segundos medidos.
+        semillas y los segundos medidos (solo los de esta llamada).
 
     Raises:
         ValueError: Si algo no es válido.
@@ -415,7 +484,8 @@ def entrenar_bc_repeticion(cfg: dict, trayectorias: Sequence[Trayectoria],
     inicio = time.perf_counter()
     fijar_seed(semillas["modelo"])
     politica, resumen = entrenar_bc_subconjunto(trayectorias, splits, cantidad, *espacios, cfg,
-                                                crear_generador(semillas["pares"]), run, parar)
+                                                crear_generador(semillas["pares"]), run, parar,
+                                                estado_inicial, guardar_estado)
     return politica, {**resumen, "repeticion": int(repeticion),
                       "semillas": {"base": int(semilla_base), **semillas},
                       "segundos": time.perf_counter() - inicio}

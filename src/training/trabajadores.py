@@ -24,6 +24,14 @@ POST /api/entrenamientos):
   ``cantidad`` (partidas de train que se usan, las N primeras; None, todas). La semilla
   es la base de las repeticiones (experimento.semilla_repeticiones) y se entrena la
   repetición 0, como en la E1. BC no tiene vista.
+- ``checkpoint``: carpeta de sus checkpoints (src/training/checkpoints.py; None, sin
+  checkpoints). Por ahora solo en BC (METODOS_CON_CHECKPOINT): se guarda uno al acabar
+  cada época; si la carpeta ya tiene uno (de una ejecución cortada con los mismos
+  argumentos), se sigue desde él: primero se vuelve a mandar el progreso guardado y
+  después se entrena el resto. BC sigue exactamente igual que sin corte. El resumen
+  dice desde qué épocas se reanudó (``reanudado_desde``) y, con W&B, se abre un run
+  nuevo con la etiqueta ``reanudado`` y el id del anterior en su config. Al terminar
+  bien, la carpeta se borra.
 
 Mensajes de progreso: uno por iteración, ``{"paso", "iteracion", ...}`` (en BC, uno por
 época, ``{"paso", "epoca", ...}``) con ``paso`` en la unidad de la duración (pasos del
@@ -56,6 +64,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +81,8 @@ from src.data.splits import SplitsDemostraciones, huella_archivo, validar_splits
 from src.data.tipos import Trayectoria
 from src.training.barrido import cargar_datos
 from src.training.bc import cargar_politica_bc, entrenar_bc_repeticion, guardar_bc_repeticion
+from src.training.checkpoints import (borrar_en_curso, comprobar_misma_config,
+                                      escribir_checkpoint, preparar_en_curso)
 from src.training.evaluacion import config_evaluacion, predecir_accion
 from src.training.gail import cargar_gail, entrenar_gail, guardar_gail
 from src.training.trpo import cargar_experto, entrenar_experto, guardar_experto
@@ -85,10 +96,13 @@ from src.utils.validacion import es_entero_positivo, es_semilla
 
 # Claves que tiene que traer argumentos en un entrenamiento de cada método.
 ARGUMENTOS_ENTRENAMIENTO = frozenset({"ruta_config", "biblioteca", "calidad_jpeg", "entorno",
-                                      "nombre", "ajustes", "semilla", "vista", "wandb"})
+                                      "nombre", "ajustes", "semilla", "vista", "wandb",
+                                      "checkpoint"})
 ARGUMENTOS_IMITACION = ARGUMENTOS_ENTRENAMIENTO | {"datos", "cantidad"}
 ARGUMENTOS_POR_METODO = {"experto": ARGUMENTOS_ENTRENAMIENTO, "gail": ARGUMENTOS_IMITACION,
                          "bc": ARGUMENTOS_IMITACION}
+# Métodos que ya guardan checkpoints (los demás exigen checkpoint None).
+METODOS_CON_CHECKPOINT = ("bc",)
 # Repetición que entrena un BC o GAIL suelto: la 0 de la semilla pedida, como en la E1.
 REPETICION_DASHBOARD = 0
 # Secciones de las medidas que se mandan juntas con las de la iteración en la que ocurren.
@@ -146,6 +160,11 @@ def comprobar_argumentos_entrenamiento(argumentos: object,
                              f"{argumentos['cantidad']!r}")
     if metodo == "bc" and argumentos["vista"]:
         raise ValueError("BC no tiene vista: no juega partidas al entrenar")
+    checkpoint = argumentos["checkpoint"]
+    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint.strip()):
+        raise ValueError("checkpoint debe ser la carpeta de los checkpoints (texto) o None")
+    if checkpoint is not None and metodo not in METODOS_CON_CHECKPOINT:
+        raise ValueError(f"{metodo} todavía no guarda checkpoints: checkpoint debe ser None")
     return dict(argumentos)
 
 
@@ -212,16 +231,22 @@ class ProgresoEpocas:
     un mensaje por época con la media de las pérdidas de sus batches y la validación.
     """
 
-    def __init__(self, canal: Any, run: Any | None = None) -> None:
+    def __init__(self, canal: Any, run: Any | None = None,
+                 historial: list[dict[str, Any]] | None = None) -> None:
         """Prepara el progreso.
 
         Args:
             canal: CanalTrabajo de la tarea.
             run: Run de W&B o None.
+            historial: Mensajes ya mandados antes de un corte (del checkpoint): se
+                vuelven a mandar y se sigue contando desde ellos.
         """
         self.canal, self.run = canal, run
+        self.historial: list[dict[str, Any]] = []
         self.epoca = 0
         self._perdidas: list[float] = []
+        for mensaje in historial or []:
+            self._mandar(dict(mensaje))
 
     def log(self, medidas: dict[str, Any], step: int | None = None) -> None:
         """Recibe las medidas de entrenar_bc, como un run de W&B."""
@@ -236,6 +261,12 @@ class ProgresoEpocas:
         mensaje.update({clave: float(valor) for clave, valor in medidas.items()
                         if _es_numero(valor)})
         self._perdidas = []
+        self._mandar(mensaje)
+
+    def _mandar(self, mensaje: dict[str, Any]) -> None:
+        """Manda un mensaje y lo apunta en el historial."""
+        self.epoca = int(mensaje["epoca"])
+        self.historial.append(mensaje)
         self.canal.progreso(mensaje)
 
 
@@ -326,12 +357,19 @@ def _config(argumentos: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
-def _abrir_run(cfg: dict[str, Any], argumentos: dict[str, Any], metodo: str) -> Any | None:
-    """Run de W&B del entrenamiento (None sin W&B), en el grupo pedido."""
+def _abrir_run(cfg: dict[str, Any], argumentos: dict[str, Any], metodo: str,
+               reanudado: dict[str, Any] | None = None) -> Any | None:
+    """Run de W&B del entrenamiento (None sin W&B), en el grupo pedido.
+
+    Un entrenamiento reanudado abre un run nuevo con la etiqueta ``reanudado`` y
+    ``reanudado`` en su config (el run anterior y desde dónde sigue).
+    """
+    etiquetas = [f"entorno:{cfg['entorno']['id']}", f"metodo:{metodo}", "origen:dashboard"]
+    if reanudado is not None:
+        cfg = {**cfg, "reanudado": reanudado}
+        etiquetas.append("reanudado")
     return abrir_run(cfg, grupo=argumentos["wandb"]["grupo"], job_type=metodo,
-                     nombre=argumentos["nombre"],
-                     etiquetas=[f"entorno:{cfg['entorno']['id']}", f"metodo:{metodo}",
-                                "origen:dashboard"])
+                     nombre=argumentos["nombre"], etiquetas=etiquetas)
 
 
 def _subir_modelo(run: Any | None, metodo: str, carpeta: Path, archivos: list[str],
@@ -514,6 +552,9 @@ def tarea_entrenar_bc(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
         argumentos: Ver el docstring del módulo.
         canal: CanalTrabajo.
 
+    Con ``checkpoint``, guarda uno al acabar cada época y, si ya había uno, sigue
+    desde él (ver el docstring del módulo).
+
     Returns:
         ResultadoEntrenamiento; incompleto si se finalizó antes de llegar a las épocas
         máximas (la parada por paciencia no lo es).
@@ -523,19 +564,39 @@ def tarea_entrenar_bc(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     """
     argumentos = comprobar_argumentos_entrenamiento(argumentos, "bc")
     cfg = _config_imitacion(argumentos)
-    run = _abrir_run(cfg, argumentos, "bc")
+    en_curso = argumentos["checkpoint"] and Path(argumentos["checkpoint"])
+    previo = preparar_en_curso(en_curso, "bc", argumentos) if en_curso else None
+    if previo is not None:
+        comprobar_misma_config(previo["config"], cfg)
+    reanudado_desde = ([*previo["reanudado_desde"], int(previo["estado"]["epoca"])]
+                       if previo else [])
+    run = _abrir_run(cfg, argumentos, "bc", previo and {
+        "run_anterior": previo["run"], "desde_epoca": reanudado_desde[-1]})
     try:
         trayectorias, splits, procedencia, cantidad, id_datos = datos_de_entrenamiento(
             argumentos, cfg)
         control = ControlEntrenamiento(canal)
+        progreso = ProgresoEpocas(canal, run, previo and previo["progreso"])
+        segundos_previos = previo["segundos"] if previo else 0.0
+        inicio = time.perf_counter()
+
+        def guardar_estado(estado: dict[str, Any]) -> None:
+            escribir_checkpoint(en_curso, "bc", {
+                "estado": estado, "config": cfg, "progreso": progreso.historial,
+                "reanudado_desde": reanudado_desde, "run": run.id if run else None,
+                "segundos": segundos_previos + time.perf_counter() - inicio})
+
         politica, resumen = entrenar_bc_repeticion(
-            cfg, trayectorias, splits, cantidad, REPETICION_DASHBOARD,
-            ProgresoEpocas(canal, run), parar=control.parar)
+            cfg, trayectorias, splits, cantidad, REPETICION_DASHBOARD, progreso,
+            parar=control.parar, estado_inicial=previo and previo["estado"],
+            guardar_estado=guardar_estado if en_curso else None)
         # Al agotar la paciencia, entrenar_bc para antes de consultar parar: si se pidió
         # finalizar, paró por la orden, salvo que fuera ya la última época.
         incompleto = (control.finalizar_pedido
                       and resumen["epocas"] < cfg["bc"]["epocas_maximas"])
-        resumen = {**resumen, "incompleto": incompleto, "datos_biblioteca": id_datos}
+        resumen = {**resumen, "segundos": segundos_previos + resumen["segundos"],
+                   "incompleto": incompleto, "datos_biblioteca": id_datos,
+                   "reanudado_desde": reanudado_desde}
         ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "bc",
                               argumentos["nombre"].strip(), "dashboard",
                               lambda carpeta: guardar_bc_repeticion(
@@ -546,6 +607,8 @@ def tarea_entrenar_bc(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
         terminar_run(run, error)
         raise
     terminar_run(run)
+    if en_curso:
+        borrar_en_curso(en_curso)
     return _resultado(ficha, incompleto, argumentos["semilla"], resumen)
 
 

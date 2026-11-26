@@ -39,6 +39,42 @@ def fijar_seed(seed: int, determinista: bool = True) -> None:
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 
+def estado_aleatorio() -> dict[str, object]:
+    """Estado de los generadores globales (Python, NumPy y PyTorch en CPU).
+
+    Es lo que guarda un checkpoint para seguir con los mismos números aleatorios al
+    reanudar (restaurar_estado_aleatorio). Solo tiene tipos que torch.load admite con
+    weights_only=True: el estado de NumPy va como tensor y números.
+    """
+    clave, estado, posicion, tiene_gauss, gauss = np.random.get_state()
+    return {"python": random.getstate(), "torch": torch.get_rng_state(),
+            "numpy": {"clave": str(clave), "estado": torch.from_numpy(estado.astype(np.int64)),
+                      "posicion": int(posicion), "tiene_gauss": int(tiene_gauss),
+                      "gauss": float(gauss)}}
+
+
+def restaurar_estado_aleatorio(estado: dict[str, object]) -> None:
+    """Deja los generadores globales como los guardó estado_aleatorio.
+
+    Raises:
+        ValueError: Si el estado no tiene la forma de uno de estado_aleatorio (si falla
+            a medias, los generadores pueden quedar cambiados: quien reanuda no sigue).
+    """
+    try:
+        numpy = estado["numpy"]
+        np_estado = np.asarray(numpy["estado"], dtype=np.int64)
+        if np_estado.min(initial=0) < 0 or np_estado.max(initial=0) > np.iinfo(np.uint32).max:
+            raise ValueError("estado de NumPy fuera de rango")
+        python = estado["python"]
+        np.random.set_state((numpy["clave"], np_estado.astype(np.uint32),
+                             int(numpy["posicion"]), int(numpy["tiene_gauss"]),
+                             float(numpy["gauss"])))
+        random.setstate((python[0], tuple(python[1]), python[2]))
+        torch.set_rng_state(estado["torch"])
+    except (KeyError, TypeError, ValueError, IndexError, RuntimeError) as error:
+        raise ValueError(f"Estado aleatorio no válido: {error}") from error
+
+
 def validar_semilla(semilla: object) -> int:
     """Comprueba que semilla es un entero no negativo y la devuelve como int.
 

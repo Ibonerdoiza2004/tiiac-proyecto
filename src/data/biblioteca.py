@@ -55,6 +55,9 @@ _ID = re.compile(rf"^[0-9a-f]{{{CARACTERES_ID}}}$")
 CARPETA_IDS = ".ids"
 # Ids nuevos que prueba agregar_nuevo antes de rendirse si salen repetidos.
 INTENTOS_ID = 5
+# Checkpoints de los entrenamientos en curso (src/training/checkpoints.py), una carpeta
+# por entrenamiento. Es oculta, así que el índice no la lee.
+CARPETA_EN_CURSO = ".en_curso"
 
 
 class IdRepetido(FileExistsError):

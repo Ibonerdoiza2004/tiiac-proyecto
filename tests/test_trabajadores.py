@@ -82,7 +82,7 @@ def _argumentos(tmp_path: Path, **cambios) -> dict:
     argumentos = {"ruta_config": str(CONFIG), "biblioteca": str(tmp_path / "biblioteca"),
                   "calidad_jpeg": 80, "entorno": "cartpole", "nombre": "Mi experto",
                   "ajustes": copy.deepcopy(SMOKE), "semilla": 123, "vista": False,
-                  "wandb": {"activo": False, "grupo": None}}
+                  "wandb": {"activo": False, "grupo": None}, "checkpoint": None}
     argumentos.update(cambios)
     return argumentos
 
@@ -987,3 +987,203 @@ def test_con_el_gestor_la_vista_y_finalizar_llegan_a_la_comparacion(gestor, tmp_
     resultado = ResultadoComparacion.model_validate(final["resultado"])
     assert resultado.incompleta and 1 <= resultado.partidas < 1000
     assert len(resultado.modelos[0].retornos) == resultado.partidas
+
+
+# --- checkpoints de BC ----------------------------------------------------------------------
+
+class CanalQueSeCae(CanalFalso):
+    """Imita un corte: falla al mandar el progreso número ``en`` (desde 1)."""
+
+    def __init__(self, en: int) -> None:
+        super().__init__()
+        self.en = en
+
+    def progreso(self, medidas: dict) -> None:
+        if len(self.progresos) + 1 == self.en:
+            raise KeyboardInterrupt("corte")
+        super().progreso(medidas)
+
+
+def _argumentos_bc_reanudable(tmp_path: Path, conjunto: str, **cambios) -> dict:
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes["bc"].update(epocas_maximas=5, paciencia=100)
+    return _argumentos_imitacion(tmp_path, [conjunto], ajustes=ajustes,
+                                 checkpoint=str(tmp_path / "biblioteca" / ".en_curso" / "t1"),
+                                 **cambios)
+
+
+def _politica_de(raiz: Path, resultado: dict):
+    biblioteca = Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+    return cargar_politica_bc(biblioteca.ruta(resultado["modelo"]["id"]) / "politica.pt")[0]
+
+
+def test_bc_con_checkpoint_sin_cortes_entrena_lo_mismo_y_borra_la_carpeta(tmp_path):
+    raiz = tmp_path / "biblioteca"
+    conjunto = _conjunto(raiz)
+    argumentos = _argumentos_bc_reanudable(tmp_path, conjunto)
+    resultado = tarea_entrenar_bc(argumentos, CanalFalso())
+    sin = tarea_entrenar_bc({**argumentos, "checkpoint": None, "nombre": "Otro"}, CanalFalso())
+    assert _iguales(_politica_de(raiz, resultado).state_dict(),
+                    _politica_de(raiz, sin).state_dict())
+    assert resultado["resumen"]["reanudado_desde"] == []
+    assert not Path(argumentos["checkpoint"]).exists()
+
+
+@pytest.mark.parametrize("corte", [1, 2, 3, 5])
+def test_bc_cortado_en_cualquier_epoca_se_reanuda_y_acaba_igual(tmp_path, corte):
+    raiz = tmp_path / "biblioteca"
+    conjunto = _conjunto(raiz)
+    argumentos = _argumentos_bc_reanudable(tmp_path, conjunto)
+    completo = CanalFalso()
+    referencia = tarea_entrenar_bc({**argumentos, "checkpoint": None}, completo)
+
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(corte))
+    carpeta = Path(argumentos["checkpoint"])
+    assert (carpeta / "argumentos.json").is_file()
+    # El corte llega al mandar la época «corte»: el último checkpoint es el de la anterior.
+    assert (carpeta / "checkpoint.pt").is_file() == (corte > 1)
+
+    canal = CanalFalso()
+    resultado = tarea_entrenar_bc({**argumentos, "vista": False}, canal)
+    assert _iguales(_politica_de(raiz, resultado).state_dict(),
+                    _politica_de(raiz, referencia).state_dict())
+    # Primero el progreso guardado y después el resto: el mismo que sin cortes.
+    assert canal.progresos == completo.progresos
+    assert resultado["resumen"]["reanudado_desde"] == ([corte - 1] if corte > 1 else [])
+    sin_tiempos = {"segundos", "reanudado_desde"}
+    assert ({k: v for k, v in resultado["resumen"].items() if k not in sin_tiempos}
+            == {k: v for k, v in referencia["resumen"].items() if k not in sin_tiempos})
+    assert not carpeta.exists()
+    # El intento cortado no dejó nada en la biblioteca: solo los dos terminados.
+    biblioteca = Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+    assert len(biblioteca.listar("cartpole", ("bc",))) == 2
+
+
+def test_bc_reanudado_suma_los_segundos_de_antes_del_corte(tmp_path):
+    from src.training.checkpoints import escribir_checkpoint, leer_checkpoint
+    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(tmp_path / "biblioteca"))
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    carpeta = Path(argumentos["checkpoint"])
+    contenido = leer_checkpoint(carpeta, "bc")
+    escribir_checkpoint(carpeta, "bc", {**{k: v for k, v in contenido.items()
+                                           if k not in ("formato", "version", "metodo")},
+                                        "segundos": 1000.0})
+    resultado = tarea_entrenar_bc(argumentos, CanalFalso())
+    assert 1000 < resultado["resumen"]["segundos"] < 1100
+
+
+def test_bc_cortado_dos_veces(tmp_path):
+    raiz = tmp_path / "biblioteca"
+    conjunto = _conjunto(raiz)
+    argumentos = _argumentos_bc_reanudable(tmp_path, conjunto)
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    # La segunda vez se vuelven a mandar 2 épocas: el corte en el 4.º mensaje es en la 4.ª.
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(5))
+    resultado = tarea_entrenar_bc(argumentos, CanalFalso())
+    assert resultado["resumen"]["reanudado_desde"] == [2, 4]
+
+
+def test_bc_finalizado_tras_reanudar_borra_la_carpeta_y_es_incompleto(tmp_path):
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(raiz))
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    resultado = tarea_entrenar_bc(argumentos, CanalFalso([[{"tipo": "finalizar"}]]))
+    assert resultado["modelo"]["incompleto"] is True and resultado["resumen"]["epocas"] == 3
+    assert not Path(argumentos["checkpoint"]).exists()
+
+
+@pytest.mark.parametrize("cambio", [{"cantidad": 2}, {"semilla": 5}, {"nombre": "Otro"}])
+def test_bc_no_se_reanuda_con_otros_argumentos(tmp_path, cambio):
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(raiz))
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    canal = CanalFalso()
+    with pytest.raises(ValueError, match="No se puede reanudar"):
+        tarea_entrenar_bc({**argumentos, **cambio}, canal)
+    assert canal.progresos == [] and Path(argumentos["checkpoint"], "checkpoint.pt").is_file()
+
+
+def test_bc_no_se_reanuda_si_cambio_la_configuracion(tmp_path, monkeypatch):
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(raiz))
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    original = trabajadores._config
+
+    def otra(argumentos):
+        cfg = original(argumentos)
+        cfg["bc"]["learning_rate"] = 0.5  # como si se hubiera editado configs/
+        return cfg
+
+    monkeypatch.setattr(trabajadores, "_config", otra)
+    with pytest.raises(ValueError, match="configuración cambió"):
+        tarea_entrenar_bc(argumentos, CanalFalso())
+
+
+def test_bc_reanudado_con_wandb_abre_un_run_nuevo_marcado(tmp_path, monkeypatch):
+    abiertos = []
+
+    def abrir(cfg, **opciones):
+        run = RunFalso()
+        run.id, run.summary = f"run{len(abiertos)}", {}
+        abiertos.append((cfg, opciones))
+        return run
+
+    monkeypatch.setattr(trabajadores, "abrir_run", abrir)
+    monkeypatch.setattr(trabajadores, "subir_artefacto", lambda *a, **k: None)
+    monkeypatch.setattr(trabajadores, "terminar_run", lambda run, error=None: None)
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_bc_reanudable(
+        tmp_path, _conjunto(raiz), wandb={"activo": True, "grupo": "dashboard-cartpole"})
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    tarea_entrenar_bc(argumentos, CanalFalso())
+    (cfg0, op0), (cfg1, op1) = abiertos
+    assert "reanudado" not in cfg0 and "reanudado" not in op0["etiquetas"]
+    assert cfg1["reanudado"] == {"run_anterior": "run0", "desde_epoca": 2}
+    assert "reanudado" in op1["etiquetas"] and op1["grupo"] == "dashboard-cartpole"
+
+
+@pytest.mark.parametrize("tarea, metodo", [(tarea_entrenar_experto, "experto"),
+                                           (tarea_entrenar_gail, "gail")])
+def test_experto_y_gail_aun_no_guardan_checkpoints(tmp_path, tarea, metodo):
+    argumentos = (_argumentos(tmp_path, checkpoint="x") if metodo == "experto"
+                  else _argumentos_imitacion(tmp_path, ["a" * 12], checkpoint="x"))
+    with pytest.raises(ValueError, match="todavía no guarda checkpoints"):
+        tarea(argumentos, CanalFalso())
+
+
+@pytest.mark.parametrize("checkpoint", ["", " ", 3])
+def test_checkpoint_no_valido(tmp_path, checkpoint):
+    with pytest.raises(ValueError, match="checkpoint"):
+        comprobar_argumentos_entrenamiento(
+            _argumentos_imitacion(tmp_path, ["a" * 12], checkpoint=checkpoint), "bc")
+
+
+def test_bc_con_checkpoint_y_el_gestor_se_reanuda_tras_matar_el_proceso(gestor, tmp_path):
+    """Un corte de verdad: el proceso muere (cancelar) y otro trabajo sigue desde ahí."""
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(raiz))
+    argumentos["ajustes"]["bc"].update(epocas_maximas=100_000)
+    trabajo = gestor.crear("entrenamiento", TAREA_BC, argumentos)
+    _esperar_hasta(lambda: len(gestor.historial(trabajo["id"])) >= 3)
+    gestor.cancelar(trabajo["id"])
+    gestor.esperar(trabajo["id"], LIMITE)
+    guardadas = len(gestor.historial(trabajo["id"]))
+    assert Path(argumentos["checkpoint"], "checkpoint.pt").is_file()
+    otro = gestor.crear("entrenamiento", TAREA_BC, argumentos)
+    _esperar_hasta(lambda: len(gestor.historial(otro["id"])) >= guardadas + 2)
+    gestor.enviar_orden(otro["id"], {"tipo": "finalizar"})
+    final = gestor.esperar(otro["id"], LIMITE)
+    assert final["estado"] == "terminado", final["error"]
+    desde, = final["resultado"]["resumen"]["reanudado_desde"]
+    assert desde >= 2
+    # El historial del nuevo trabajo empieza por las épocas del anterior.
+    assert gestor.historial(otro["id"])[:desde] == gestor.historial(trabajo["id"])[:desde]
+    assert not Path(argumentos["checkpoint"]).exists()

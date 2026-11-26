@@ -687,8 +687,9 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
     Returns:
         El agente, el discriminador y un resumen: entorno, cantidad, repeticion,
         IDs de las partidas, número de pares expertos, huella del dataset,
-        semillas, iteraciones dadas (menos que gail.iteraciones si se paró), pasos, medidas de cada iteración, validaciones,
-        segundos medidos y estadísticas de normalización (None si no normaliza).
+        semillas, iteraciones dadas (menos que gail.iteraciones si se paró), pasos,
+        medidas de cada iteración, validaciones, segundos medidos y estadísticas de
+        normalización (None si no normaliza).
 
     Raises:
         ValueError: Si la configuración, los datos o los argumentos no son
