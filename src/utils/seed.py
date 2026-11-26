@@ -173,6 +173,34 @@ def semillas_repeticion(semilla: int, repeticion: int) -> dict[str, int]:
             for uso, nieta in zip(USOS_REPETICION, hija.spawn(len(USOS_REPETICION)), strict=True)}
 
 
+# Primer elemento de la clave de las semillas de reanudación: ninguna hija de spawn ni
+# nieta de semillas_repeticion llega a ese índice, así que no se repiten con ellas.
+CLAVE_REANUDACION = 2**31
+
+
+def semilla_reanudacion(semilla: int, iteracion: int) -> int:
+    """Semilla de los entornos de un entrenamiento reanudado tras la iteración dada.
+
+    Al reanudar desde un checkpoint se crean entornos nuevos (los anteriores estaban
+    a mitad de partida). Su semilla sale de la de los entornos originales y de la
+    iteración del checkpoint: reanudar dos veces desde el mismo da lo mismo, y no
+    coincide con las semillas de las instancias (semillas_independientes) ni con las
+    de otra iteración.
+
+    Args:
+        semilla: Semilla de los entornos del entrenamiento original.
+        iteracion: Iteración del checkpoint, entero positivo.
+
+    Raises:
+        ValueError: Si la semilla o la iteración no son válidas.
+    """
+    base = validar_semilla(semilla)
+    if not es_entero_positivo(iteracion):
+        raise ValueError(f"iteracion debe ser un entero positivo, no {iteracion!r}")
+    secuencia = np.random.SeedSequence(base, spawn_key=(CLAVE_REANUDACION, int(iteracion)))
+    return int(secuencia.generate_state(1)[0])
+
+
 @contextmanager
 def generador_torch_aislado(semilla: int) -> Iterator[None]:
     """Siembra el generador global de PyTorch solo dentro del bloque.

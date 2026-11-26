@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import math
 import re
@@ -32,13 +33,15 @@ from src.data.demostraciones import (generar_dataset, huella_partidas, jugar_par
 from src.data.splits import huella_archivo
 from src.training.trpo import (cargar_experto, cargar_politica_experto, config_trpo,
                                config_trpo_experto, crear_trpo,
-                               entrenar_experto, estadisticas_normalizacion, evaluar_retorno,
+                               entrenar_experto, estadisticas_normalizacion,
+                               estado_normalizacion, evaluar_retorno,
                                guardar_experto, huella_politica, iteracion_trpo,
-                               normalizar_observacion, politica_trpo)
+                               normalizar_observacion, politica_trpo,
+                               restaurar_normalizacion)
 from src.utils import archivos, procedencia
 from src.utils.configuracion import resolver_configuracion
 from src.utils.seed import (fijar_seed, generador_torch_aislado, reiniciar_con_semilla,
-                            semillas_independientes)
+                            semilla_reanudacion, semillas_independientes)
 
 RAIZ = Path(__file__).resolve().parent.parent
 ENTORNOS = pytest.mark.parametrize("entorno", ["CartPole-v1", "Pendulum-v1"],
@@ -422,6 +425,200 @@ def test_el_experto_es_reproducible():
     assert resumen_a["evaluaciones"] == resumen_b["evaluaciones"]
     estado_b = modelo_b.policy.state_dict()
     assert all(torch.equal(v, estado_b[k]) for k, v in modelo_a.policy.state_dict().items())
+
+
+# --- checkpoints del experto: guardar el estado y reanudar -----------------------------
+
+def _cfg_reanudable(**experto) -> dict:
+    """Bloques de 64 pasos, 8 iteraciones y una evaluación cada 2."""
+    cfg = _cfg()
+    cfg["experto"].update(**{"pasos_totales": 64 * 8, "evaluar_cada": 2,
+                             "retorno_objetivo": 10**6, **experto})
+    return cfg
+
+
+def _por_disco(estado: dict) -> dict:
+    """Lo guarda y lo lee como un checkpoint (torch.load con weights_only)."""
+    memoria = io.BytesIO()
+    torch.save(estado, memoria)
+    memoria.seek(0)
+    return torch.load(memoria, weights_only=True)
+
+
+@pytest.mark.parametrize("normalizar", [False, True])
+def test_guardar_estado_no_cambia_el_experto_y_guarda_tras_cada_evaluacion(normalizar):
+    cfg = _cfg_reanudable()
+    cfg["trpo"]["normalizar_observaciones"] = normalizar
+    modelo, resumen = entrenar_experto(cfg)
+    guardados = []
+    modelo_g, resumen_g = entrenar_experto(cfg, guardar_estado=guardados.append)
+    assert _pesos_iguales(modelo, modelo_g)
+    assert resumen["evaluaciones"] == resumen_g["evaluaciones"]
+    # Tras las evaluaciones de las iteraciones 2, 4 y 6; la de la 8 es la última.
+    assert [e["iteracion"] for e in guardados] == [2, 4, 6]
+    assert [e["pasos"] for e in guardados] == [128, 256, 384]
+    assert all((e["normalizacion"] is not None) == normalizar for e in guardados)
+    assert [len(e["historial"]) for e in guardados] == [1, 2, 3]
+
+
+def test_sin_guardar_estado_al_alcanzar_el_objetivo_ni_al_parar(monkeypatch):
+    cfg = _cfg_reanudable(evaluar_cada=1, retorno_objetivo=40)
+    _evaluaciones_falsas(monkeypatch, [10.0, 20.0, 45.0])
+    guardados = []
+    entrenar_experto(cfg, guardar_estado=guardados.append)
+    assert [e["iteracion"] for e in guardados] == [1, 2]
+    _evaluaciones_falsas(monkeypatch, [10.0, 20.0, 30.0])
+    guardados = []
+    consultas = []
+    entrenar_experto(cfg, parar=lambda: consultas.append(1) or len(consultas) == 3,
+                     guardar_estado=guardados.append)
+    assert [e["iteracion"] for e in guardados] == [1, 2]
+
+
+@pytest.mark.parametrize("normalizar", [False, True])
+def test_reanudar_sigue_desde_el_checkpoint_y_dos_veces_da_lo_mismo(normalizar):
+    cfg = _cfg_reanudable()
+    cfg["trpo"]["normalizar_observaciones"] = normalizar
+    guardados = []
+    _, completo = entrenar_experto(cfg, guardar_estado=guardados.append)
+    estado = guardados[1]  # tras la iteración 4
+    a, resumen_a = entrenar_experto(cfg, estado_inicial=_por_disco(estado))
+    b, resumen_b = entrenar_experto(cfg, estado_inicial=_por_disco(estado))
+    assert _pesos_iguales(a, b) and resumen_a["evaluaciones"] == resumen_b["evaluaciones"]
+    assert resumen_a["iteraciones"] == 8 and resumen_a["pasos"] == 512
+    # Las evaluaciones de antes del corte siguen en el historial, tal cual.
+    assert resumen_a["evaluaciones"][:2] == completo["evaluaciones"][:2]
+    assert [e["iteracion"] for e in resumen_a["evaluaciones"]] == [2, 4, 6, 8]
+    # Entornos nuevos con su propia semilla: lo de después no es lo mismo que sin cortar.
+    semillas = resumen_a["semillas"]
+    assert semillas["entornos_reanudacion"] == semilla_reanudacion(semillas["entornos"], 4)
+    assert resumen_a["evaluaciones"][2:] != completo["evaluaciones"][2:]
+    assert (resumen_a["normalizacion"] is not None) == normalizar
+
+
+def test_reanudar_crea_los_entornos_con_la_semilla_de_reanudacion(monkeypatch):
+    cfg = _cfg_reanudable()
+    guardados = []
+    _, resumen = entrenar_experto(cfg, guardar_estado=guardados.append)
+    usadas = []
+    original = trpo.crear_entorno_vectorizado
+
+    def espia(cfg, n, semilla, dibujable=False):
+        usadas.append(semilla)
+        return original(cfg, n, semilla, dibujable)
+
+    monkeypatch.setattr(trpo, "crear_entorno_vectorizado", espia)
+    entrenar_experto(cfg, estado_inicial=guardados[1])
+    assert usadas == [semilla_reanudacion(resumen["semillas"]["entornos"], 4)]
+
+
+def test_reanudar_con_otro_checkpoint_da_otros_entornos():
+    cfg = _cfg_reanudable()
+    guardados = []
+    entrenar_experto(cfg, guardar_estado=guardados.append)
+    _, desde_2 = entrenar_experto(cfg, estado_inicial=guardados[0])
+    _, desde_4 = entrenar_experto(cfg, estado_inicial=guardados[1])
+    assert desde_2["semillas"]["entornos_reanudacion"] != desde_4["semillas"][
+        "entornos_reanudacion"]
+
+
+def test_reanudar_conserva_el_mejor_de_antes_del_corte(monkeypatch):
+    cfg = _cfg_reanudable()
+    llamadas = _evaluaciones_falsas(monkeypatch, [10.0, 99.0, 5.0, 6.0])
+    guardados = []
+    entrenar_experto(cfg, guardar_estado=guardados.append)
+    _evaluaciones_falsas(monkeypatch, [7.0, 8.0])
+    modelo, resumen = entrenar_experto(cfg, estado_inicial=_por_disco(guardados[1]))
+    assert resumen["mejor_retorno"] == 99.0 and resumen["mejor_iteracion"] == 4
+    assert all(torch.equal(v, llamadas[1]["pesos"][k])
+               for k, v in modelo.policy.state_dict().items())
+
+
+def test_reanudar_sigue_con_la_normalizacion_guardada():
+    cfg = _cfg_reanudable()
+    cfg["trpo"]["normalizar_observaciones"] = True
+    guardados = []
+    entrenar_experto(cfg, guardar_estado=guardados.append)
+    estado = guardados[0]["normalizacion"]
+    fijar_seed(0)
+    venv = VecNormalize(crear_entorno_vectorizado(cfg, 1, 3), norm_obs=True, norm_reward=False)
+    try:
+        restaurar_normalizacion(venv, estado)
+        assert estado_normalizacion(venv) == estado
+        assert estado["cuenta"] > 1
+    finally:
+        venv.close()
+
+
+@pytest.mark.parametrize("estado, mensaje", [
+    (None, "no coinciden"), ({"media": [0.0] * 3, "varianza": [1.0] * 4, "cuenta": 2.0},
+                             "no válida"),
+    ({"media": [0.0] * 4, "varianza": [-1.0] * 4, "cuenta": 2.0}, "no válida"),
+    ({"media": [0.0] * 4, "varianza": [1.0] * 4, "cuenta": 0.0}, "no válida"),
+    ({"media": [float("nan")] * 4, "varianza": [1.0] * 4, "cuenta": 2.0}, "no válida"),
+    ({"media": [0.0] * 4, "varianza": [1.0] * 4}, "no válida"),
+])
+def test_restaurar_una_normalizacion_que_no_vale(estado, mensaje):
+    cfg = _cfg()
+    fijar_seed(0)
+    venv = VecNormalize(crear_entorno_vectorizado(cfg, 1, 3), norm_obs=True, norm_reward=False)
+    try:
+        with pytest.raises(ValueError, match=mensaje):
+            restaurar_normalizacion(venv, estado)
+    finally:
+        venv.close()
+    sin = crear_entorno_vectorizado(cfg, 1, 3)
+    try:
+        restaurar_normalizacion(sin, None)  # no normaliza: nada que restaurar
+        with pytest.raises(ValueError, match="no coinciden"):
+            restaurar_normalizacion(sin, {"media": [0.0] * 4, "varianza": [1.0] * 4,
+                                          "cuenta": 2.0})
+    finally:
+        sin.close()
+
+
+def _estado_experto() -> dict:
+    guardados = []
+    entrenar_experto(_cfg_reanudable(), guardar_estado=guardados.append)
+    return guardados[1]
+
+
+@pytest.fixture(scope="module")
+def estado_experto() -> dict:
+    return _estado_experto()
+
+
+@pytest.mark.parametrize("cambio, mensaje", [
+    (lambda e: e.pop("pasos"), "claves"), (lambda e: e.update(extra=1), "claves"),
+    (lambda e: e.update(pasos=200), "pasos_por_iteracion"),
+    (lambda e: e.update(iteracion=3, pasos=192), "evaluar_cada"),
+    (lambda e: e.update(iteracion=8, pasos=512), "pasos_totales"),
+    (lambda e: e.update(iteracion=0, pasos=0), "pasos_por_iteracion"),
+    (lambda e: e.update(iteracion=True), "pasos_por_iteracion"),
+    (lambda e: e.update(historial=[]), "historial"),
+    (lambda e: e["historial"][-1].update(iteracion=2), "historial"),
+    (lambda e: e.update(mejor={}), "historial"),
+    (lambda e: e["mejor"].update(retorno_medio=1e7), "historial"),
+    (lambda e: e["mejor"].update(retorno_medio="x"), "historial"),
+    (lambda e: e["politica"].pop(next(iter(e["politica"]))), "no corresponde"),
+    (lambda e: e.update(optimizador={}), "no corresponde"),
+    (lambda e: e["mejor"].update(pesos={}), "no corresponde"),
+    (lambda e: e.update(normalizacion={"media": [0.0] * 4, "varianza": [1.0] * 4,
+                                       "cuenta": 2.0}), "no coinciden"),
+    (lambda e: e.update(aleatorio={}), "Estado aleatorio"),
+])
+def test_un_estado_del_experto_que_no_vale_no_se_reanuda(estado_experto, cambio, mensaje):
+    estado = copy.deepcopy(estado_experto)
+    cambio(estado)
+    with pytest.raises(ValueError, match=mensaje):
+        entrenar_experto(_cfg_reanudable(), estado_inicial=estado)
+
+
+def test_un_estado_de_otra_red_no_se_reanuda(estado_experto):
+    cfg = _cfg_reanudable()
+    cfg["trpo"]["capas_ocultas"] = [8, 8]
+    with pytest.raises(ValueError, match="no corresponde"):
+        entrenar_experto(cfg, estado_inicial=copy.deepcopy(estado_experto))
 
 
 class _ContadorPasos(BaseCallback):

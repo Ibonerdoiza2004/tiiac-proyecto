@@ -1150,13 +1150,10 @@ def test_bc_reanudado_con_wandb_abre_un_run_nuevo_marcado(tmp_path, monkeypatch)
     assert "reanudado" in op1["etiquetas"] and op1["grupo"] == "dashboard-cartpole"
 
 
-@pytest.mark.parametrize("tarea, metodo", [(tarea_entrenar_experto, "experto"),
-                                           (tarea_entrenar_gail, "gail")])
-def test_experto_y_gail_aun_no_guardan_checkpoints(tmp_path, tarea, metodo):
-    argumentos = (_argumentos(tmp_path, checkpoint="x") if metodo == "experto"
-                  else _argumentos_imitacion(tmp_path, ["a" * 12], checkpoint="x"))
+def test_gail_aun_no_guarda_checkpoints(tmp_path):
     with pytest.raises(ValueError, match="todavía no guarda checkpoints"):
-        tarea(argumentos, CanalFalso())
+        tarea_entrenar_gail(_argumentos_imitacion(tmp_path, ["a" * 12], checkpoint="x"),
+                            CanalFalso())
 
 
 @pytest.mark.parametrize("checkpoint", ["", " ", 3])
@@ -1166,24 +1163,122 @@ def test_checkpoint_no_valido(tmp_path, checkpoint):
             _argumentos_imitacion(tmp_path, ["a" * 12], checkpoint=checkpoint), "bc")
 
 
-def test_bc_con_checkpoint_y_el_gestor_se_reanuda_tras_matar_el_proceso(gestor, tmp_path):
-    """Un corte de verdad: el proceso muere (cancelar) y otro trabajo sigue desde ahí."""
+# --- checkpoints del experto ------------------------------------------------------------------
+
+def _argumentos_experto_reanudable(tmp_path: Path, **cambios) -> dict:
+    """4 iteraciones de 500 pasos con una evaluación en cada una."""
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes["experto"].update(pasos_totales=2000, evaluar_cada=1, retorno_objetivo=10**6)
+    return _argumentos(tmp_path, ajustes=ajustes,
+                       checkpoint=str(tmp_path / "biblioteca" / ".en_curso" / "t1"), **cambios)
+
+
+def _experto_de(raiz: Path, resultado: dict):
+    biblioteca = Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+    return cargar_experto(biblioteca.ruta(resultado["modelo"]["id"]))[0]
+
+
+def test_experto_con_checkpoint_sin_cortes_entrena_lo_mismo_y_borra_la_carpeta(tmp_path):
     raiz = tmp_path / "biblioteca"
-    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(raiz))
-    argumentos["ajustes"]["bc"].update(epocas_maximas=100_000)
-    trabajo = gestor.crear("entrenamiento", TAREA_BC, argumentos)
+    argumentos = _argumentos_experto_reanudable(tmp_path)
+    resultado = tarea_entrenar_experto(argumentos, CanalFalso())
+    sin = tarea_entrenar_experto({**argumentos, "checkpoint": None}, CanalFalso())
+    assert _iguales(_experto_de(raiz, resultado).policy.state_dict(),
+                    _experto_de(raiz, sin).policy.state_dict())
+    assert resultado["resumen"]["reanudado_desde"] == []
+    assert not Path(argumentos["checkpoint"]).exists()
+
+
+@pytest.mark.parametrize("corte", [1, 2, 4])
+def test_experto_cortado_se_reanuda_desde_la_ultima_evaluacion(tmp_path, corte):
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_experto_reanudable(tmp_path)
+    completo = CanalFalso()
+    referencia = tarea_entrenar_experto({**argumentos, "checkpoint": None}, completo)
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_experto(argumentos, CanalQueSeCae(corte))
+    carpeta = Path(argumentos["checkpoint"])
+    assert (carpeta / "checkpoint.pt").is_file() == (corte > 1)
+
+    canal = CanalFalso()
+    resultado = tarea_entrenar_experto({**argumentos, "vista": True}, canal)
+    resumen = resultado["resumen"]
+    # El progreso de antes del corte se vuelve a mandar tal cual y después sigue.
+    assert canal.progresos[:corte - 1] == completo.progresos[:corte - 1]
+    assert [m["iteracion"] for m in canal.progresos] == [1, 2, 3, 4]
+    assert resumen["iteraciones"] == 4 and resumen["pasos"] == 2000
+    assert (resumen["evaluaciones"][:corte - 1]
+            == referencia["resumen"]["evaluaciones"][:corte - 1])
+    assert resumen["reanudado_desde"] == ([corte - 1] if corte > 1 else [])
+    assert ("entornos_reanudacion" in resumen["semillas"]) == (corte > 1)
+    assert canal.imagenes and not carpeta.exists()
+    assert _experto_de(raiz, resultado) is not None
+
+
+def test_experto_reanudado_dos_veces_desde_el_mismo_checkpoint_da_lo_mismo(tmp_path):
+    import shutil
+    argumentos = _argumentos_experto_reanudable(tmp_path)
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_experto(argumentos, CanalQueSeCae(3))
+    copia = tmp_path / "copia"
+    shutil.copytree(argumentos["checkpoint"], copia)
+    a = tarea_entrenar_experto(argumentos, CanalFalso())
+    otra_biblioteca = tmp_path / "otra"
+    b = tarea_entrenar_experto({**argumentos, "checkpoint": str(copia),
+                                "biblioteca": str(otra_biblioteca)}, CanalFalso())
+    assert _iguales(_experto_de(tmp_path / "biblioteca", a).policy.state_dict(),
+                    _experto_de(otra_biblioteca, b).policy.state_dict())
+    assert a["resumen"]["evaluaciones"] == b["resumen"]["evaluaciones"]
+
+
+def test_experto_reanudado_con_wandb_abre_un_run_nuevo_marcado(tmp_path, monkeypatch):
+    abiertos = []
+
+    def abrir(cfg, **opciones):
+        run = RunFalso()
+        run.id, run.summary = f"run{len(abiertos)}", {}
+        abiertos.append((cfg, opciones))
+        return run
+
+    monkeypatch.setattr(trabajadores, "abrir_run", abrir)
+    monkeypatch.setattr(trabajadores, "subir_artefacto", lambda *a, **k: None)
+    monkeypatch.setattr(trabajadores, "terminar_run", lambda run, error=None: None)
+    argumentos = _argumentos_experto_reanudable(
+        tmp_path, wandb={"activo": True, "grupo": "dashboard-cartpole"})
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_experto(argumentos, CanalQueSeCae(3))
+    tarea_entrenar_experto(argumentos, CanalFalso())
+    (_, op0), (cfg1, op1) = abiertos
+    assert "reanudado" not in op0["etiquetas"] and "reanudado" in op1["etiquetas"]
+    assert cfg1["reanudado"] == {"run_anterior": "run0", "desde_iteracion": 2}
+
+
+@pytest.mark.parametrize("metodo", ["experto", "bc"])
+def test_checkpoint_con_el_gestor_se_reanuda_tras_matar_el_proceso(gestor, tmp_path, metodo):
+    """Un corte de verdad: el proceso muere (cancelar) y otro trabajo sigue desde ahí."""
+    if metodo == "experto":
+        argumentos = _argumentos_experto_reanudable(tmp_path)
+        argumentos["ajustes"]["experto"]["pasos_totales"] = 10**7
+        tarea, unidad = TAREA_EXPERTO, "iteracion"
+    else:
+        argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(tmp_path / "biblioteca"))
+        argumentos["ajustes"]["bc"].update(epocas_maximas=100_000)
+        tarea, unidad = TAREA_BC, "epoca"
+    trabajo = gestor.crear("entrenamiento", tarea, argumentos)
     _esperar_hasta(lambda: len(gestor.historial(trabajo["id"])) >= 3)
     gestor.cancelar(trabajo["id"])
     gestor.esperar(trabajo["id"], LIMITE)
-    guardadas = len(gestor.historial(trabajo["id"]))
     assert Path(argumentos["checkpoint"], "checkpoint.pt").is_file()
-    otro = gestor.crear("entrenamiento", TAREA_BC, argumentos)
-    _esperar_hasta(lambda: len(gestor.historial(otro["id"])) >= guardadas + 2)
+    guardadas = len(gestor.historial(trabajo["id"]))
+    otro = gestor.crear("entrenamiento", tarea, argumentos)
+    _esperar_hasta(lambda: len(gestor.historial(otro["id"])) >= guardadas + 1)
     gestor.enviar_orden(otro["id"], {"tipo": "finalizar"})
     final = gestor.esperar(otro["id"], LIMITE)
     assert final["estado"] == "terminado", final["error"]
     desde, = final["resultado"]["resumen"]["reanudado_desde"]
     assert desde >= 2
-    # El historial del nuevo trabajo empieza por las épocas del anterior.
-    assert gestor.historial(otro["id"])[:desde] == gestor.historial(trabajo["id"])[:desde]
+    # El historial del nuevo trabajo empieza por el del anterior.
+    historial = gestor.historial(otro["id"])
+    assert historial[:desde] == gestor.historial(trabajo["id"])[:desde]
+    assert [m[unidad] for m in historial] == list(range(1, len(historial) + 1))
     assert not Path(argumentos["checkpoint"]).exists()

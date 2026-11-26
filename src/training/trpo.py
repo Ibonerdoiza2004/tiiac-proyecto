@@ -42,8 +42,10 @@ from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nuev
 from src.utils.procedencia import a_json, estado_git, ruta_registrada, versiones_y_hardware
 from src.utils.reglas_config import config_experto as _config_experto
 from src.utils.reglas_config import config_trpo, config_trpo_experto
-from src.utils.seed import fijar_seed, semillas_independientes, validar_semilla
+from src.utils.seed import (estado_aleatorio, fijar_seed, restaurar_estado_aleatorio,
+                            semilla_reanudacion, semillas_independientes, validar_semilla)
 from src.utils.tracking import con_seccion, registrar
+from src.utils.validacion import es_entero_positivo
 
 _ARCHIVO_MODELO = "modelo.zip"
 _ARCHIVO_POLITICA = "policy.pth"  # pesos de la política dentro del zip de sb3
@@ -162,6 +164,56 @@ def estadisticas_normalizacion(venv: VecEnv) -> dict[str, Any] | None:
     return None
 
 
+def _vecnormalize(venv: VecEnv) -> VecNormalize | None:
+    """El VecNormalize de la cadena de envoltorios, o None si no normaliza."""
+    while isinstance(venv, VecEnv):
+        if isinstance(venv, VecNormalize):
+            return venv
+        venv = getattr(venv, "venv", None)
+    return None
+
+
+def estado_normalizacion(venv: VecEnv) -> dict[str, Any] | None:
+    """Estado completo de VecNormalize para un checkpoint (None si no normaliza).
+
+    A diferencia de estadisticas_normalizacion, lleva también cuántas observaciones
+    ha visto (count), que hace falta para seguir actualizándolas igual al reanudar.
+    """
+    normalizar = _vecnormalize(venv)
+    if normalizar is None:
+        return None
+    return {"media": normalizar.obs_rms.mean.tolist(), "varianza": normalizar.obs_rms.var.tolist(),
+            "cuenta": float(normalizar.obs_rms.count)}
+
+
+def restaurar_normalizacion(venv: VecEnv, estado: dict[str, Any] | None) -> None:
+    """Deja el VecNormalize de venv como lo guardó estado_normalizacion.
+
+    Raises:
+        ValueError: Si el estado no encaja con el venv (normaliza uno y el otro no, o
+            las dimensiones o los valores no valen).
+    """
+    normalizar = _vecnormalize(venv)
+    if (normalizar is None) != (estado is None):
+        raise ValueError("El checkpoint y la configuración no coinciden en si se normalizan "
+                         "las observaciones")
+    if normalizar is None:
+        return
+    try:
+        media = np.asarray(estado["media"], dtype=np.float64)
+        varianza = np.asarray(estado["varianza"], dtype=np.float64)
+        cuenta = float(estado["cuenta"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Normalización del checkpoint no válida: {error}") from error
+    forma = normalizar.obs_rms.mean.shape
+    if (media.shape != forma or varianza.shape != forma or not np.isfinite(media).all()
+            or not np.isfinite(varianza).all() or (varianza < 0).any()
+            or not np.isfinite(cuenta) or cuenta <= 0):
+        raise ValueError("Normalización del checkpoint no válida para este entorno")
+    normalizar.obs_rms.mean, normalizar.obs_rms.var, normalizar.obs_rms.count = (
+        media, varianza, cuenta)
+
+
 def politica_trpo(modelo: TRPO, determinista: bool,
                   estadisticas: dict[str, Any] | None = None) -> Politica:
     """Convierte el modelo en una función de observación en bruto a acción.
@@ -221,6 +273,8 @@ def evaluar_retorno(modelo: TRPO, cfg: dict, episodios: int, semilla: int, deter
 
 def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | None = None,
                      callback: BaseCallback | None = None, dibujable: bool = False,
+                     estado_inicial: dict[str, Any] | None = None,
+                     guardar_estado: Callable[[dict[str, Any]], None] | None = None,
                      ) -> tuple[TRPO, dict[str, Any]]:
     """Entrena el experto TRPO con la recompensa real del entorno.
 
@@ -245,18 +299,28 @@ def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | Non
             dashboard); no se usa al evaluar.
         dibujable: Crea el primer entorno de entrenamiento con
             render_mode="rgb_array", el que dibuja la vista (src/training/vista.py).
+        estado_inicial: Estado que dio guardar_estado (checkpoint): sigue desde la
+            iteración siguiente con los mismos pesos (política y valor), optimizador,
+            normalización, mejor modelo, historial y generadores. Los entornos no se
+            pueden guardar a mitad de partida, así que se crean nuevos con
+            semilla_reanudacion: el resultado no es el mismo que sin cortar, pero
+            reanudar dos veces desde el mismo estado da lo mismo.
+        guardar_estado: Recibe el estado tras cada evaluación tras la que el
+            entrenamiento sigue (no al alcanzar el objetivo, al parar ni al acabar).
 
     Returns:
         El modelo y un resumen: pasos, iteraciones, mejor retorno y su
         iteración, si se alcanzó el objetivo, historial de evaluaciones,
-        segundos medidos, semillas, estadísticas de normalización y entorno.
+        segundos medidos (solo los de esta llamada), semillas (con
+        entornos_reanudacion si se reanudó), estadísticas de normalización y entorno.
 
     Cada iteración recoge un bloque completo, así que si experto.pasos_totales no es
     múltiplo de trpo.pasos_por_iteracion se para en la primera iteración que lo
     supera (decisión del usuario): los pasos reales quedan en el resumen.
 
     Raises:
-        ValueError: Si la configuración no es válida.
+        ValueError: Si la configuración no es válida o estado_inicial no es de un
+            entrenamiento con esta configuración.
     """
     ecfg = _config_experto(cfg)
     cfg_trpo = config_trpo_experto(cfg)
@@ -264,9 +328,16 @@ def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | Non
     semilla_base = validar_semilla(ecfg["semilla"])
     semilla_modelo, semilla_entornos, semilla_evaluacion = semillas_independientes(
         semilla_base, 3)
+    semillas = {"base": semilla_base, "modelo": semilla_modelo, "entornos": semilla_entornos,
+                "evaluacion": semilla_evaluacion}
+    if estado_inicial is not None:
+        _comprobar_estado_experto(estado_inicial, ecfg, tcfg)
+        semillas["entornos_reanudacion"] = semilla_reanudacion(semilla_entornos,
+                                                               estado_inicial["iteracion"])
     fijar_seed(semilla_modelo)
-    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semilla_entornos,
-                                             dibujable)
+    venv: VecEnv = crear_entorno_vectorizado(
+        cfg, tcfg["n_entornos"], semillas.get("entornos_reanudacion", semilla_entornos),
+        dibujable)
     if tcfg["normalizar_observaciones"]:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=False,
                             clip_obs=float(tcfg["limite_normalizacion"]))
@@ -276,6 +347,8 @@ def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | Non
         mejor: dict[str, Any] | None = None
         historial = []
         iteracion, alcanzado = 0, False
+        if estado_inicial is not None:
+            mejor, historial, iteracion = _reanudar_experto(estado_inicial, modelo, venv)
         while modelo.num_timesteps < ecfg["pasos_totales"]:
             iteracion += 1
             medidas = iteracion_trpo(modelo, callback)
@@ -301,6 +374,14 @@ def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | Non
                 break
             if detener:
                 break
+            if guardar_estado is not None and modelo.num_timesteps < ecfg["pasos_totales"]:
+                guardar_estado({
+                    "iteracion": iteracion, "pasos": int(modelo.num_timesteps),
+                    "politica": copy.deepcopy(modelo.policy.state_dict()),
+                    "optimizador": copy.deepcopy(modelo.policy.optimizer.state_dict()),
+                    # mejor no se modifica después (se sustituye): no hace falta copiarlo.
+                    "normalizacion": estado_normalizacion(venv), "mejor": mejor,
+                    "historial": copy.deepcopy(historial), "aleatorio": estado_aleatorio()})
         modelo.policy.load_state_dict(mejor["pesos"])
         segundos = time.perf_counter() - inicio
     finally:
@@ -315,11 +396,67 @@ def entrenar_experto(cfg: dict, run: Any = None, parar: Callable[[], bool] | Non
         "objetivo_alcanzado": alcanzado,
         "evaluaciones": historial,
         "segundos": segundos,
-        "semillas": {"base": semilla_base, "modelo": semilla_modelo,
-                     "entornos": semilla_entornos, "evaluacion": semilla_evaluacion},
+        "semillas": semillas,
         "normalizacion": mejor["estadisticas"],
     }
     return modelo, resumen
+
+
+_CLAVES_ESTADO_EXPERTO = frozenset({"iteracion", "pasos", "politica", "optimizador",
+                                    "normalizacion", "mejor", "historial", "aleatorio"})
+
+
+def _comprobar_estado_experto(estado: object, ecfg: dict[str, Any],
+                              tcfg: dict[str, Any]) -> None:
+    """Comprueba, antes de crear nada, que el estado encaja con la configuración.
+
+    Raises:
+        ValueError: Si le faltan o sobran claves, o la iteración, los pasos, la mejor
+            evaluación o el historial no encajan con experto y trpo.
+    """
+    if not isinstance(estado, dict) or set(estado) != _CLAVES_ESTADO_EXPERTO:
+        raise ValueError("El estado del experto no tiene las claves de un checkpoint")
+    iteracion, pasos = estado["iteracion"], estado["pasos"]
+    if not (es_entero_positivo(iteracion) and es_entero_positivo(pasos)
+            and pasos == iteracion * tcfg["pasos_por_iteracion"]
+            and pasos < ecfg["pasos_totales"] and iteracion % ecfg["evaluar_cada"] == 0):
+        raise ValueError("El estado del experto no encaja con trpo.pasos_por_iteracion, "
+                         "experto.pasos_totales y experto.evaluar_cada")
+    mejor, historial = estado["mejor"], estado["historial"]
+    if (not isinstance(historial, list) or not historial
+            or not all(isinstance(e, dict) for e in historial)
+            or historial[-1].get("iteracion") != iteracion
+            or not isinstance(mejor, dict) or not {"pesos", "estadisticas", "retorno_medio",
+                                                   "iteracion"} <= mejor.keys()
+            or not isinstance(mejor["retorno_medio"], float)
+            or mejor["retorno_medio"] >= ecfg["retorno_objetivo"]):
+        raise ValueError("El estado del experto no tiene un historial y una mejor "
+                         "evaluación que encajen")
+
+
+def _reanudar_experto(estado: dict[str, Any], modelo: TRPO,
+                      venv: VecEnv) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    """Carga un estado de guardar_estado en el modelo, la normalización y los generadores.
+
+    Returns:
+        La mejor evaluación (con sus pesos), el historial y la iteración ya hecha.
+
+    Raises:
+        ValueError: Si los pesos, el optimizador o la normalización no son de este
+            modelo y entorno.
+    """
+    try:
+        modelo.policy.load_state_dict(estado["politica"])
+        modelo.policy.optimizer.load_state_dict(estado["optimizador"])
+        # Que los pesos del mejor se puedan cargar, antes de entrenar.
+        copy.deepcopy(modelo.policy).load_state_dict(estado["mejor"]["pesos"])
+    except (RuntimeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"El estado del experto no corresponde a este modelo: {error}") from error
+    restaurar_normalizacion(venv, estado["normalizacion"])
+    modelo.num_timesteps = int(estado["pasos"])
+    restaurar_estado_aleatorio(estado["aleatorio"])
+    return copy.deepcopy(estado["mejor"]), copy.deepcopy(estado["historial"]), int(
+        estado["iteracion"])
 
 
 def guardar_experto(directorio: Path, modelo: TRPO, cfg: dict,

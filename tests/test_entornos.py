@@ -276,6 +276,29 @@ def test_semillas_repeticion_rechaza_argumentos_no_validos(semilla, repeticion, 
         semillas_repeticion(semilla, repeticion)
 
 
+def test_semilla_reanudacion_no_coincide_con_otras_semillas():
+    from src.utils.seed import semilla_reanudacion, semillas_repeticion
+    por_iteracion = [semilla_reanudacion(77, i) for i in range(1, 50)]
+    assert len(set(por_iteracion)) == len(por_iteracion)
+    assert all(isinstance(v, int) and v >= 0 for v in por_iteracion)
+    # Ni con las instancias de los entornos originales ni con las de una repetición.
+    instancias = semillas_independientes(77, 50)
+    repeticiones = [v for r in range(5) for v in semillas_repeticion(77, r).values()]
+    assert not set(por_iteracion) & (set(instancias) | set(repeticiones))
+    # Depende de la base y de la iteración, también con enteros de NumPy.
+    assert semilla_reanudacion(np.int64(77), np.int64(3)) == por_iteracion[2]
+    assert semilla_reanudacion(78, 3) != por_iteracion[2]
+
+
+@pytest.mark.parametrize("semilla, iteracion, mensaje", [
+    (-1, 1, "entero no negativo"), (True, 1, "entero no negativo"),
+    (5, 0, "iteracion"), (5, -1, "iteracion"), (5, True, "iteracion"), (5, 1.0, "iteracion"),
+])
+def test_semilla_reanudacion_rechaza_argumentos_no_validos(semilla, iteracion, mensaje):
+    from src.utils.seed import semilla_reanudacion
+    with pytest.raises(ValueError, match=mensaje):
+        semilla_reanudacion(semilla, iteracion)
+
 
 # --- Filtro del aviso settotalmass de MuJoCo ---------------------------------------------
 
