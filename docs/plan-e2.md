@@ -210,11 +210,12 @@ flowchart TD
 **6. `datos-dashboard`**: los datos que crea el dashboard.
 - `combinar_demostraciones`: varios NPZ en uno nuevo con IDs sin repetir antes de
   crear los splits (decisión del 2026-10-13).
-- Subconjuntos por partidas y por tramos de pares; los pares repetidos cuentan una vez.
+- Subconjuntos por partidas, enteras (sin tramos: decisión del 2026-11-25); los pares
+  repetidos cuentan una vez.
 - Metadatos para demostraciones humanas: hoy `guardar_demostraciones` exige los datos
   de un experto.
 - Reparto automático de partidas de validación entre los datos elegidos.
-- Tests: huellas, IDs, tramos no válidos, combinaciones vacías.
+- Tests: huellas, IDs, combinaciones vacías.
 
 ### Fase 2 · Funcionalidades
 
@@ -293,7 +294,7 @@ flowchart TD
 
 **15. `biblioteca-web`**: interfaz de la Biblioteca.
 - Listados de modelos y demostraciones, y detalle de cada uno.
-- Creación de subconjuntos eligiendo partidas y tramos de pares.
+- Creación de subconjuntos eligiendo partidas, enteras.
 - Tests de componentes y de punta a punta.
 
 ### Fase 3 · Cierre

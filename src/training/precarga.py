@@ -19,7 +19,6 @@ que no añaden dos veces el mismo artefacto.
 
 from __future__ import annotations
 
-import fcntl
 import shutil
 import tempfile
 from collections.abc import Callable, Iterator
@@ -31,6 +30,7 @@ from src.data.biblioteca import DETALLES, Biblioteca, agregar_nuevo
 from src.data.splits import huella_archivo
 from src.training.barrido import ARCHIVO_DEMOSTRACIONES
 from src.training.flujo import comprobar_datos_congelados
+from src.utils.archivos import turno_exclusivo
 from src.utils.configuracion import dato_congelado
 from src.utils.tracking import comprobar_wandb, descargar_artefacto
 
@@ -43,12 +43,8 @@ ARCHIVO_CERROJO = ".precarga.lock"
 @contextmanager
 def _turno(biblioteca: Biblioteca) -> Iterator[None]:
     """Espera a que ninguna otra precarga (de este u otro proceso) use la biblioteca."""
-    with open(_carpeta_temporal(biblioteca) / ARCHIVO_CERROJO, "a", encoding="utf-8") as cerrojo:
-        fcntl.flock(cerrojo, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(cerrojo, fcntl.LOCK_UN)
+    with turno_exclusivo(_carpeta_temporal(biblioteca) / ARCHIVO_CERROJO):
+        yield
 
 
 def _artefactos_presentes(biblioteca: Biblioteca, entorno: str) -> set[str]:

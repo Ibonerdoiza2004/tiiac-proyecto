@@ -8,12 +8,32 @@ deja una carpeta ni un archivo incompletos.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+
+@contextmanager
+def turno_exclusivo(cerrojo: Path) -> Iterator[None]:
+    """Espera a que ningún otro proceso tenga el cerrojo y lo retiene mientras dura.
+
+    Usa ``fcntl.flock`` sobre el archivo cerrojo (lo crea si no existe, con su
+    carpeta): dos procesos que piden el mismo cerrojo se turnan. Se suelta al cerrar el
+    archivo, también si algo falla dentro o el proceso muere.
+
+    Args:
+        cerrojo: Archivo que hace de cerrojo.
+    """
+    cerrojo = Path(cerrojo)
+    cerrojo.parent.mkdir(parents=True, exist_ok=True)
+    with cerrojo.open("a", encoding="utf-8") as archivo:
+        fcntl.flock(archivo, fcntl.LOCK_EX)
+        yield
 
 
 def marca_de_tiempo() -> str:
