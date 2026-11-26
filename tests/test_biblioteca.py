@@ -46,7 +46,21 @@ def _trayectoria(identificador: int, pasos: int) -> Trayectoria:
                        terminados=terminados, truncados=np.zeros(pasos, dtype=bool))
 
 
-def escribir_archivos(carpeta: Path, tipo: str, gym: str = "CartPole-v1") -> None:
+def metadatos_demostraciones(gym: str, fuente: str | None = None) -> dict[str, Any]:
+    """Metadatos de las dos partidas de prueba (5 y 3 pasos) según su fuente."""
+    if fuente == "humano":
+        return {"fuente": "humano", "entorno": gym, "fecha": "2026-11-25T10:00:00+01:00",
+                "partidas": [{"id_episodio": 0, "semilla": 1}, {"id_episodio": 1, "semilla": 2}]}
+    if fuente == "combinado":
+        return {"fuente": "combinado", "entorno": gym, "partidas": [
+            {"id_episodio": 0, "huella_dataset": HUELLA, "id_original": 7},
+            {"id_episodio": 1, "huella_dataset": HUELLA, "id_original": 8}]}
+    return {"entorno": gym, "experto": "x", "procedencia": {}, "configuracion_experto": {},
+            **({"fuente": fuente} if fuente else {})}
+
+
+def escribir_archivos(carpeta: Path, tipo: str, gym: str = "CartPole-v1",
+                      fuente: str | None = None) -> None:
     """Escribe en carpeta los archivos de un elemento del tipo, como los de la E1."""
     if tipo == "experto":
         (carpeta / "modelo.zip").write_bytes(b"zip")
@@ -68,16 +82,17 @@ def escribir_archivos(carpeta: Path, tipo: str, gym: str = "CartPole-v1") -> Non
     else:
         guardar_demostraciones(carpeta / "demostraciones.npz",
                                [_trayectoria(0, 5), _trayectoria(1, 3)],
-                               {"entorno": gym, "experto": "x", "procedencia": {},
-                                "configuracion_experto": {}},
+                               metadatos_demostraciones(gym, fuente),
                                spaces.Box(-np.inf, np.inf, (4,), np.float32), spaces.Discrete(2))
 
 
 def nuevo(raiz: Path, tipo: str, entorno: str = "cartpole", origen: str = "dashboard",
           **extra: Any) -> str:
-    """Añade un elemento válido a la biblioteca y devuelve su id."""
+    """Añade un elemento válido a la biblioteca y devuelve su id (demostraciones con los
+    metadatos de su fuente)."""
     ficha = crear_ficha(nuevo_id(), entorno, tipo, f"{tipo} de prueba", origen, **extra)
-    agregar(raiz, ficha, lambda carpeta: escribir_archivos(carpeta, tipo, ENTORNOS[entorno]))
+    agregar(raiz, ficha, lambda carpeta: escribir_archivos(carpeta, tipo, ENTORNOS[entorno],
+                                                           extra.get("fuente")))
     return ficha["id"]
 
 
@@ -290,8 +305,8 @@ def test_indice_de_cada_tipo_con_sus_detalles(biblioteca) -> None:
                                                "segundos": 31.0, "huella_dataset": HUELLA}
     assert por_id[ids["bc"]]["detalles"] == {"subconjunto": 7, "semilla": 12, "repeticion": 2,
                                              "segundos": 1.2, "huella_dataset": HUELLA}
-    assert por_id[ids["demostraciones"]]["detalles"] == {"partidas": 2, "pares": 8,
-                                                         "splits": False}
+    assert por_id[ids["demostraciones"]]["detalles"] == {
+        "tipo": "conjunto", "partidas": 2, "pares": 8, "fuente": "experto", "splits": False}
     assert por_id[ids["demostraciones"]]["fuente"] == "experto"  # por defecto
     assert por_id[ids["bc"]]["fuente"] is None
 
@@ -496,7 +511,12 @@ def _descargar(nombre: str, carpeta: Path) -> Path:
         escribir_archivos(carpeta, "experto")
     else:
         escribir_archivos(carpeta, "demostraciones")
-        (carpeta / "splits.json").write_text("{}", encoding="utf-8")
+        # Splits de verdad de ese NPZ: la biblioteca comprueba que sean suyos.
+        from src.data.splits import crear_splits, guardar_splits, huella_archivo
+        from src.utils.seed import crear_generador
+        guardar_splits(carpeta / "splits.json", crear_splits(
+            [_trayectoria(0, 5), _trayectoria(1, 3)], 1, 1, [1], crear_generador(0),
+            huella_archivo(carpeta / "demostraciones.npz")))
     return carpeta
 
 
@@ -620,13 +640,19 @@ def test_la_huella_es_la_del_congelado_del_perfil(biblioteca, congelados_falsos)
     def descargar_actual(nombre: str, carpeta: Path) -> Path:
         _descargar(nombre, carpeta)
         if not nombre.startswith("experto"):
+            from src.data.splits import crear_splits, guardar_splits, huella_archivo
+            from src.utils.seed import crear_generador
             guardar = carpeta / "demostraciones.npz"
             guardar.unlink()
-            guardar_demostraciones(guardar, [_trayectoria(0, 9)],
+            (carpeta / "splits.json").unlink()
+            partidas = [_trayectoria(0, 9), _trayectoria(1, 4)]
+            guardar_demostraciones(guardar, partidas,
                                    {"entorno": "CartPole-v1", "experto": "y", "procedencia": {},
                                     "configuracion_experto": {}},
                                    spaces.Box(-np.inf, np.inf, (4,), np.float32),
                                    spaces.Discrete(2))
+            guardar_splits(carpeta / "splits.json", crear_splits(
+                partidas, 1, 1, [1], crear_generador(0), huella_archivo(guardar)))
         return carpeta
     precarga.precargar_congelados(_cfg(), biblioteca, descargar_actual, lambda _: None)
     huella_vieja = precarga.huella_demostraciones_congeladas(viejo, biblioteca)
@@ -927,3 +953,72 @@ def test_script_sigue_con_los_demas_entornos_ante_cualquier_error(monkeypatch, c
 def test_script_con_config_que_no_vale_sale_con_2(tmp_path, capsys) -> None:
     assert _script().main(["--config", str(tmp_path / "no-existe.yaml")]) == 2
     assert "configuración no válida" in capsys.readouterr().err
+
+
+# --- fuente de las demostraciones ------------------------------------------------------
+
+@pytest.mark.parametrize("fuente", ["experto", "humano", "combinado"])
+def test_la_fuente_de_las_demostraciones_sale_del_npz(biblioteca, fuente) -> None:
+    """Con la ficha sin fuente, la del NPZ; un NPZ de la E1 (sin fuente) es de experto."""
+    id_elemento = crear_ficha(nuevo_id(), "cartpole", "demostraciones", "d", "dashboard")["id"]
+    ficha = crear_ficha(id_elemento, "cartpole", "demostraciones", "d", "dashboard")
+    escribir_fuente = None if fuente == "experto" else fuente
+    agregar(biblioteca.raiz, ficha,
+            lambda carpeta: escribir_archivos(carpeta, "demostraciones", fuente=escribir_fuente))
+    elemento = biblioteca.obtener(id_elemento)
+    assert elemento["valido"], elemento["motivo"]
+    assert elemento["fuente"] == elemento["detalles"]["fuente"] == fuente
+
+
+@pytest.mark.parametrize("ficha_dice, npz_dice", [("humano", None), ("experto", "humano"),
+                                                  ("combinado", "humano")])
+def test_una_ficha_con_otra_fuente_que_el_npz_no_es_valida(biblioteca, ficha_dice,
+                                                           npz_dice) -> None:
+    ficha = crear_ficha(nuevo_id(), "cartpole", "demostraciones", "d", "dashboard",
+                        fuente=ficha_dice)
+    agregar(biblioteca.raiz, ficha,
+            lambda carpeta: escribir_archivos(carpeta, "demostraciones", fuente=npz_dice))
+    elemento = biblioteca.obtener(ficha["id"])
+    assert not elemento["valido"]
+    assert elemento["motivo"] == (f"la ficha dice fuente {ficha_dice!r} y el NPZ, "
+                                  f"{npz_dice or 'experto'!r}")
+
+
+def test_las_fuentes_de_la_biblioteca_son_las_de_las_demostraciones() -> None:
+    from src.data import biblioteca as modulo
+    from src.data.demostraciones import FUENTES
+    assert modulo.FUENTES == FUENTES
+
+
+# --- splits de un conjunto (auditoría del 2026-11-26) --------------------------------------
+
+def _con_splits(biblioteca, splits_de) -> str:
+    """Conjunto de dos partidas con el splits.json que escriba splits_de(carpeta)."""
+    def escribir(carpeta: Path) -> None:
+        escribir_archivos(carpeta, "demostraciones")
+        splits_de(carpeta)
+
+    return agregar_nuevo(biblioteca.raiz, "cartpole", "demostraciones", "c", "dashboard",
+                         escribir)["id"]
+
+
+def _splits_de_otro(carpeta: Path) -> None:
+    from src.data.splits import crear_splits, guardar_splits
+    from src.utils.seed import crear_generador
+    guardar_splits(carpeta / "splits.json", crear_splits(
+        [_trayectoria(0, 5), _trayectoria(1, 3)], 1, 1, [1], crear_generador(0), "ab" * 32))
+
+
+@pytest.mark.parametrize("splits_de, motivo", [
+    (_splits_de_otro, "se crearon para otro archivo"),
+    (lambda c: (c / "splits.json").write_text("{}", encoding="utf-8"),
+     "splits.json no corresponde"),
+    (lambda c: (c / "splits.json").write_text("{no json", encoding="utf-8"), "no es JSON"),
+])
+def test_un_conjunto_con_splits_que_no_son_suyos_no_es_valido(biblioteca, splits_de, motivo):
+    """Regresión: salía válido y con splits, y solo fallaba al entrenar."""
+    elemento = biblioteca.obtener(_con_splits(biblioteca, splits_de))
+    assert not elemento["valido"]
+    assert elemento["motivo"].startswith("splits.json no corresponde a su NPZ")
+    assert motivo in elemento["motivo"]
+

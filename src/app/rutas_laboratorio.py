@@ -177,7 +177,7 @@ def crear_router_laboratorio(ruta_config: Path, dashboard: dict[str, Any],
     @router.post("/sesiones/{id_trabajo}/guardar", response_model=ResultadoGuardadoApi,
                  tags=["sesiones"])
     def guardar_sesion(id_trabajo: str, peticion: SesionGuardar) -> dict[str, Any]:
-        """Guarda en la biblioteca las partidas y tramos elegidos y cierra la sesión."""
+        """Guarda en la biblioteca las partidas elegidas, enteras, y cierra la sesión."""
         if gestor.obtener(id_trabajo)["tipo"] != "sesion":  # 404 si no existe
             raise OperacionNoValida(f"El trabajo {id_trabajo} no es una sesión")
         raise HTTPException(status_code=501, detail=PENDIENTE_JUGAR)

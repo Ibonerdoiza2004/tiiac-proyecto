@@ -1,8 +1,7 @@
 """Rutas de la biblioteca: listar y consultar modelos y demostraciones.
 
 - ``GET /biblioteca/modelos?entorno=&tipo=``  Expertos, BC y GAIL.
-- ``GET /biblioteca/demostraciones?entorno=``  Conjuntos de demostraciones (los
-  subconjuntos llegan con la rama datos-dashboard).
+- ``GET /biblioteca/demostraciones?entorno=``  Conjuntos y subconjuntos de demostraciones.
 - ``GET /biblioteca/{id}``                     Un elemento cualquiera (404 si no existe).
 
 Los elementos que no se pueden leer salen con ``valido: false`` y el motivo, también
@@ -26,7 +25,7 @@ def como_demostracion(elemento: dict[str, Any]) -> dict[str, Any]:
     """Pasa un elemento de demostraciones del índice a la forma de DemostracionApi."""
     detalles = elemento["detalles"]
     return {"id": elemento["id"], "entorno": elemento["entorno"], "nombre": elemento["nombre"],
-            "tipo": "conjunto", "partidas": detalles.get("partidas"),
+            "tipo": detalles.get("tipo", "conjunto"), "partidas": detalles.get("partidas"),
             "pares": detalles.get("pares"), "fuente": elemento["fuente"],
             "origen": elemento["origen"], "valido": elemento["valido"],
             "motivo": elemento["motivo"]}

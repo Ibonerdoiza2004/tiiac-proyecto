@@ -216,8 +216,7 @@ def test_sesion_que_no_vale_por_su_forma(cliente, cuerpo) -> None:
 
 # --- Guardar sesiones ----------------------------------------------------------------------
 
-GUARDAR = {"nombre": "cartpole_humano_1", "partidas": [{"indice": 0, "tramo": [0, 20]},
-                                                      {"indice": 2, "tramo": [5, 6]}]}
+GUARDAR = {"nombre": "cartpole_humano_1", "partidas": [0, 2]}
 
 
 def test_guardar_una_sesion_responde_501_hasta_su_rama(cliente_y_gestor) -> None:
@@ -244,13 +243,14 @@ def test_guardar_algo_que_no_es_una_sesion(cliente_y_gestor) -> None:
     {"nombre": "   ", "partidas": GUARDAR["partidas"]},
     {"nombre": "x" * 101, "partidas": GUARDAR["partidas"]},
     {"nombre": "a", "partidas": []},
-    {"nombre": "a", "partidas": [{"indice": 0, "tramo": [3, 3]}]},
-    {"nombre": "a", "partidas": [{"indice": 0, "tramo": [4, 3]}]},
-    {"nombre": "a", "partidas": [{"indice": 0, "tramo": [-1, 3]}]},
-    {"nombre": "a", "partidas": [{"indice": 0, "tramo": [0, 1, 2]}]},
-    {"nombre": "a", "partidas": [{"indice": -1, "tramo": [0, 1]}]},
-    {"nombre": "a", "partidas": [{"indice": 0, "tramo": [0, 1]}, {"indice": 0, "tramo": [1, 2]}]},
-    {"nombre": "a", "partidas": [{"indice": 0, "tramo": [0, 1], "x": 1}]},
+    {"nombre": "a", "partidas": [-1]},
+    {"nombre": "a", "partidas": [0, 2, 0]},
+    {"nombre": "a", "partidas": ["0"]},
+    {"nombre": "a", "partidas": [1.5]},
+    {"nombre": "a", "partidas": [True]},
+    {"nombre": "a", "partidas": 0},
+    # El formato anterior, con tramos, ya no vale.
+    {"nombre": "a", "partidas": [{"indice": 0, "tramo": [0, 1]}]},
 ])
 def test_guardar_con_un_cuerpo_que_no_vale(cliente_y_gestor, cuerpo) -> None:
     cliente, gestor = cliente_y_gestor
