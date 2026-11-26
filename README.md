@@ -462,13 +462,18 @@ mismos pesos.
 
 Los entrenamientos del dashboard los hacen los trabajadores de
 `src/training/trabajadores.py`, que el gestor ejecuta en un proceso propio con las
-mismas funciones que los scripts de la E1 (de momento, el del experto; la ruta
+mismas funciones que los scripts de la E1: experto, GAIL y BC (la ruta
 `POST /api/entrenamientos` responde 501 hasta la rama `laboratorio-entrenar-api`).
-Mandan un progreso por iteración, `{"paso", "iteracion", ...}`, con `paso` en la unidad
-de la duración y las mismas medidas que van a W&B con su sección (`trpo/…`), más las de
-la evaluación (`evaluacion/…`) si toca evaluar. Obedecen `vista` y `finalizar`: este
-termina tras la iteración en curso y guarda lo que daría el entrenamiento al acabar (en
-el experto, el mejor evaluado), marcado como incompleto. El modelo se guarda en la
+Mandan un progreso por iteración (en BC, por época), `{"paso", ...}`, con `paso` en la
+unidad de la duración y las mismas medidas que van a W&B con su sección (`trpo/…`,
+`bc/val/…`; en BC, la pérdida de train es la media de la época), más las de la
+evaluación (`evaluacion/…`, `validacion/…`) si toca evaluar. Obedecen `vista` (BC no
+tiene) y `finalizar`: este termina tras la iteración o época en curso y guarda lo que
+daría el entrenamiento al acabar (el experto, el mejor evaluado; GAIL, la última
+iteración; BC, la mejor época), marcado como incompleto. BC y GAIL entrenan la
+repetición 0 de la semilla pedida, como en la E1, con los datos elegidos de la
+biblioteca (preparados en el propio trabajador) y las N primeras partidas de train que
+pida el usuario (por defecto, todas). El modelo se guarda en la
 biblioteca con origen «dashboard» y, con W&B, se registran las medidas, el resumen y el
 modelo como artefacto.
 

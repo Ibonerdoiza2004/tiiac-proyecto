@@ -8,24 +8,35 @@ gestor de trabajos de verdad (proceso spawn, tuberías, órdenes), como la lanza
 from __future__ import annotations
 
 import copy
+import dataclasses
 import time
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 import yaml
+from gymnasium import spaces
 
 from src.app.contrato import ResultadoEntrenamiento
 from src.app.trabajos import GestorTrabajos
-from src.data.biblioteca import Biblioteca
+from src.data.biblioteca import Biblioteca, agregar_nuevo
+from src.data.demostraciones import guardar_demostraciones
+from src.data.splits import crear_splits, guardar_splits, huella_archivo
+from src.data.tipos import Trayectoria
 from src.training import trabajadores
-from src.training.trabajadores import (ControlEntrenamiento, ProgresoTrabajo,
+from src.training.barrido import cargar_datos
+from src.training.bc import cargar_politica_bc, entrenar_bc_repeticion
+from src.training.gail import cargar_gail, entrenar_gail
+from src.training.trabajadores import (ControlEntrenamiento, ProgresoEpocas, ProgresoTrabajo,
                                        comprobar_argumentos_entrenamiento,
-                                       tarea_entrenar_experto)
+                                       datos_de_entrenamiento, tarea_entrenar_bc,
+                                       tarea_entrenar_experto, tarea_entrenar_gail)
 from src.training.trpo import cargar_experto, entrenar_experto
 from src.training.vista import CallbackVista
 from src.utils.configuracion import resolver_configuracion
+from src.utils.seed import crear_generador
 
 RAIZ = Path(__file__).resolve().parent.parent
 CONFIG = RAIZ / "configs" / "default.yaml"
@@ -207,7 +218,8 @@ def test_el_trabajador_entrena_lo_mismo_que_entrenar_experto_y_lo_guarda(tmp_pat
 
     biblioteca = Biblioteca(tmp_path / "biblioteca", {"cartpole": "CartPole-v1"})
     elemento = biblioteca.obtener(resultado["modelo"]["id"])
-    assert elemento["valido"] and elemento["tipo"] == "experto" and elemento["origen"] == "dashboard"
+    assert elemento["valido"] and elemento["tipo"] == "experto"
+    assert elemento["origen"] == "dashboard"
     assert elemento["nombre"] == "Mi experto"
     guardado, metadatos = cargar_experto(biblioteca.ruta(resultado["modelo"]["id"]))
     pesos_guardados, pesos_esperados = _pesos(guardado), _pesos(esperado)
@@ -306,7 +318,8 @@ def test_sin_wandb_no_abre_ningun_run(tmp_path, monkeypatch):
 def test_si_falla_cierra_el_run_con_el_error_y_no_guarda_nada(tmp_path, monkeypatch):
     errores = []
     monkeypatch.setattr(trabajadores, "abrir_run", lambda cfg, **o: RunFalso())
-    monkeypatch.setattr(trabajadores, "terminar_run", lambda run, error=None: errores.append(error))
+    monkeypatch.setattr(trabajadores, "terminar_run",
+                        lambda run, error=None: errores.append(error))
 
     def fallar(*args, **kwargs):
         raise RuntimeError("se rompió")
@@ -370,7 +383,8 @@ def test_con_el_gestor_la_vista_y_finalizar_llegan_al_trabajador(gestor, tmp_pat
     assert resultado["modelo"]["incompleto"] is True
     assert resultado["resumen"]["pasos"] < 100_000
     # Al finalizar se evalúa la iteración en curso, aunque no tocara por evaluar_cada.
-    assert resultado["resumen"]["evaluaciones"][-1]["iteracion"] == resultado["resumen"]["iteraciones"]
+    resumen = resultado["resumen"]
+    assert resumen["evaluaciones"][-1]["iteracion"] == resumen["iteraciones"]
 
 
 def test_con_el_gestor_un_error_deja_el_trabajo_fallido(gestor, tmp_path):
@@ -449,3 +463,292 @@ def test_fps_entorno_sin_render_fps(metadata, monkeypatch):
     with pytest.raises(ValueError, match="render_fps"):
         trabajadores.fps_entorno({"entorno": {"id": "Raro-v0"}})
     assert entorno.cerrado
+
+
+# --- BC y GAIL ---------------------------------------------------------------------------
+
+
+TAREA_GAIL = "src.training.trabajadores:tarea_entrenar_gail"
+TAREA_BC = "src.training.trabajadores:tarea_entrenar_bc"
+CARTPOLE_OBS = spaces.Box(np.array([-4.8, -np.inf, -0.418, -np.inf], np.float32),
+                          np.array([4.8, np.inf, 0.418, np.inf], np.float32))
+
+
+def _partida_cartpole(pasos: int, identificador: int) -> Trayectoria:
+    """Partida que cabe en CartPole (no tiene por qué ser buena: solo se imita)."""
+    estados = (np.arange((pasos + 1) * 4, dtype=np.float32).reshape(pasos + 1, 4) * 1e-3
+               + np.float32(identificador * 1e-2))
+    terminados = np.zeros(pasos, dtype=bool)
+    terminados[-1] = True
+    return Trayectoria(identificador, estados[:-1], np.arange(pasos, dtype=np.int64) % 2,
+                       estados[1:], np.ones(pasos, dtype=np.float32), terminados,
+                       np.zeros(pasos, dtype=bool))
+
+
+def _conjunto(raiz: Path, partidas: int = 6, splits: bool = True) -> str:
+    """Conjunto de CartPole en la biblioteca; con splits, 2/3 train y subconjunto [1]."""
+    trayectorias = [_partida_cartpole(20 + i, i) for i in range(partidas)]
+
+    def escribir(carpeta: Path) -> None:
+        npz = guardar_demostraciones(
+            carpeta / "demostraciones.npz", trayectorias,
+            {"entorno": "CartPole-v1", "experto": "x", "procedencia": {},
+             "configuracion_experto": {}}, CARTPOLE_OBS, spaces.Discrete(2))
+        if splits:
+            validacion = partidas // 3
+            guardar_splits(carpeta / "splits.json", crear_splits(
+                trayectorias, partidas - validacion, validacion, [1], crear_generador(0),
+                huella_archivo(npz)))
+
+    return agregar_nuevo(raiz, "cartpole", "demostraciones", "Demos", "dashboard",
+                         escribir)["id"]
+
+
+def _argumentos_imitacion(tmp_path: Path, datos: list[str], **cambios) -> dict:
+    argumentos = _argumentos(tmp_path, datos=datos, cantidad=None)
+    argumentos.update(cambios)
+    return argumentos
+
+
+@pytest.mark.parametrize("metodo", ["gail", "bc"])
+def test_argumentos_de_imitacion(tmp_path, metodo):
+    argumentos = _argumentos_imitacion(tmp_path, ["a" * 12], cantidad=3)
+    assert comprobar_argumentos_entrenamiento(argumentos, metodo)["cantidad"] == 3
+    with pytest.raises(ValueError, match="exactamente"):
+        comprobar_argumentos_entrenamiento(_argumentos(tmp_path), metodo)  # sin datos
+    with pytest.raises(ValueError, match="exactamente"):
+        comprobar_argumentos_entrenamiento(argumentos, "experto")  # el experto no los lleva
+
+
+@pytest.mark.parametrize("cambio, mensaje", [
+    ({"datos": []}, "lista no vacía"), ({"datos": "a" * 12}, "lista no vacía"),
+    ({"datos": [3]}, "lista no vacía"), ({"datos": [""]}, "lista no vacía"),
+    ({"cantidad": 0}, "cantidad"), ({"cantidad": -2}, "cantidad"),
+    ({"cantidad": True}, "cantidad"), ({"cantidad": 1.5}, "cantidad"),
+])
+def test_argumentos_de_imitacion_que_no_valen(tmp_path, cambio, mensaje):
+    argumentos = _argumentos_imitacion(tmp_path, ["a" * 12])
+    argumentos.update(cambio)
+    with pytest.raises(ValueError, match=mensaje):
+        comprobar_argumentos_entrenamiento(argumentos, "gail")
+
+
+def test_bc_no_tiene_vista(tmp_path):
+    argumentos = _argumentos_imitacion(tmp_path, ["a" * 12], vista=True)
+    assert comprobar_argumentos_entrenamiento(argumentos, "gail")
+    with pytest.raises(ValueError, match="BC no tiene vista"):
+        comprobar_argumentos_entrenamiento(argumentos, "bc")
+
+
+def test_progreso_de_bc_uno_por_epoca_con_la_perdida_media():
+    canal, run = CanalFalso(), RunFalso()
+    progreso = ProgresoEpocas(canal, run)
+    for paso, perdida in enumerate([1.0, 2.0, 6.0], 1):
+        progreso.log({"bc/train/perdida": perdida}, paso)
+    progreso.log({"bc/val/perdida": 0.5, "bc/val/acierto": 0.75}, 3)
+    progreso.log({"bc/train/perdida": 4.0}, 4)
+    progreso.log({"bc/val/perdida": 0.25, "bc/val/acierto": 0.5}, 4)
+    assert canal.progresos == [
+        {"paso": 1, "epoca": 1, "bc/train/perdida": 3.0, "bc/val/perdida": 0.5,
+         "bc/val/acierto": 0.75},
+        {"paso": 2, "epoca": 2, "bc/train/perdida": 4.0, "bc/val/perdida": 0.25,
+         "bc/val/acierto": 0.5}]
+    # A W&B llega cada batch, como en la E1.
+    assert [paso for _, paso in run.registros] == [1, 2, 3, 3, 4, 4]
+
+
+def test_control_sin_vista_ignora_la_vista_y_atiende_finalizar():
+    control = ControlEntrenamiento(CanalFalso([[{"tipo": "vista", "activa": True}],
+                                               [{"tipo": "finalizar"}]]))
+    assert control.parar() is False
+    assert control.parar() is True
+
+
+def test_datos_con_la_cantidad_pedida(tmp_path):
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    cfg = resolver_configuracion(CONFIG, "cartpole", SMOKE)
+    # Sin cantidad: todas las de train (4 de 6), aunque los splits solo traían [1].
+    _, splits, procedencia, cantidad, usado = datos_de_entrenamiento(
+        _argumentos_imitacion(tmp_path, [conjunto]), cfg)
+    assert usado == conjunto and cantidad == 4
+    assert splits.subconjuntos[4] == splits.train and splits.subconjuntos[1] == splits.train[:1]
+    assert procedencia["huella_dataset"] == splits.huella_dataset
+    _, splits, _, cantidad, _ = datos_de_entrenamiento(
+        _argumentos_imitacion(tmp_path, [conjunto], cantidad=3), cfg)
+    assert cantidad == 3 and splits.subconjuntos[3] == splits.train[:3]
+    with pytest.raises(ValueError, match="Se pidieron 5 partidas de train y los datos tienen 4"):
+        datos_de_entrenamiento(_argumentos_imitacion(tmp_path, [conjunto], cantidad=5), cfg)
+
+
+def test_datos_sin_splits_se_combinan(tmp_path):
+    conjunto = _conjunto(tmp_path / "biblioteca", splits=False)
+    cfg = resolver_configuracion(CONFIG, "cartpole", SMOKE)
+    _, splits, _, cantidad, usado = datos_de_entrenamiento(
+        _argumentos_imitacion(tmp_path, [conjunto]), cfg)
+    assert usado != conjunto and cantidad == len(splits.train)
+
+
+def _cfg_imitacion(semilla: int = 123) -> dict:
+    cfg = resolver_configuracion(CONFIG, "cartpole", SMOKE)
+    cfg["experimento"]["semilla_repeticiones"] = semilla
+    return cfg
+
+
+def _iguales(a: dict, b: dict) -> bool:
+    return a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
+
+
+def test_el_trabajador_de_gail_entrena_lo_mismo_que_entrenar_gail(tmp_path):
+    raiz = tmp_path / "biblioteca"
+    conjunto = _conjunto(raiz)
+    canal = CanalFalso()
+    resultado = tarea_entrenar_gail(_argumentos_imitacion(tmp_path, [conjunto], cantidad=3),
+                                    canal)
+    ResultadoEntrenamiento.model_validate(resultado)
+    assert resultado["semilla"] == 123 and resultado["modelo"]["incompleto"] is False
+    cfg = _cfg_imitacion()
+    trayectorias, splits, _ = cargar_datos(cfg, Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+                                           .ruta(conjunto))
+    splits = dataclasses.replace(splits, subconjuntos={**splits.subconjuntos,
+                                                       3: splits.train[:3]})
+    agente, discriminador, resumen = entrenar_gail(cfg, trayectorias, splits, 3, 0)
+    biblioteca = Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+    elemento = biblioteca.obtener(resultado["modelo"]["id"])
+    assert elemento["valido"] and elemento["tipo"] == "gail" and elemento["origen"] == "dashboard"
+    assert elemento["detalles"]["cantidad"] == 3 and elemento["detalles"]["repeticion"] == 0
+    guardado, d_guardado, _ = cargar_gail(biblioteca.ruta(resultado["modelo"]["id"]))
+    assert _iguales(guardado.policy.state_dict(), agente.policy.state_dict())
+    assert _iguales(d_guardado.state_dict(), discriminador.state_dict())
+    assert resultado["resumen"]["validaciones"] == [
+        {k: v for k, v in val.items()} for val in resumen["validaciones"]]
+    # Un progreso por iteración, en iteraciones, con su validación (el smoke valida en cada una).
+    assert [(m["paso"], m["iteracion"]) for m in canal.progresos] == [(1, 1), (2, 2)]
+    assert all("validacion/retorno_medio" in m and "trpo/partidas" in m
+               for m in canal.progresos)
+
+
+def test_gail_con_vista_y_finalizar(tmp_path):
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes["gail"]["iteraciones"] = 10
+    canal = CanalFalso([[{"tipo": "finalizar"}]])
+    resultado = tarea_entrenar_gail(_argumentos_imitacion(tmp_path, [conjunto], vista=True,
+                                                          ajustes=ajustes), canal)
+    assert resultado["modelo"]["incompleto"] is True
+    assert resultado["resumen"]["iteraciones"] == 1 and resultado["resumen"]["incompleto"]
+    assert canal.imagenes and canal.imagenes[0][:2] == b"\xff\xd8"
+
+
+def test_el_trabajador_de_bc_entrena_lo_mismo_que_entrenar_bc_repeticion(tmp_path):
+    raiz = tmp_path / "biblioteca"
+    conjunto = _conjunto(raiz)
+    canal = CanalFalso()
+    resultado = tarea_entrenar_bc(_argumentos_imitacion(tmp_path, [conjunto]), canal)
+    ResultadoEntrenamiento.model_validate(resultado)
+    assert resultado["modelo"]["incompleto"] is False
+    cfg = _cfg_imitacion()
+    biblioteca = Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+    trayectorias, splits, _ = cargar_datos(cfg, biblioteca.ruta(conjunto))
+    splits = dataclasses.replace(splits, subconjuntos={**splits.subconjuntos,
+                                                       4: splits.train})
+    politica, resumen = entrenar_bc_repeticion(cfg, trayectorias, splits, 4, 0)
+    elemento = biblioteca.obtener(resultado["modelo"]["id"])
+    assert elemento["valido"] and elemento["tipo"] == "bc" and elemento["origen"] == "dashboard"
+    assert elemento["detalles"]["subconjunto"] == 4
+    guardada, metadatos = cargar_politica_bc(biblioteca.ruta(resultado["modelo"]["id"])
+                                             / "politica.pt")
+    assert _iguales(guardada.state_dict(), politica.state_dict())
+    assert metadatos["semilla"] == resumen["semillas"]["modelo"]
+    assert resultado["resumen"]["epocas"] == resumen["epocas"]
+    assert [m["epoca"] for m in canal.progresos] == list(range(1, resumen["epocas"] + 1))
+    assert all("bc/train/perdida" in m and "bc/val/perdida" in m for m in canal.progresos)
+
+
+def test_bc_finalizar_guarda_la_mejor_epoca_como_incompleto(tmp_path):
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes["bc"].update(epocas_maximas=10, paciencia=100)
+    resultado = tarea_entrenar_bc(_argumentos_imitacion(tmp_path, [conjunto], ajustes=ajustes),
+                                  CanalFalso([[{"tipo": "finalizar"}]]))
+    assert resultado["modelo"]["incompleto"] is True and resultado["resumen"]["epocas"] == 1
+
+
+def test_bc_que_finaliza_en_la_ultima_epoca_no_es_incompleto(tmp_path):
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes["bc"].update(epocas_maximas=2, paciencia=100)
+    # parar se consulta tras cada época: la orden llega al acabar la segunda, la última.
+    resultado = tarea_entrenar_bc(_argumentos_imitacion(tmp_path, [conjunto], ajustes=ajustes),
+                                  CanalFalso([[], [{"tipo": "finalizar"}]]))
+    assert resultado["resumen"]["epocas"] == 2
+    assert resultado["modelo"]["incompleto"] is False
+
+
+def test_bc_que_agota_la_paciencia_no_es_incompleto(tmp_path, monkeypatch):
+    """La validación nunca mejora: para por la paciencia sin consultar la orden."""
+    import src.training.bc as bc
+    monkeypatch.setattr(bc, "evaluar_bc", lambda politica, loader: {"perdida": 1.0,
+                                                                        "acierto": 0.5})
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes["bc"].update(epocas_maximas=10, paciencia=1)
+    resultado = tarea_entrenar_bc(_argumentos_imitacion(tmp_path, [conjunto], ajustes=ajustes),
+                                  CanalFalso([[], [{"tipo": "finalizar"}]]))
+    assert resultado["resumen"]["epocas"] == 2
+    assert resultado["modelo"]["incompleto"] is False
+
+
+@pytest.mark.parametrize("metodo, tarea, archivos", [
+    ("gail", tarea_entrenar_gail, ["modelo.zip", "discriminador.pt", "gail.json"]),
+    ("bc", tarea_entrenar_bc, ["politica.pt"]),
+])
+def test_con_wandb_bc_y_gail_suben_su_modelo(tmp_path, monkeypatch, metodo, tarea, archivos):
+    run = RunFalso()
+    run.summary = {}
+    subidos = []
+    monkeypatch.setattr(trabajadores, "abrir_run", lambda cfg, **o: run)
+    monkeypatch.setattr(trabajadores, "subir_artefacto",
+                        lambda run, nombre, tipo, rutas, metadatos: subidos.append(
+                            (nombre, tipo, [Path(r).name for r in rutas], metadatos)))
+    monkeypatch.setattr(trabajadores, "terminar_run", lambda run, error=None: None)
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    tarea(_argumentos_imitacion(tmp_path, [conjunto],
+                                wandb={"activo": True, "grupo": "dashboard-cartpole"}),
+          CanalFalso())
+    (nombre, tipo, rutas, metadatos), = subidos
+    assert nombre.startswith(f"{metodo}-CartPole-v1-") and tipo == metodo and rutas == archivos
+    assert metadatos["origen"] == "dashboard" and metadatos["cantidad"] == 4
+    assert run.summary["incompleto"] is False and "huella_dataset" in run.summary
+
+
+@pytest.mark.parametrize("tarea", [TAREA_GAIL, TAREA_BC])
+def test_bc_y_gail_con_el_gestor(gestor, tmp_path, tarea):
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    trabajo = gestor.crear("entrenamiento", tarea,
+                           _argumentos_imitacion(tmp_path, [conjunto], cantidad=2))
+    final = gestor.esperar(trabajo["id"], LIMITE)
+    assert final["estado"] == "terminado", final["error"]
+    resultado = ResultadoEntrenamiento.model_validate(final["resultado"])
+    assert not resultado.modelo.incompleto and gestor.historial(trabajo["id"])
+
+
+def test_unos_datos_que_no_existen_dejan_el_trabajo_fallido(gestor, tmp_path):
+    trabajo = gestor.crear("entrenamiento", TAREA_BC,
+                           _argumentos_imitacion(tmp_path, ["b" * 12]))
+    final = gestor.esperar(trabajo["id"], LIMITE)
+    assert final["estado"] == "fallido" and "No existen" in final["error"]
+
+
+def test_gail_que_finaliza_en_la_ultima_iteracion_no_es_incompleto(tmp_path):
+    conjunto = _conjunto(tmp_path / "biblioteca")
+    # Cuántas veces lee las órdenes un GAIL del smoke (2 iteraciones), para que la orden
+    # llegue en la última lectura, la de parar al acabar la última iteración.
+    canal = CanalFalso()
+    lecturas = []
+    original = canal.ordenes
+    canal.ordenes = lambda: lecturas.append(1) or original()
+    tarea_entrenar_gail(_argumentos_imitacion(tmp_path, [conjunto]), canal)
+    canal = CanalFalso([[]] * (len(lecturas) - 1) + [[{"tipo": "finalizar"}]])
+    resultado = tarea_entrenar_gail(_argumentos_imitacion(tmp_path, [conjunto]), canal)
+    assert resultado["resumen"]["iteraciones"] == 2
+    assert resultado["modelo"]["incompleto"] is False

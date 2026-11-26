@@ -382,6 +382,67 @@ def comprobar_config_barrido_bc(cfg: dict) -> None:
     comprobar_config_comun(cfg)
 
 
+def entrenar_bc_repeticion(cfg: dict, trayectorias: Sequence[Trayectoria],
+                           splits: SplitsDemostraciones, cantidad: int, repeticion: int,
+                           run: Any = None, parar: Callable[[], bool] | None = None,
+                           ) -> tuple[PoliticaBC, dict[str, Any]]:
+    """Entrena un BC con las semillas de su repetición, como en el barrido de la E1.
+
+    Las semillas salen de semillas_repeticion con experimento.semilla_repeticiones:
+    fijar_seed con la del modelo (pesos y orden de los batches) y un generador con la
+    de los pares, así que BC y GAIL de la misma repetición entrenan con los mismos
+    pares expertos. Lo usan el barrido (entrenar_y_guardar_bc) y el dashboard.
+
+    Args:
+        cfg: Configuración resuelta.
+        trayectorias: Todas las partidas del dataset.
+        splits: Sus splits, con un subconjunto de tamaño cantidad.
+        cantidad: Tamaño del subconjunto de train.
+        repeticion: Número de repetición.
+        run: Run de W&B (o algo con su log) o None.
+        parar: Como en entrenar_bc.
+
+    Returns:
+        La política y el resumen de entrenar_bc_subconjunto con la repetición, las
+        semillas y los segundos medidos.
+
+    Raises:
+        ValueError: Si algo no es válido.
+    """
+    semilla_base = cfg["experimento"]["semilla_repeticiones"]
+    semillas = semillas_repeticion(semilla_base, repeticion)
+    espacios = espacios_entorno(cfg)
+    inicio = time.perf_counter()
+    fijar_seed(semillas["modelo"])
+    politica, resumen = entrenar_bc_subconjunto(trayectorias, splits, cantidad, *espacios, cfg,
+                                                crear_generador(semillas["pares"]), run, parar)
+    return politica, {**resumen, "repeticion": int(repeticion),
+                      "semillas": {"base": int(semilla_base), **semillas},
+                      "segundos": time.perf_counter() - inicio}
+
+
+def guardar_bc_repeticion(destino: Path, politica: PoliticaBC, cfg: dict,
+                          resumen: dict[str, Any], datos: dict[str, str]) -> None:
+    """Guarda un BC de entrenar_bc_repeticion con sus metadatos (guardar_politica_bc).
+
+    Args:
+        destino: Archivo nuevo (politica.pt).
+        politica: La política entrenada.
+        cfg: Configuración resuelta.
+        resumen: El de entrenar_bc_repeticion.
+        datos: Procedencia de los datos (procedencia_datos).
+
+    Raises:
+        FileExistsError: Si destino ya existe.
+        ValueError: Si la política, la configuración o los metadatos no son válidos.
+    """
+    guardar_politica_bc(destino, politica, cfg,
+                        {"semilla": resumen["semillas"]["modelo"],
+                         "subconjunto": resumen["cantidad"],
+                         "huella_dataset": datos["huella_dataset"],
+                         "adicional": {"resumen": resumen, "datos": datos}})
+
+
 def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
                           splits: SplitsDemostraciones, cantidad: int, repeticion: int,
                           destino: Path, datos: dict[str, str],
@@ -415,25 +476,14 @@ def entrenar_y_guardar_bc(cfg: dict, trayectorias: Sequence[Trayectoria],
     if datos.get("huella_dataset") != splits.huella_dataset:
         raise ValueError("Las demostraciones no son las de los splits: la huella del NPZ no "
                          "coincide")
-    semilla_base = cfg["experimento"]["semilla_repeticiones"]
-    semillas = semillas_repeticion(semilla_base, repeticion)
-    espacios = espacios_entorno(cfg)
     run = abrir_run_barrido(cfg, "bc", cantidad, repeticion, grupo)
     try:
         if cfg.get("wandb", {}).get("modo") == "online":
             usar_artefacto(run, nombre_artefacto("demostraciones", datos["huella_dataset"])
                            + ":latest")
-        inicio = time.perf_counter()
-        fijar_seed(semillas["modelo"])
-        politica, resumen = entrenar_bc_subconjunto(trayectorias, splits, cantidad, *espacios,
-                                                    cfg, crear_generador(semillas["pares"]), run)
-        resumen = {**resumen, "repeticion": int(repeticion),
-                   "semillas": {"base": int(semilla_base), **semillas},
-                   "segundos": time.perf_counter() - inicio}
-        guardar_politica_bc(destino, politica, cfg,
-                            {"semilla": semillas["modelo"], "subconjunto": cantidad,
-                             "huella_dataset": datos["huella_dataset"],
-                             "adicional": {"resumen": resumen, "datos": datos}})
+        politica, resumen = entrenar_bc_repeticion(cfg, trayectorias, splits, cantidad,
+                                                   repeticion, run)
+        guardar_bc_repeticion(destino, politica, cfg, resumen, datos)
         registrar_resumen(run, {**resumen, **datos})
         huella_modelo = huella_archivo(destino)
         subir_artefacto(run, nombre_artefacto("bc", huella_modelo, cfg["entorno"]["id"],
