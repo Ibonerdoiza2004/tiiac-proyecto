@@ -19,7 +19,7 @@ import torch
 import yaml
 from gymnasium import spaces
 
-from src.app.contrato import ResultadoEntrenamiento
+from src.app.contrato import ResultadoComparacion, ResultadoEntrenamiento
 from src.app.trabajos import GestorTrabajos
 from src.data.biblioteca import Biblioteca, agregar_nuevo
 from src.data.demostraciones import guardar_demostraciones
@@ -29,10 +29,13 @@ from src.training import trabajadores
 from src.training.barrido import cargar_datos
 from src.training.bc import cargar_politica_bc, entrenar_bc_repeticion
 from src.training.gail import cargar_gail, entrenar_gail
+from src.training.evaluacion import evaluar_final, evaluar_politica
 from src.training.trabajadores import (ControlEntrenamiento, ProgresoEpocas, ProgresoTrabajo,
+                                       cargar_agente, comprobar_argumentos_comparacion,
                                        comprobar_argumentos_entrenamiento,
-                                       datos_de_entrenamiento, tarea_entrenar_bc,
-                                       tarea_entrenar_experto, tarea_entrenar_gail)
+                                       datos_de_entrenamiento, tarea_comparar,
+                                       tarea_entrenar_bc, tarea_entrenar_experto,
+                                       tarea_entrenar_gail)
 from src.training.trpo import cargar_experto, entrenar_experto
 from src.training.vista import CallbackVista
 from src.utils.configuracion import resolver_configuracion
@@ -752,3 +755,235 @@ def test_gail_que_finaliza_en_la_ultima_iteracion_no_es_incompleto(tmp_path):
     resultado = tarea_entrenar_gail(_argumentos_imitacion(tmp_path, [conjunto]), canal)
     assert resultado["resumen"]["iteraciones"] == 2
     assert resultado["modelo"]["incompleto"] is False
+
+
+# --- comparación ---------------------------------------------------------------------------
+
+TAREA_COMPARAR = "src.training.trabajadores:tarea_comparar"
+ENTORNOS = {"cartpole": "CartPole-v1", "mountaincar": "MountainCar-v0"}
+
+
+@pytest.fixture(scope="module")
+def modelos(tmp_path_factory) -> tuple[Path, dict[str, str]]:
+    """Biblioteca de CartPole con un experto, otro que normaliza, un BC y un GAIL."""
+    base = tmp_path_factory.mktemp("comparar")
+    raiz = base / "biblioteca"
+    ids = {"experto": tarea_entrenar_experto(_argumentos(base), CanalFalso())["modelo"]["id"]}
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes.setdefault("trpo", {})["normalizar_observaciones"] = True
+    ids["normaliza"] = tarea_entrenar_experto(_argumentos(base, ajustes=ajustes),
+                                              CanalFalso())["modelo"]["id"]
+    conjunto = _conjunto(raiz)
+    for metodo, tarea in (("bc", tarea_entrenar_bc), ("gail", tarea_entrenar_gail)):
+        ids[metodo] = tarea(_argumentos_imitacion(base, [conjunto]), CanalFalso())["modelo"]["id"]
+    ids["demostraciones"] = conjunto
+    return raiz, ids
+
+
+def _argumentos_comparar(raiz: Path, modelos: list[str], **cambios) -> dict:
+    argumentos = {"ruta_config": str(CONFIG), "biblioteca": str(raiz), "calidad_jpeg": 80,
+                  "entorno": "cartpole", "modelos": modelos, "aleatorio": True,
+                  "partidas": 3, "vista": False}
+    argumentos.update(cambios)
+    return argumentos
+
+
+class CanalFinalizar(CanalFalso):
+    """Pide finalizar cuando ya se han mandado ``tras`` progresos."""
+
+    def __init__(self, tras: int) -> None:
+        super().__init__()
+        self.tras = tras
+
+    def ordenes(self) -> list[dict]:
+        return [{"tipo": "finalizar"}] if len(self.progresos) == self.tras else []
+
+
+def test_argumentos_de_comparacion_validos(tmp_path):
+    argumentos = _argumentos_comparar(tmp_path, ["a" * 12], partidas=None, aleatorio=False)
+    assert comprobar_argumentos_comparacion(argumentos) == argumentos
+    assert comprobar_argumentos_comparacion(argumentos) is not argumentos
+    solo_aleatorio = _argumentos_comparar(tmp_path, [], partidas=np.int64(4))
+    assert comprobar_argumentos_comparacion(solo_aleatorio)["partidas"] == 4
+
+
+@pytest.mark.parametrize("cambio, mensaje", [
+    ({"modelos": "a" * 12}, "lista de ids"), ({"modelos": [3]}, "lista de ids"),
+    ({"modelos": [""]}, "lista de ids"), ({"modelos": ["a" * 12, "a" * 12]}, "repetidos"),
+    ({"modelos": [], "aleatorio": False}, "nada que comparar"),
+    ({"aleatorio": 1}, "aleatorio"), ({"vista": None}, "vista"),
+    ({"partidas": 0}, "partidas"), ({"partidas": -1}, "partidas"),
+    ({"partidas": True}, "partidas"), ({"partidas": 2.0}, "partidas"),
+    ({"entorno": " "}, "entorno"), ({"ruta_config": None}, "ruta_config"),
+    ({"biblioteca": ""}, "biblioteca"),
+])
+def test_argumentos_de_comparacion_que_no_valen(tmp_path, cambio, mensaje):
+    with pytest.raises(ValueError, match=mensaje):
+        comprobar_argumentos_comparacion({**_argumentos_comparar(tmp_path, ["a" * 12]),
+                                          **cambio})
+
+
+@pytest.mark.parametrize("argumentos", [
+    None, [], {"modelos": []},
+    {**_argumentos_comparar(Path("x"), []), "semilla": 3},
+])
+def test_argumentos_de_comparacion_con_claves_de_mas_o_de_menos(argumentos):
+    with pytest.raises(ValueError, match="exactamente"):
+        comprobar_argumentos_comparacion(argumentos)
+
+
+def test_compara_como_la_evaluacion_de_la_e1(modelos):
+    """Cada modelo da los retornos de evaluar_politica con las mismas partidas."""
+    raiz, ids = modelos
+    orden = [ids["gail"], ids["experto"], ids["bc"], ids["normaliza"]]
+    canal = CanalFalso()
+    resultado = tarea_comparar(_argumentos_comparar(raiz, orden), canal)
+    ResultadoComparacion.model_validate(resultado)
+    cfg = resolver_configuracion(CONFIG, "cartpole")
+    semilla = cfg["evaluacion"]["semilla"]
+    assert resultado["partidas"] == 3 and resultado["semilla"] == semilla
+    assert resultado["incompleta"] is False
+    assert [m["id"] for m in resultado["modelos"]] == [*orden, "aleatorio"]
+    biblioteca = Biblioteca(raiz, ENTORNOS)
+    esperados = {}
+    for id_modelo in [*orden, "aleatorio"]:
+        agente, estadisticas = (("aleatorio", None) if id_modelo == "aleatorio"
+                                else cargar_agente(biblioteca, id_modelo, "cartpole"))
+        esperados[id_modelo] = evaluar_politica(agente, cfg, 3, semilla,
+                                                cfg["evaluacion"]["determinista"], estadisticas)
+    assert {m["id"]: m["retornos"] for m in resultado["modelos"]} == {
+        k: v["retornos"] for k, v in esperados.items()}
+    # Las estadísticas del que normaliza se usan (sin ellas jugaría otra cosa).
+    assert cargar_agente(biblioteca, ids["normaliza"], "cartpole")[1] is not None
+    # Un progreso por partida de cada modelo: todos juegan la i antes de la i + 1.
+    assert [(m["partida"], m["modelo"]) for m in canal.progresos] == [
+        (i, id_modelo) for i in range(3) for id_modelo in [*orden, "aleatorio"]]
+    for mensaje in canal.progresos:
+        i, evaluado = mensaje["partida"], esperados[mensaje["modelo"]]
+        assert mensaje["retorno"] == evaluado["retornos"][i]
+        assert mensaje["pasos"] == evaluado["longitudes"][i]
+    assert canal.imagenes == []
+
+
+def test_sin_aleatorio_solo_juegan_los_modelos(modelos):
+    raiz, ids = modelos
+    canal = CanalFalso()
+    resultado = tarea_comparar(_argumentos_comparar(raiz, [ids["bc"]], aleatorio=False,
+                                                    partidas=2), canal)
+    assert [m["id"] for m in resultado["modelos"]] == [ids["bc"]]
+    assert {m["modelo"] for m in canal.progresos} == {ids["bc"]}
+
+
+def test_sin_partidas_usa_las_de_la_evaluacion(tmp_path):
+    canal = CanalFalso()
+    resultado = tarea_comparar(_argumentos_comparar(tmp_path / "vacia", [], partidas=None),
+                               canal)
+    cfg = resolver_configuracion(CONFIG, "cartpole")
+    assert resultado["partidas"] == cfg["evaluacion"]["episodios"] == len(canal.progresos)
+    assert resultado["modelos"] == [{"id": "aleatorio",
+                                     "retornos": evaluar_final("aleatorio", cfg)["retornos"]}]
+
+
+def test_las_primeras_partidas_no_dependen_de_cuantas_se_pidan(modelos):
+    raiz, ids = modelos
+    cortas = tarea_comparar(_argumentos_comparar(raiz, [ids["bc"]], partidas=2), CanalFalso())
+    largas = tarea_comparar(_argumentos_comparar(raiz, [ids["bc"]], partidas=4), CanalFalso())
+    for corta, larga in zip(cortas["modelos"], largas["modelos"], strict=True):
+        assert corta["retornos"] == larga["retornos"][:2]
+
+
+@pytest.mark.parametrize("tras, rondas", [(0, 0), (1, 0), (2, 1), (3, 1), (4, 2), (5, 2)])
+def test_finalizar_se_queda_con_las_rondas_completas(modelos, tras, rondas):
+    raiz, ids = modelos
+    canal = CanalFinalizar(tras)
+    resultado = tarea_comparar(_argumentos_comparar(raiz, [ids["experto"]]), canal)
+    completa = tarea_comparar(_argumentos_comparar(raiz, [ids["experto"]]), CanalFalso())
+    assert resultado["incompleta"] is True and resultado["partidas"] == rondas
+    ResultadoComparacion.model_validate(resultado)
+    for parcial, entera in zip(resultado["modelos"], completa["modelos"], strict=True):
+        assert parcial["retornos"] == entera["retornos"][:rondas]
+    # Lo jugado sí salió como progreso; la partida cortada, no.
+    assert len(canal.progresos) == tras
+
+
+def test_finalizar_tras_la_ultima_partida_no_la_deja_incompleta(modelos):
+    raiz, ids = modelos
+    resultado = tarea_comparar(_argumentos_comparar(raiz, [ids["experto"]]), CanalFinalizar(6))
+    assert resultado["incompleta"] is False and resultado["partidas"] == 3
+
+
+def test_la_vista_dibuja_sin_cambiar_los_retornos(tmp_path):
+    sin = tarea_comparar(_argumentos_comparar(tmp_path, [], partidas=2), CanalFalso())
+    canal = CanalFalso()
+    con = tarea_comparar(_argumentos_comparar(tmp_path, [], partidas=2, vista=True), canal)
+    assert con == sin
+    pasos = sum(m["pasos"] for m in canal.progresos)
+    assert len(canal.imagenes) == pasos + 2  # el estado inicial de cada partida y cada paso
+    assert canal.imagenes[0][:2] == b"\xff\xd8"
+
+
+def test_la_vista_va_a_velocidad_real(tmp_path):
+    canal = CanalFalso()
+    inicio = time.monotonic()
+    tarea_comparar(_argumentos_comparar(tmp_path, [], partidas=1, vista=True), canal)
+    pasos = canal.progresos[0]["pasos"]
+    # CartPole dibuja a 50 fps: la partida dura al menos pasos / 50 s.
+    assert time.monotonic() - inicio >= pasos / 50
+
+
+def test_la_vista_se_enciende_y_apaga_con_ordenes(tmp_path):
+    canal = CanalFalso([[], [], [{"tipo": "vista", "activa": True}], [],
+                        [{"tipo": "vista", "activa": False}]])
+    tarea_comparar(_argumentos_comparar(tmp_path, [], partidas=1), canal)
+    # Se enciende al leer la tercera orden (antes del tercer paso) y se apaga en la
+    # quinta: se dibujan el tercer y el cuarto paso.
+    assert len(canal.imagenes) == 2
+
+
+def _escribir(ruta: Path) -> None:
+    ruta.write_bytes(b"x")
+
+
+@pytest.mark.parametrize("caso, mensaje", [
+    ("no_existe", "no está en la biblioteca"), ("demostraciones", "no un modelo"),
+    ("otro_entorno", "es de mountaincar"), ("roto", "no es válido"),
+])
+def test_modelos_que_no_se_pueden_comparar(modelos, tmp_path, caso, mensaje):
+    raiz, ids = modelos
+    if caso == "no_existe":
+        id_modelo = "0" * 12
+    elif caso == "demostraciones":
+        id_modelo = ids["demostraciones"]
+    else:
+        raiz = tmp_path / "biblioteca"
+        entorno = "mountaincar" if caso == "otro_entorno" else "cartpole"
+        id_modelo = agregar_nuevo(raiz, entorno, "bc", "Roto", "dashboard",
+                                  lambda carpeta: _escribir(carpeta / "politica.pt"))["id"]
+    canal = CanalFalso()
+    with pytest.raises(ValueError, match=mensaje):
+        tarea_comparar(_argumentos_comparar(raiz, [id_modelo]), canal)
+    assert canal.progresos == []
+
+
+def test_con_el_gestor_compara_y_devuelve_el_resultado(gestor, modelos):
+    raiz, ids = modelos
+    argumentos = _argumentos_comparar(raiz, [ids["experto"], ids["gail"]], partidas=2)
+    trabajo = gestor.crear("comparacion", TAREA_COMPARAR, argumentos)
+    final = gestor.esperar(trabajo["id"], LIMITE)
+    assert final["estado"] == "terminado", final["error"]
+    assert final["resultado"] == tarea_comparar(argumentos, CanalFalso())
+    assert len(gestor.historial(trabajo["id"])) == 6
+
+
+def test_con_el_gestor_la_vista_y_finalizar_llegan_a_la_comparacion(gestor, tmp_path):
+    # Con la vista encendida va a velocidad real: 1000 partidas no acaban antes de finalizar.
+    argumentos = _argumentos_comparar(tmp_path, [], partidas=1000, vista=True)
+    trabajo = gestor.crear("comparacion", TAREA_COMPARAR, argumentos)
+    _esperar_hasta(lambda: gestor.ultima_imagen(trabajo["id"]) is not None)
+    _esperar_hasta(lambda: len(gestor.historial(trabajo["id"])) >= 1)
+    gestor.enviar_orden(trabajo["id"], {"tipo": "finalizar"})
+    final = gestor.esperar(trabajo["id"], LIMITE)
+    assert final["estado"] == "terminado", final["error"]
+    resultado = ResultadoComparacion.model_validate(final["resultado"])
+    assert resultado.incompleta and 1 <= resultado.partidas < 1000
+    assert len(resultado.modelos[0].retornos) == resultado.partidas

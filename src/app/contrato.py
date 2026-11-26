@@ -162,6 +162,27 @@ class ResultadoEntrenamiento(BaseModel):
     resumen: dict[str, Any]
 
 
+class ModeloComparado(BaseModel):
+    """Retornos de un modelo en una comparación (``aleatorio`` para el agente aleatorio)."""
+
+    id: str
+    retornos: list[float]
+
+
+class ResultadoComparacion(BaseModel):
+    """``resultado`` del estado final de una comparación: solo las rondas completas.
+
+    ``partidas`` son las rondas que jugaron todos los modelos (cada uno tiene ese número
+    de retornos) y ``semilla``, la de evaluacion en configs/. Incompleta si se finalizó
+    antes de jugarlas todas.
+    """
+
+    partidas: Natural
+    semilla: Natural
+    incompleta: bool
+    modelos: list[ModeloComparado]
+
+
 # --- Mensajes del navegador por el WebSocket --------------------------------------------
 
 class OrdenAccion(_Estricto):

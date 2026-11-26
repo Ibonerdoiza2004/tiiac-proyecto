@@ -38,6 +38,18 @@ solo en el resumen.
 tras la iteración o época en curso y guarda lo que daría el bucle al acabar (el
 experto, el mejor evaluado; GAIL, la última iteración; BC, la mejor época), marcado como
 incompleto.
+
+Comparación (tarea_comparar; la prepara la ruta de crear comparaciones): argumentos
+``ruta_config``, ``biblioteca``, ``calidad_jpeg``, ``entorno``, ``modelos`` (ids de
+expertos, BC y GAIL válidos de la biblioteca, sin repetir), ``aleatorio`` (si se añade el
+agente aleatorio), ``partidas`` (por modelo; None, evaluacion.episodios) y ``vista``. Se
+juega como la evaluación de la E1 (evaluar_politica): semillas de evaluacion.semilla,
+una por partida, la misma para todos, y evaluacion.determinista. Todos los modelos juegan
+la partida i antes de la i + 1. Un progreso por partida de cada modelo,
+``{"modelo", "partida", "retorno", "pasos"}``, con ``modelo`` el id o ``aleatorio`` y
+``partida`` desde 0. La vista dibuja las partidas a velocidad real (los fps del entorno)
+mientras está encendida. ``finalizar`` corta la partida en curso y el resultado se queda
+solo con las rondas que jugaron todos los modelos. No se guarda nada fuera del trabajo.
 """
 
 from __future__ import annotations
@@ -47,22 +59,28 @@ import math
 from pathlib import Path
 from typing import Any
 
+import gymnasium as gym
+import numpy as np
+import torch
 from stable_baselines3.common.callbacks import BaseCallback
 
 from src.data.biblioteca import Biblioteca, agregar_nuevo
+from src.data.demostraciones import jugar_partida, retorno_partida
 from src.data.entornos import crear_entorno
 from src.data.seleccion import preparar_datos
 from src.data.splits import SplitsDemostraciones, huella_archivo, validar_splits
 from src.data.tipos import Trayectoria
 from src.training.barrido import cargar_datos
-from src.training.bc import entrenar_bc_repeticion, guardar_bc_repeticion
-from src.training.gail import entrenar_gail, guardar_gail
-from src.training.trpo import entrenar_experto, guardar_experto
-from src.training.vista import CallbackVista
+from src.training.bc import cargar_politica_bc, entrenar_bc_repeticion, guardar_bc_repeticion
+from src.training.evaluacion import config_evaluacion, predecir_accion
+from src.training.gail import cargar_gail, entrenar_gail, guardar_gail
+from src.training.trpo import cargar_experto, entrenar_experto, guardar_experto
+from src.training.vista import CallbackVista, EntornoVista
 from src.utils.configuracion import TipoEntorno, resolver_configuracion
 from src.utils.procedencia import a_json
 from src.utils.tracking import (abrir_run, nombre_artefacto, registrar, registrar_resumen,
                                 subir_artefacto, terminar_run)
+from src.utils.seed import semillas_independientes
 from src.utils.validacion import es_entero_positivo, es_semilla
 
 # Claves que tiene que traer argumentos en un entrenamiento de cada método.
@@ -75,6 +93,12 @@ ARGUMENTOS_POR_METODO = {"experto": ARGUMENTOS_ENTRENAMIENTO, "gail": ARGUMENTOS
 REPETICION_DASHBOARD = 0
 # Secciones de las medidas que se mandan juntas con las de la iteración en la que ocurren.
 SECCIONES_EVALUACION = ("evaluacion/", "validacion/")
+# Claves de los argumentos de una comparación y nombre del agente aleatorio en ella.
+ARGUMENTOS_COMPARACION = frozenset({"ruta_config", "biblioteca", "calidad_jpeg", "entorno",
+                                    "modelos", "aleatorio", "partidas", "vista"})
+ALEATORIO = "aleatorio"
+# Tipos de la biblioteca que se pueden comparar.
+TIPOS_COMPARABLES = ("experto", "bc", "gail")
 
 
 def comprobar_argumentos_entrenamiento(argumentos: object,
@@ -280,9 +304,14 @@ def fps_entorno(cfg: dict[str, Any]) -> int:
     """
     entorno = crear_entorno(cfg, None)
     try:
-        fps = entorno.metadata.get("render_fps")
+        return _fps(entorno, cfg)
     finally:
         entorno.close()
+
+
+def _fps(entorno: gym.Env, cfg: dict[str, Any]) -> int:
+    """render_fps de un entorno ya creado; ValueError si no lo declara."""
+    fps = entorno.metadata.get("render_fps")
     if isinstance(fps, bool) or not isinstance(fps, int) or fps < 1:
         raise ValueError(f"{cfg['entorno']['id']} no declara render_fps")
     return fps
@@ -518,6 +547,155 @@ def tarea_entrenar_bc(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
         raise
     terminar_run(run)
     return _resultado(ficha, incompleto, argumentos["semilla"], resumen)
+
+
+def comprobar_argumentos_comparacion(argumentos: object) -> dict[str, Any]:
+    """Comprueba los argumentos de una comparación antes de cargar nada.
+
+    Returns:
+        Una copia de los argumentos.
+
+    Raises:
+        ValueError: Si falta o sobra alguna clave, algún valor no tiene su tipo, hay
+            modelos repetidos o no queda ningún agente que comparar.
+    """
+    if not isinstance(argumentos, dict) or set(argumentos) != ARGUMENTOS_COMPARACION:
+        claves = sorted(argumentos) if isinstance(argumentos, dict) else argumentos
+        raise ValueError("Los argumentos deben tener exactamente "
+                         f"{sorted(ARGUMENTOS_COMPARACION)}, no {claves}")
+    for clave in ("ruta_config", "biblioteca", "entorno"):
+        if not isinstance(argumentos[clave], str) or not argumentos[clave].strip():
+            raise ValueError(f"{clave} debe ser un texto no vacío")
+    modelos = argumentos["modelos"]
+    if not isinstance(modelos, list) or not all(isinstance(m, str) and m for m in modelos):
+        raise ValueError("modelos debe ser una lista de ids de la biblioteca")
+    if len(set(modelos)) != len(modelos):
+        raise ValueError("modelos no puede tener ids repetidos")
+    for clave in ("aleatorio", "vista"):
+        if not isinstance(argumentos[clave], bool):
+            raise ValueError(f"{clave} debe ser true o false")
+    if not modelos and not argumentos["aleatorio"]:
+        raise ValueError("No hay nada que comparar: elige algún modelo o el aleatorio")
+    if argumentos["partidas"] is not None and not es_entero_positivo(argumentos["partidas"]):
+        raise ValueError(f"partidas debe ser un entero positivo o None, no "
+                         f"{argumentos['partidas']!r}")
+    return dict(argumentos)
+
+
+def cargar_agente(biblioteca: Biblioteca, id_modelo: str,
+                  entorno: str) -> tuple[Any, dict[str, Any] | None]:
+    """Carga un modelo de la biblioteca para jugar con predecir_accion.
+
+    Como la evaluación de la E1: el experto y GAIL con sus estadísticas de
+    normalización (None si no normalizan) y BC sin ellas.
+
+    Returns:
+        El agente (TRPO o PoliticaBC) y sus estadísticas.
+
+    Raises:
+        ValueError: Si el id no existe, no es válido, es de otro entorno o no es un
+            experto, BC o GAIL.
+    """
+    try:
+        elemento = biblioteca.obtener(id_modelo)
+    except KeyError:
+        raise ValueError(f"El modelo {id_modelo} no está en la biblioteca") from None
+    if elemento["tipo"] not in TIPOS_COMPARABLES:
+        raise ValueError(f"{id_modelo} es {elemento['tipo']}, no un modelo")
+    if elemento["entorno"] != entorno:
+        raise ValueError(f"{id_modelo} es de {elemento['entorno']}, no de {entorno}")
+    if not elemento["valido"]:
+        raise ValueError(f"{id_modelo} no es válido: {elemento['motivo']}")
+    carpeta = biblioteca.ruta(id_modelo)
+    if elemento["tipo"] == "bc":
+        politica, _ = cargar_politica_bc(carpeta / "politica.pt")
+        politica.eval()
+        return politica, None
+    if elemento["tipo"] == "experto":
+        modelo, metadatos = cargar_experto(carpeta)
+    else:
+        modelo, _, metadatos = cargar_gail(carpeta)
+    return modelo, metadatos["resumen"]["normalizacion"]
+
+
+class _Finalizada(Exception):
+    """Se pidió finalizar la comparación en mitad de una partida."""
+
+
+def tarea_comparar(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
+    """Compara modelos de la biblioteca (y el aleatorio) jugando las mismas partidas.
+
+    Cada modelo juega como en evaluar_politica de la E1, así que sus retornos son los
+    mismos que daría evaluar_final con esas partidas. Ver el docstring del módulo.
+
+    Args:
+        argumentos: Ver el docstring del módulo.
+        canal: CanalTrabajo.
+
+    Returns:
+        ``{"partidas", "semilla", "incompleta", "modelos": [{"id", "retornos"}]}``, con
+        ``partidas`` las rondas completas y los modelos en el orden pedido (el aleatorio,
+        el último); incompleta si se finalizó antes de jugarlas todas.
+
+    Raises:
+        ValueError: Si los argumentos, la configuración o algún modelo no son válidos.
+    """
+    argumentos = comprobar_argumentos_comparacion(argumentos)
+    cfg = resolver_configuracion(Path(argumentos["ruta_config"]), argumentos["entorno"])
+    evaluacion = config_evaluacion(cfg)
+    partidas = argumentos["partidas"] or evaluacion["episodios"]
+    biblioteca = Biblioteca(Path(argumentos["biblioteca"]),
+                            entornos_gym(argumentos["ruta_config"]))
+    agentes = [(id_modelo, *cargar_agente(biblioteca, id_modelo, argumentos["entorno"]))
+               for id_modelo in argumentos["modelos"]]
+    if argumentos["aleatorio"]:
+        agentes.append((ALEATORIO, ALEATORIO, None))
+    entorno = crear_entorno(cfg, None, render_mode="rgb_array")
+    try:
+        entorno = EntornoVista(entorno, canal.imagen, _fps(entorno, cfg),
+                               argumentos["calidad_jpeg"], activa=argumentos["vista"])
+    except BaseException:
+        entorno.close()
+        raise
+
+    def atender_ordenes() -> None:
+        for orden in canal.ordenes():
+            if orden.get("tipo") == "vista":
+                entorno.activa = bool(orden.get("activa"))
+            elif orden.get("tipo") == "finalizar":
+                raise _Finalizada
+
+    retornos: dict[str, list[float]] = {id_modelo: [] for id_modelo, _, _ in agentes}
+    incompleta = False
+    try:
+        with torch.no_grad():
+            for indice, semilla in enumerate(semillas_independientes(evaluacion["semilla"],
+                                                                     partidas)):
+                ronda = []
+                for id_modelo, agente, estadisticas in agentes:
+
+                    def politica(observacion: np.ndarray, agente: Any = agente,
+                                 estadisticas: dict[str, Any] | None = estadisticas,
+                                 ) -> int | np.ndarray:
+                        atender_ordenes()
+                        return predecir_accion(agente, observacion, entorno.action_space,
+                                               evaluacion["determinista"], None, estadisticas)
+
+                    partida = jugar_partida(entorno, politica, semilla, indice)
+                    retorno = retorno_partida(partida)
+                    ronda.append((id_modelo, retorno))
+                    canal.progreso({"modelo": id_modelo, "partida": indice, "retorno": retorno,
+                                    "pasos": partida.numero_pasos})
+                for id_modelo, retorno in ronda:
+                    retornos[id_modelo].append(retorno)
+    except _Finalizada:
+        incompleta = True
+    finally:
+        entorno.close()
+    return {"partidas": len(next(iter(retornos.values()))),
+            "semilla": int(evaluacion["semilla"]), "incompleta": incompleta,
+            "modelos": [{"id": id_modelo, "retornos": valores}
+                        for id_modelo, valores in retornos.items()]}
 
 
 def a_json_profundo(valor: Any) -> Any:

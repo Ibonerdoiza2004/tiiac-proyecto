@@ -231,3 +231,124 @@ def test_el_experto_es_el_mismo_con_y_sin_vista(caso):
     assert sin_resumen["evaluaciones"] == con_resumen["evaluaciones"]
     # 256 pasos en 2 entornos: 128 llamadas.
     assert len(emitidas) == {"apagada": 0, "encendida": 128, "alternando": 60}[caso]
+
+
+# --- EntornoVista: partidas a velocidad real ---------------------------------------------
+
+class _Dormir:
+    """Espera falsa: apunta lo que se pide y adelanta el reloj falso."""
+
+    def __init__(self, reloj: _Reloj) -> None:
+        self.reloj = reloj
+        self.esperas: list[float] = []
+
+    def __call__(self, segundos: float) -> None:
+        self.esperas.append(segundos)
+        self.reloj.ahora += segundos
+
+
+def _vista_partidas(paso: float, **argumentos):
+    """CartPole dibujable con reloj y espera falsos; devuelve vista, emitidas y espera."""
+    from src.data.entornos import crear_entorno
+    from src.training.vista import EntornoVista
+    emitidas: list[bytes] = []
+    reloj = _Reloj(paso)
+    dormir = _Dormir(reloj)
+    entorno = crear_entorno(_cfg(), None, render_mode="rgb_array")
+    vista = EntornoVista(entorno, emitidas.append, 25, 80, reloj=reloj, dormir=dormir,
+                         **argumentos)
+    return vista, emitidas, dormir
+
+
+def _jugar(vista, semilla: int = 7):
+    from src.data.demostraciones import jugar_partida
+    return jugar_partida(vista, lambda observacion: int(observacion[2] > 0), semilla, 0)
+
+
+def test_apagada_no_dibuja_ni_espera():
+    vista, emitidas, dormir = _vista_partidas(0.0)
+    try:
+        _jugar(vista)
+    finally:
+        vista.close()
+    assert emitidas == [] and dormir.esperas == []
+
+
+def test_encendida_dibuja_cada_paso_a_los_fps():
+    # El reloj no avanza solo: cada imagen espera el intervalo entero (1/25 s), salvo la
+    # primera, que sale al momento.
+    vista, emitidas, dormir = _vista_partidas(0.0, activa=True)
+    try:
+        partida = _jugar(vista)
+    finally:
+        vista.close()
+    assert len(emitidas) == partida.numero_pasos + 1  # el estado inicial y cada paso
+    assert all(datos[:2] == b"\xff\xd8" for datos in emitidas)
+    assert dormir.esperas == pytest.approx([0.04] * partida.numero_pasos)
+
+
+def test_con_retraso_no_espera_ni_acumula():
+    # Cada lectura del reloj adelanta 0,1 s, más que el intervalo: nunca espera.
+    vista, emitidas, dormir = _vista_partidas(0.1, activa=True)
+    try:
+        partida = _jugar(vista)
+    finally:
+        vista.close()
+    assert dormir.esperas == [] and len(emitidas) == partida.numero_pasos + 1
+
+
+def test_espera_solo_lo_que_falta():
+    vista, _, dormir = _vista_partidas(0.01, activa=True)
+    try:
+        _jugar(vista)
+    finally:
+        vista.close()
+    # Entre dos imágenes el reloj avanza 0,01 s por la lectura: falta 0,03 s.
+    assert dormir.esperas and dormir.esperas == pytest.approx([0.03] * len(dormir.esperas))
+
+
+def test_al_encenderla_en_marcha_la_primera_sale_sin_esperar():
+    vista, emitidas, dormir = _vista_partidas(0.0)
+    try:
+        vista.reset(seed=3)
+        vista.step(0)
+        vista.activa = True
+        vista.step(1)
+        vista.step(0)
+        vista.activa = False
+        vista.step(1)
+        vista.activa = True
+        vista.step(0)
+    finally:
+        vista.close()
+    assert len(emitidas) == 3
+    assert dormir.esperas == pytest.approx([0.04])
+
+
+def test_la_vista_no_cambia_la_partida():
+    sin, _, _ = _vista_partidas(0.0)
+    con, emitidas, _ = _vista_partidas(0.0, activa=True)
+    try:
+        a, b = _jugar(sin), _jugar(con)
+    finally:
+        sin.close()
+        con.close()
+    assert emitidas
+    for campo in ("estados", "acciones", "recompensas_originales", "terminados", "truncados"):
+        assert np.array_equal(getattr(a, campo), getattr(b, campo))
+
+
+def test_entorno_vista_necesita_rgb_array_y_argumentos_validos():
+    from src.data.entornos import crear_entorno
+    from src.training.vista import EntornoVista
+    sin_dibujo = crear_entorno(_cfg(), None)
+    with pytest.raises(ValueError, match="rgb_array"):
+        EntornoVista(sin_dibujo, lambda datos: None, 25, 80)
+    sin_dibujo.close()
+    for argumentos, mensaje in [({"emitir": None}, "emitir"), ({"fps": 0}, "fps"),
+                                ({"fps": True}, "fps"), ({"calidad": 0}, "calidad JPEG")]:
+        entorno = crear_entorno(_cfg(), None, render_mode="rgb_array")
+        base = {"emitir": lambda datos: None, "fps": 25, "calidad": 80}
+        with pytest.raises(ValueError, match=mensaje):
+            EntornoVista(entorno, **{**base, **argumentos})
+        entorno.close()

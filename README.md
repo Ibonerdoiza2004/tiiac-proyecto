@@ -477,6 +477,18 @@ pida el usuario (por defecto, todas). El modelo se guarda en la
 biblioteca con origen «dashboard» y, con W&B, se registran las medidas, el resumen y el
 modelo como artefacto.
 
+Las comparaciones las hace `tarea_comparar`, en el mismo módulo (la ruta de crearlas
+llega con `comparar-api`). Juega como la evaluación de la E1: cada partida con su
+semilla, derivada de `evaluacion.semilla`, la misma para todos los modelos, y en modo
+`evaluacion.determinista`, así que sus retornos son los que daría `evaluar_final` con
+esas partidas. Por defecto juega `evaluacion.episodios` partidas por modelo. Todos los
+modelos juegan la partida i antes de la i + 1, y cada partida manda un progreso
+`{"modelo", "partida", "retorno", "pasos"}` (el agente aleatorio es `aleatorio`). Con
+la vista encendida, las partidas van a velocidad real (las imágenes por segundo del
+entorno); apagada, a toda velocidad. `finalizar` corta la partida en curso, y el
+resultado, `{"partidas", "semilla", "incompleta", "modelos": [{"id", "retornos"}]}`, se
+queda solo con las rondas que jugaron todos. No se guarda nada fuera del trabajo.
+
 La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `biblioteca/`, no se versiona), con una carpeta por elemento
 (`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una
