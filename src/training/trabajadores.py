@@ -6,9 +6,9 @@ proceso propio. La tarea entrena con las mismas funciones que los scripts de la 
 órdenes del navegador y, al terminar, guarda el modelo en la biblioteca y devuelve el
 resultado (ResultadoEntrenamiento en src/app/contrato.py).
 
-Hay una tarea por método: tarea_entrenar_experto, tarea_entrenar_gail y
-tarea_entrenar_bc. Argumentos de un entrenamiento (los prepara la ruta
-POST /api/entrenamientos):
+Hay una tarea por método, tarea_entrenar_experto, tarea_entrenar_gail y
+tarea_entrenar_bc, y otra para comparar modelos, tarea_comparar (abajo). Argumentos de
+un entrenamiento (los prepara la ruta POST /api/entrenamientos):
 
 - ``ruta_config``: YAML base (configs/default.yaml).
 - ``biblioteca``: carpeta de la biblioteca (aplicativo.biblioteca).

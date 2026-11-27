@@ -477,6 +477,17 @@ pida el usuario (por defecto, todas). El modelo se guarda en la
 biblioteca con origen «dashboard» y, con W&B, se registran las medidas, el resumen y el
 modelo como artefacto.
 
+Comprobado a mano el 2026-11-27 en este portátil (Linux WSL2, i7-11800H), en una copia de
+la biblioteca con los datos congelados de CartPole: los trabajadores de BC (1, 4, 7 y 10
+partidas, repetición 0) y de GAIL (1 partida, repetición 0, 20 s) dan exactamente los
+modelos de la entrega de la E1 (los del run de comparación `ft49odps`). El del experto,
+con la semilla y la configuración del perfil, no da byte a byte el experto congelado:
+el gestor entrena cada trabajo con un hilo de PyTorch (un núcleo por trabajo) y el
+congelado se entrenó con los hilos por defecto, que cambian el redondeo; con los 8
+hilos de este portátil, `entrenar_experto` sí da el congelado. No hay test de esta
+comprobación porque los datos congelados no están en el repositorio (decisión del
+usuario).
+
 Las comparaciones las hace `tarea_comparar`, en el mismo módulo (la ruta de crearlas
 llega con `comparar-api`). Juega como la evaluación de la E1: cada partida con su
 semilla, derivada de `evaluacion.semilla`, la misma para todos los modelos, y en modo
@@ -492,7 +503,8 @@ queda solo con las rondas que jugaron todos. No se guarda nada fuera del trabajo
 Un entrenamiento cortado (se cae el proceso o se cierra la aplicación) se puede reanudar
 desde su último checkpoint. Cada entrenamiento con checkpoints tiene su carpeta en
 `<biblioteca>/.en_curso/`, con los argumentos con los que empezó y el último estado
-(`src/training/checkpoints.py`). Relanzarlo con los mismos argumentos sigue desde ahí:
+(`src/training/checkpoints.py`). Relanzarlo con los mismos argumentos (listar los
+cortados y relanzarlos llega con `laboratorio-entrenar-api`) sigue desde ahí:
 vuelve a mandar el progreso guardado, entrena el resto y anota en el resumen desde
 dónde se reanudó. Con W&B, abre un run nuevo con la etiqueta `reanudado`. No se puede
 reanudar si cambian los argumentos que definen el entrenamiento o la configuración
