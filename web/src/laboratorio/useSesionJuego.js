@@ -25,10 +25,16 @@ export const ESPERA_FIN_MS = 10_000;
 
 const CONEXION_PERDIDA = 'Se perdió la conexión con el servidor. Las partidas de esta sesión no se han guardado.';
 const FIN_SIN_RESPUESTA = 'El servidor no respondió al finalizar. Las partidas de esta sesión no se han guardado.';
+const AUN_CONECTANDO = 'Todavía se está conectando con el servidor: vuelve a intentarlo en un momento.';
 
 const ESTADO_INICIAL = { partida: 1, paso: 0, retorno: 0, pares: 0, esperando: false };
 
 const mensajeDe = (error) => (error instanceof Error ? error.message : String(error));
+
+/** Por qué se perdió la sesión: el error del servidor si avisó antes de cerrar. */
+const motivoCierre = (cierre) => (cierre?.error
+  ? `${cierre.error.replace(/[.\s]+$/, '')}. Las partidas de esta sesión no se han guardado.`
+  : CONEXION_PERDIDA);
 
 /**
  * Sesión de «Jugar tú» o «Ver agente»: la crea, se conecta, recibe imágenes y progreso,
@@ -95,9 +101,9 @@ export default function useSesionJuego(api) {
         alError: (e) => setError(mensajeDe(e)),
         // Solo hay conexión en JUGANDO y TERMINANDO: al recibir sesion_terminada se cierra
         // desde aquí, y cerrar() ya no avisa.
-        alCambiarEstado: (nuevoEstado) => {
+        alCambiarEstado: (nuevoEstado, cierre) => {
           if (nuevoEstado === ESTADOS_CONEXION.CERRADA) {
-            abandonar(CONEXION_PERDIDA);
+            abandonar(motivoCierre(cierre));
           }
         },
       });
@@ -114,8 +120,14 @@ export default function useSesionJuego(api) {
     if (!conexion.current) {
       return;
     }
+    setError(null);  // antes de enviar: la respuesta puede llegar dentro del envío
     if (!conexion.current.finalizar()) {
-      abandonar(CONEXION_PERDIDA);
+      // Aún conectando se puede reintentar; si no, la conexión se ha perdido.
+      if (conexion.current.conectando?.()) {
+        setError(AUN_CONECTANDO);
+      } else {
+        abandonar(CONEXION_PERDIDA);
+      }
       return;
     }
     setFase(FASES.TERMINANDO);

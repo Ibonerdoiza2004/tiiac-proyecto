@@ -72,10 +72,12 @@ describe('crearApiLaboratorio', () => {
     const { conectar } = conexionFalsa();
     const alCambiarEstado = vi.fn();
     crearApiLaboratorio({ http: http(), conectar }).conectar('s1', { alCambiarEstado });
-    for (const estado of ['conectando', 'abierta', 'cerrada']) {
+    for (const estado of ['conectando', 'abierta']) {
       conectar.mock.calls[0][1].alCambiarEstado(estado);
     }
-    expect(alCambiarEstado.mock.calls).toEqual([['conectando'], ['abierta'], ['cerrada']]);
+    conectar.mock.calls[0][1].alCambiarEstado('cerrada', { codigo: 4404, error: 'No existe' });
+    expect(alCambiarEstado.mock.calls).toEqual([['conectando'], ['abierta'],
+      ['cerrada', { codigo: 4404, error: 'No existe' }]]);
   });
 
   it('funciona sin callbacks', () => {

@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from src.utils.archivos import turno_exclusivo
 
 # Intenta coger el cerrojo sin esperar: sale con 0 si puede y con 1 si otro lo tiene.
@@ -38,5 +40,17 @@ def test_si_falla_dentro_suelta_el_cerrojo(tmp_path):
         with turno_exclusivo(cerrojo):
             raise RuntimeError("falla")
     except RuntimeError:
+        pass
+    assert _otro_proceso_puede(cerrojo)
+
+
+def test_sin_esperar_falla_si_otro_tiene_el_cerrojo(tmp_path):
+    cerrojo = tmp_path / ".algo.lock"
+    with turno_exclusivo(cerrojo, esperar=False):
+        assert not _otro_proceso_puede(cerrojo)
+        with pytest.raises(BlockingIOError):  # también desde el mismo proceso
+            with turno_exclusivo(cerrojo, esperar=False):
+                pass
+    with turno_exclusivo(cerrojo, esperar=False):  # libre: entra
         pass
     assert _otro_proceso_puede(cerrojo)

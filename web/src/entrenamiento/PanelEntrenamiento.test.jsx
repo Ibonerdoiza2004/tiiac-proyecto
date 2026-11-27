@@ -69,6 +69,28 @@ describe('formulario', () => {
     expect(within(form).getByRole('checkbox', { name: /W&B/ })).not.toBeChecked();
   });
 
+  it('«Dura» sigue a lo que se escribe en el campo de la duración', async () => {
+    // Regresión: decía siempre la duración del perfil.
+    const api = simulada();
+    await montar(api);
+    const form = formulario('GAIL');
+    escribir(within(form).getByLabelText('iteraciones'), '7');
+    expect(within(form).getByText('Dura 7 iteraciones.', { exact: false })).toBeInTheDocument();
+    escribir(within(form).getByLabelText('iteraciones'), 'muchas');
+    expect(within(form).queryByText(/Dura/)).toBeNull();
+    escribir(within(form).getByLabelText('iteraciones'), '20');
+    expect(within(form).getByText('Dura 20 iteraciones.', { exact: false })).toBeInTheDocument();
+  });
+
+  it('en el experto «Dura» redondea a bloques completos de pasos', async () => {
+    const api = simulada();
+    await montar(api, ['experto']);
+    const form = formulario('Experto (TRPO)');
+    escribir(within(form).getByLabelText('pasos_totales'), '12001');
+    escribir(within(form).getByLabelText('pasos_por_iteracion'), '1000');
+    expect(within(form).getByText(/Dura 13.?000 pasos\./)).toBeInTheDocument();
+  });
+
   it('BC no tiene vista y el experto no tiene datos', async () => {
     const api = simulada();
     await montar(api);
@@ -334,6 +356,34 @@ describe('conexión perdida', () => {
       // La curva de lo que llegó se conserva.
       expect(screen.getByRole('img', { name: /M: 1 puntos/ })).toBeInTheDocument();
     });
+
+  it.each([['Pausar', 'pausar'], ['Finalizar', 'finalizar']])(
+    'la orden %s mientras el socket aún conecta avisa sin liberar el panel', async (orden, tipo) => {
+      // Regresión: con readyState 0 la orden no sale y se daba la conexión por perdida.
+      const doble = apiEntrenamientoConSocket();
+      const ocupado = await montar(doble.api);
+      fireEvent.click(screen.getByRole('checkbox', { name: /Demos/ }));
+      await pulsar(boton('Entrenar GAIL'));
+      const socket = doble.sockets[0];
+      await pulsar(boton(orden));
+      expect(screen.getByRole('alert')).toHaveTextContent('Todavía se está conectando');
+      expect(ocupado).toHaveBeenLastCalledWith(true);
+      expect(socket.enviados).toEqual([]);
+      act(() => socket.abrir());
+      await pulsar(boton(orden));
+      expect(socket.enviados).toEqual([{ tipo }]);
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+  it('si el servidor avisa de un error y cierra, se ve su motivo', async () => {
+    // Regresión: «Se perdió la conexión» sustituía al mensaje del servidor.
+    const { socket, ocupado } = await enMarcha();
+    act(() => {
+      socket.recibir({ tipo: 'error', mensaje: 'El trabajador falló: sin memoria' });
+      socket.caer();
+    });
+    liberado(ocupado, 'El trabajador falló: sin memoria');
+  });
 
   it.each([['Pausar'], ['Finalizar']])('si la orden %s no se puede enviar, libera el panel', async (orden) => {
     const { socket, ocupado } = await enMarcha();

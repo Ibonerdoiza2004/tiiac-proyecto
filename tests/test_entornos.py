@@ -276,6 +276,29 @@ def test_semillas_repeticion_rechaza_argumentos_no_validos(semilla, repeticion, 
         semillas_repeticion(semilla, repeticion)
 
 
+def test_semilla_reanudacion_no_coincide_con_otras_semillas():
+    from src.utils.seed import semilla_reanudacion, semillas_repeticion
+    por_iteracion = [semilla_reanudacion(77, i) for i in range(1, 50)]
+    assert len(set(por_iteracion)) == len(por_iteracion)
+    assert all(isinstance(v, int) and v >= 0 for v in por_iteracion)
+    # Ni con las instancias de los entornos originales ni con las de una repetición.
+    instancias = semillas_independientes(77, 50)
+    repeticiones = [v for r in range(5) for v in semillas_repeticion(77, r).values()]
+    assert not set(por_iteracion) & (set(instancias) | set(repeticiones))
+    # Depende de la base y de la iteración, también con enteros de NumPy.
+    assert semilla_reanudacion(np.int64(77), np.int64(3)) == por_iteracion[2]
+    assert semilla_reanudacion(78, 3) != por_iteracion[2]
+
+
+@pytest.mark.parametrize("semilla, iteracion, mensaje", [
+    (-1, 1, "entero no negativo"), (True, 1, "entero no negativo"),
+    (5, 0, "iteracion"), (5, -1, "iteracion"), (5, True, "iteracion"), (5, 1.0, "iteracion"),
+])
+def test_semilla_reanudacion_rechaza_argumentos_no_validos(semilla, iteracion, mensaje):
+    from src.utils.seed import semilla_reanudacion
+    with pytest.raises(ValueError, match=mensaje):
+        semilla_reanudacion(semilla, iteracion)
+
 
 # --- Filtro del aviso settotalmass de MuJoCo ---------------------------------------------
 
@@ -345,3 +368,52 @@ def test_crear_entorno_funciona_sin_mujoco_instalado(monkeypatch):
         assert env.observation_space.shape == (4,)
     finally:
         env.close()
+
+
+# --- entorno dibujable (vista del dashboard) -------------------------------------------
+
+def test_vectorizado_dibujable_crea_instancias_que_se_pueden_dibujar():
+    venv = crear_entorno_vectorizado(CFG, 3, 4, dibujable=True)
+    try:
+        assert venv.get_attr("render_mode") == ["rgb_array"] * 3
+        venv.reset()
+        imagen = venv.env_method("render", indices=0)[0]
+        assert imagen.dtype == np.uint8 and imagen.ndim == 3 and imagen.shape[2] == 3
+    finally:
+        venv.close()
+    normal = crear_entorno_vectorizado(CFG, 2, 4)
+    try:
+        assert normal.get_attr("render_mode") == [None, None]
+    finally:
+        normal.close()
+
+
+@pytest.mark.parametrize("entorno_id", ["CartPole-v1", "MountainCar-v0", "Acrobot-v1",
+                                        "Reacher-v5", "HalfCheetah-v5"])
+def test_dibujar_no_cambia_las_partidas(entorno_id):
+    """Con la primera instancia dibujable y dibujando en cada paso, las partidas son las
+    mismas que sin dibujar: la vista no altera el entrenamiento."""
+    cfg = {"entorno": {"id": entorno_id}}
+
+    def recorrido(dibujable: bool) -> list:
+        venv = crear_entorno_vectorizado(cfg, 2, 7, dibujable=dibujable)
+        try:
+            espacio = venv.action_space
+            generador = crear_generador(1)
+            pasos = [venv.reset()]
+            for _ in range(40):
+                if isinstance(espacio, spaces.Discrete):
+                    acciones = generador.integers(0, espacio.n, size=2)
+                else:
+                    acciones = generador.uniform(espacio.low, espacio.high,
+                                                 size=(2, *espacio.shape)).astype(np.float32)
+                obs, recompensas, terminadas, _ = venv.step(acciones)
+                if dibujable:
+                    assert venv.env_method("render", indices=0)[0] is not None
+                pasos.append((obs, recompensas, terminadas))
+            return pasos
+        finally:
+            venv.close()
+
+    np.testing.assert_equal(recorrido(False), recorrido(True))
+

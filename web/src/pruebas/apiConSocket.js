@@ -35,9 +35,9 @@ function claseSocketFalso(sockets) {
       this.onmessage?.({ data: mensaje instanceof Blob ? mensaje : JSON.stringify(mensaje) });
     }
 
-    caer() {
+    caer(code) {
       this.readyState = 3;
-      this.onclose?.({});
+      this.onclose?.(code === undefined ? {} : { code });
     }
   };
 }

@@ -39,6 +39,63 @@ def fijar_seed(seed: int, determinista: bool = True) -> None:
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 
+def estado_aleatorio() -> dict[str, object]:
+    """Estado de los generadores globales (Python, NumPy y PyTorch en CPU).
+
+    Es lo que guarda un checkpoint para seguir con los mismos números aleatorios al
+    reanudar (restaurar_estado_aleatorio). Solo tiene tipos que torch.load admite con
+    weights_only=True: el estado de NumPy va como tensor y números.
+    """
+    clave, estado, posicion, tiene_gauss, gauss = np.random.get_state()
+    return {"python": random.getstate(), "torch": torch.get_rng_state(),
+            "numpy": {"clave": str(clave), "estado": torch.from_numpy(estado.astype(np.int64)),
+                      "posicion": int(posicion), "tiene_gauss": int(tiene_gauss),
+                      "gauss": float(gauss)}}
+
+
+def restaurar_estado_aleatorio(estado: dict[str, object]) -> None:
+    """Deja los generadores globales como los guardó estado_aleatorio.
+
+    Raises:
+        ValueError: Si el estado no tiene la forma de uno de estado_aleatorio (si falla
+            a medias, los generadores pueden quedar cambiados: quien reanuda no sigue).
+    """
+    try:
+        numpy = estado["numpy"]
+        np_estado = np.asarray(numpy["estado"], dtype=np.int64)
+        if np_estado.min(initial=0) < 0 or np_estado.max(initial=0) > np.iinfo(np.uint32).max:
+            raise ValueError("estado de NumPy fuera de rango")
+        python = estado["python"]
+        np.random.set_state((numpy["clave"], np_estado.astype(np.uint32),
+                             int(numpy["posicion"]), int(numpy["tiene_gauss"]),
+                             float(numpy["gauss"])))
+        random.setstate((python[0], tuple(python[1]), python[2]))
+        torch.set_rng_state(estado["torch"])
+    except (KeyError, TypeError, ValueError, IndexError, RuntimeError) as error:
+        raise ValueError(f"Estado aleatorio no válido: {error}") from error
+
+
+def estado_generador(generador: np.random.Generator) -> dict[str, object]:
+    """Estado de un generador de crear_generador, para un checkpoint (solo tipos básicos).
+
+    NumPy da un diccionario nuevo en cada lectura: usar después el generador no lo cambia.
+    """
+    return generador.bit_generator.state
+
+
+def restaurar_generador(generador: np.random.Generator, estado: dict[str, object]) -> None:
+    """Deja un generador de crear_generador como lo guardó estado_generador.
+
+    Raises:
+        ValueError: Si el estado no es de un generador como ese.
+    """
+    try:
+        # NumPy rechaza el estado de otro tipo de generador o con otra forma.
+        generador.bit_generator.state = estado
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Estado del generador no válido: {error}") from error
+
+
 def validar_semilla(semilla: object) -> int:
     """Comprueba que semilla es un entero no negativo y la devuelve como int.
 
@@ -135,6 +192,34 @@ def semillas_repeticion(semilla: int, repeticion: int) -> dict[str, int]:
     hija = np.random.SeedSequence(base).spawn(int(repeticion) + 1)[int(repeticion)]
     return {uso: int(nieta.generate_state(1)[0])
             for uso, nieta in zip(USOS_REPETICION, hija.spawn(len(USOS_REPETICION)), strict=True)}
+
+
+# Primer elemento de la clave de las semillas de reanudación: ninguna hija de spawn ni
+# nieta de semillas_repeticion llega a ese índice, así que no se repiten con ellas.
+CLAVE_REANUDACION = 2**31
+
+
+def semilla_reanudacion(semilla: int, iteracion: int) -> int:
+    """Semilla de los entornos de un entrenamiento reanudado tras la iteración dada.
+
+    Al reanudar desde un checkpoint se crean entornos nuevos (los anteriores estaban
+    a mitad de partida). Su semilla sale de la de los entornos originales y de la
+    iteración del checkpoint: reanudar dos veces desde el mismo da lo mismo, y no
+    coincide con las semillas de las instancias (semillas_independientes) ni con las
+    de otra iteración.
+
+    Args:
+        semilla: Semilla de los entornos del entrenamiento original.
+        iteracion: Iteración del checkpoint, entero positivo.
+
+    Raises:
+        ValueError: Si la semilla o la iteración no son válidas.
+    """
+    base = validar_semilla(semilla)
+    if not es_entero_positivo(iteracion):
+        raise ValueError(f"iteracion debe ser un entero positivo, no {iteracion!r}")
+    secuencia = np.random.SeedSequence(base, spawn_key=(CLAVE_REANUDACION, int(iteracion)))
+    return int(secuencia.generate_state(1)[0])
 
 
 @contextmanager

@@ -40,12 +40,13 @@ def _wandb_activo(cfg: dict) -> bool:
 
 
 def _hay_credenciales_wandb() -> bool:
-    """Si hay una clave de W&B en WANDB_API_KEY, en la configuración del SDK o en netrc.
+    """Si hay credenciales de W&B: una clave (WANDB_API_KEY, configuración del SDK o
+    netrc) o un token de identidad (WANDB_IDENTITY_TOKEN_FILE), que el SDK admite sin clave.
 
-    Solo mira si existe, sin validarla ni pedir nada; si el SDK no deja saberlo, cuenta
+    Solo mira si existen, sin validarlas ni pedir nada; si el SDK no deja saberlo, cuenta
     como que no hay (mejor un aviso claro que una petición por la terminal).
     """
-    if os.environ.get("WANDB_API_KEY"):
+    if os.environ.get("WANDB_API_KEY") or os.environ.get("WANDB_IDENTITY_TOKEN_FILE"):
         return True
     try:
         from wandb.sdk.lib import apikey  # noqa: PLC0415 - solo si se usa W&B

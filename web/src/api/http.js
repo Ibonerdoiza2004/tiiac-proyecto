@@ -87,13 +87,28 @@ export function mensajeDeError(cuerpo, estado) {
   return `La API respondió con el código ${estado}`;
 }
 
-// Un cuerpo vacío (como el de un 204) da null.
-async function leerCuerpo(respuesta) {
-  const texto = await respuesta.text();
+// Un cuerpo vacío (como el de un 204) da null. Una página HTML de error (la de un proxy o
+// un servidor caído) también: su código fuente no es un mensaje para el usuario.
+async function leerCuerpo(respuesta, senal) {
+  let texto;
+  try {
+    texto = await respuesta.text();
+  } catch (error) {
+    if (error?.name === 'AbortError' || senal?.aborted) {
+      throw error;
+    }
+    throw new ErrorApi('No se pudo leer la respuesta de la API', {
+      estado: respuesta.status,
+      causa: error,
+    });
+  }
   if (!texto) {
     return null;
   }
   const tipo = respuesta.headers.get('content-type') ?? '';
+  if (!respuesta.ok && (tipo.includes('html') || /^\s*</.test(texto))) {
+    return null;
+  }
   if (tipo.includes('json')) {
     try {
       return JSON.parse(texto);
@@ -156,7 +171,7 @@ export function crearClienteHttp({ base = BASE_API, fetch: hacerFetch } = {}) {
       }
       throw new ErrorApi('No se pudo conectar con la API', { estado: 0, causa: error });
     }
-    const datos = await leerCuerpo(respuesta);
+    const datos = await leerCuerpo(respuesta, senal);
     if (!respuesta.ok) {
       throw new ErrorApi(mensajeDeError(datos, respuesta.status), {
         estado: respuesta.status,

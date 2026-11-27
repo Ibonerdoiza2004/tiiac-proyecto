@@ -28,6 +28,11 @@ CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
 LIMITE = 30.0
 
 
+def vivo(pid: int) -> bool:
+    """Si el proceso existe todavía (tampoco como zombi sin recoger)."""
+    return Path(f"/proc/{pid}").exists()
+
+
 def esperar_hasta(condicion: Callable[[], bool], limite: float = LIMITE) -> None:
     """Espera a que la condición se cumpla o falla el test."""
     fin = time.monotonic() + limite
@@ -207,9 +212,9 @@ def test_apagar_la_api_cancela_los_trabajos() -> None:
     gestor = GestorTrabajos(1)
     with TestClient(crear_app(CONFIG, gestor)):
         trabajo = contar(gestor)
-        proceso = gestor._trabajos[trabajo].proceso
+        proceso = gestor._trabajos[trabajo].proceso.pid
     assert gestor.obtener(trabajo)["estado"] == "cancelado"
-    assert not proceso.is_alive()
+    assert not vivo(proceso)
 
 
 # --- WebSocket -------------------------------------------------------------------------
@@ -485,15 +490,36 @@ def test_cola_envio_conserva_el_orden_de_los_eventos() -> None:
         cola.poner(_imagen(1))  # después del progreso: no puede adelantarlo
         cola.poner(_imagen(2))  # seguida de la 1: la sustituye
         cola.poner(estado)
-        sacados = [await cola.sacar() for _ in range(4)]
-        vacia = cola.vacia()
+        sacados = [await cola.sacar() for _ in range(3)]
+        assert cola.vacia()
         cola.poner(_imagen(3))  # tras enviar, una imagen nueva vuelve a entrar
-        return sacados + [vacia, await cola.sacar()]
+        return sacados + [await cola.sacar()]
 
     # Regresión: antes salía [imagen-2, progreso, estado]: la imagen nueva ocupaba el
-    # sitio de la 0 y adelantaba al progreso que había llegado antes que ella.
-    assert asyncio.run(probar()) == [b"imagen-0", progreso, b"imagen-2", estado, True,
-                                     b"imagen-3"]
+    # sitio de la 0 y adelantaba al progreso que había llegado antes que ella. Tampoco se
+    # guarda la 0: la sustituye la 2, que va después del progreso.
+    sacados = asyncio.run(probar())
+    assert sacados[:3] == [progreso, b"imagen-2", estado] and sacados[3:] == [b"imagen-3"]
+
+
+def test_cola_envio_no_acumula_imagenes_aunque_se_alternen_con_el_progreso() -> None:
+    """Regresión: con imágenes y progreso alternados, un cliente lento recibía todas las
+    imágenes. Ahora solo espera una, la última, y todo el progreso en orden."""
+    async def probar() -> list[Any]:
+        cola = ColaEnvio()
+        for i in range(100):
+            cola.poner(_imagen(i))
+            cola.poner({"tipo": "progreso", "medidas": {"paso": i}})
+        sacados = []
+        while not cola.vacia():
+            sacados.append(await cola.sacar())
+        return sacados
+
+    sacados = asyncio.run(probar())
+    imagenes = [s for s in sacados if isinstance(s, bytes)]
+    assert imagenes == [b"imagen-99"]
+    assert [s["medidas"]["paso"] for s in sacados if isinstance(s, dict)] == list(range(100))
+    assert sacados.index(b"imagen-99") == 99  # después del progreso 98, antes del 99
 
 
 def test_cola_envio_una_imagen_que_llega_mientras_se_envia_la_anterior() -> None:

@@ -21,6 +21,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Para dibujar MuJoCo sin pantalla con EGL de Mesa (tests/conftest.py elige EGL
+      # cuando no hay pantalla).
+      - name: Librerías para dibujar sin pantalla
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgl1-mesa-dri
+
       - name: Tests
         run: python -m pytest tests/ -q
 

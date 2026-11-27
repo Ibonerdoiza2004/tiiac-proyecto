@@ -51,7 +51,8 @@ export const ESTADOS_ENTRENAMIENTO = Object.freeze({ EN_MARCHA: 'en_marcha', PAU
  * @property {string} clave Nombre de la clave en configs/, como learning_rate.
  * @property {'entero' | 'real' | 'booleano' | 'opcion' | 'lista_enteros'} tipo
  * @property {number | boolean | string | number[]} valor Valor del perfil.
- * @property {number} [min] Mínimo admitido (enteros y reales).
+ * @property {number} [min] Mínimo admitido (enteros, reales y listas); falta si no hay.
+ * @property {number} [max] Máximo admitido; falta si no hay.
  * @property {string[]} [opciones] Valores admitidos (tipo opcion).
  * @property {string} [ayuda] De dónde sale el valor (el comentario de configs/).
  */
@@ -65,7 +66,10 @@ export const ESTADOS_ENTRENAMIENTO = Object.freeze({ EN_MARCHA: 'en_marcha', PAU
 /**
  * @typedef {object} EsquemaAjustes
  * @property {string} metodo
- * @property {{unidad: string, total: number}} duracion Cuánto dura con los valores del perfil.
+ * @property {{unidad: string, total: number, campo?: string, bloque?: string}} duracion
+ *   Cuánto dura con los valores del perfil y de qué campos sale (DuracionApi en
+ *   src/app/contrato.py): el valor de campo o, con bloque, ese valor redondeado hacia
+ *   arriba a un múltiplo del de bloque.
  * @property {SeccionAjustes[]} secciones
  */
 
@@ -95,7 +99,8 @@ export const ESTADOS_ENTRENAMIENTO = Object.freeze({ EN_MARCHA: 'en_marcha', PAU
  * @property {(fin: {modelo: {nombre: string, incompleto: boolean}, resumen: object}) => void}
  *   [alTerminar]
  * @property {(error: Error) => void} [alError]
- * @property {(estado: string) => void} [alCambiarEstado] Cambios de la conexión
+ * @property {(estado: string, cierre?: import('./websocket.js').Cierre) => void} [alCambiarEstado]
+ *   Cambios de la conexión y, al cerrarse, cómo terminó
  *   (ESTADOS_CONEXION de ./websocket.js).
  */
 
@@ -161,7 +166,7 @@ export function crearApiEntrenamiento({ http = crearClienteHttp(), conectar = co
         alMensaje: (mensaje) => repartirMensajeEntrenamiento(mensaje, callbacks),
         alImagen: (imagen) => callbacks.alImagen?.(imagen),
         alError: (error) => callbacks.alError?.(error),
-        alCambiarEstado: (estado) => callbacks.alCambiarEstado?.(estado),
+        alCambiarEstado: (estado, ...cierre) => callbacks.alCambiarEstado?.(estado, ...cierre),
       });
       return {
         pausar: () => conexion.enviar({ tipo: 'pausar' }),
@@ -169,6 +174,7 @@ export function crearApiEntrenamiento({ http = crearClienteHttp(), conectar = co
         cambiarVista: (activa) => conexion.enviar({ tipo: 'vista', activa: Boolean(activa) }),
         finalizar: () => conexion.enviar({ tipo: 'finalizar' }),
         cerrar: () => conexion.cerrar(),
+        conectando: () => conexion.conectando?.() ?? false,
       };
     },
   };

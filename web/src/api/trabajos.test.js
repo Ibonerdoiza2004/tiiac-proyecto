@@ -107,11 +107,11 @@ describe('crearApiTrabajos', () => {
     opciones.alMensaje({ tipo: 'progreso', medidas: { m: 1 } });
     opciones.alImagen(imagen);
     opciones.alError(new Error('red'));
-    opciones.alCambiarEstado('cerrada');
+    opciones.alCambiarEstado('cerrada', { codigo: 4404, error: 'No existe' });
     expect(c.alProgreso).toHaveBeenCalledWith({ m: 1 });
     expect(c.alImagen).toHaveBeenCalledWith(imagen);
     expect(c.alError.mock.calls[0][0].message).toBe('red');
-    expect(c.alCambiarEstado).toHaveBeenCalledWith('cerrada');
+    expect(c.alCambiarEstado).toHaveBeenCalledWith('cerrada', { codigo: 4404, error: 'No existe' });
   });
 
   it('sin callbacks no falla', () => {

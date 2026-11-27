@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { aFormulario, camposPorRuta, hojasDeAjustes, idCampo, leerCampo, validarAjustes,
+import { aFormulario, camposPorRuta, duracionEditada, hojasDeAjustes, idCampo, leerCampo, validarAjustes,
   valoresIniciales } from './ajustes.js';
 
 const ENTERO = { clave: 'n', tipo: 'entero', min: 1, valor: 20 };
@@ -10,6 +10,12 @@ const REAL_MIN = { clave: 'g', tipo: 'real', min: 0, valor: 0.5 };
 const BOOLEANO = { clave: 'b', tipo: 'booleano', valor: true };
 const OPCION = { clave: 'activacion', tipo: 'opcion', opciones: ['relu', 'tanh'], valor: 'tanh' };
 const LISTA = { clave: 'capas', tipo: 'lista_enteros', min: 1, valor: [100, 100] };
+// Con máximo, como gamma (0 < gamma <= 1) o pasos_adam.
+const REAL_MAX = { clave: 'gamma', tipo: 'real', min: 0, max: 1, valor: 0.995 };
+const ENTERO_MAX = { clave: 'k', tipo: 'entero', min: 1, max: 10, valor: 3 };
+const LISTA_MAX = { clave: 'c', tipo: 'lista_enteros', min: 1, max: 512, valor: [64] };
+// El backend omite los límites que no hay; null también cuenta como «sin límite».
+const REAL_NULOS = { clave: 'objetivo', tipo: 'real', min: null, max: null, valor: -90 };
 
 const ESQUEMA = { metodo: 'gail', duracion: { unidad: 'iteraciones', total: 20 }, secciones: [
   { clave: 'gail', campos: [ENTERO, BOOLEANO] },
@@ -26,6 +32,8 @@ describe('leerCampo', () => {
     [BOOLEANO, false, false], [BOOLEANO, true, true],
     [OPCION, 'relu', 'relu'],
     [LISTA, '64, 64', [64, 64]], [LISTA, '256', [256]], [LISTA, '32 64;128', [32, 64, 128]],
+    [REAL_MAX, '1', 1], [REAL_MAX, '0', 0], [ENTERO_MAX, '10', 10], [LISTA_MAX, '512, 1', [512, 1]],
+    [REAL_NULOS, '-90', -90], [REAL_NULOS, '1e20', 1e20],
   ])('%j acepta %j', (campo, entrada, valor) => {
     expect(leerCampo(campo, entrada)).toEqual({ valor });
   });
@@ -36,6 +44,8 @@ describe('leerCampo', () => {
     [REAL, '', 'número'], [REAL, 'abc', 'número'], [REAL, '1e999', 'número'], [REAL, 'NaN', 'número'],
     [REAL, 'Infinity', 'número'], [REAL, '0,0,1', 'número'], [REAL, '1.2.3', 'número'],
     [REAL_MIN, '-0.1', 'mínimo 0'],
+    [REAL_MAX, '1.1', 'como mucho 1'], [REAL_MAX, '1,01', 'como mucho 1'],
+    [ENTERO_MAX, '11', 'como mucho 10'], [LISTA_MAX, '64, 513', 'Cada número tiene que ser como mucho 512'],
     [BOOLEANO, 'true', 'sí o no'],
     [OPCION, 'sigmoid', 'relu, tanh'], [OPCION, '', 'relu, tanh'],
     [LISTA, '', 'separados por comas'], [LISTA, '64, x', 'separados por comas'], [LISTA, '1.5', 'separados'],
@@ -105,5 +115,44 @@ describe('ajustes ya construidos', () => {
     expect([...campos.keys()]).toEqual(['gail.n', 'gail.b', 'gail.discriminador.lr',
       'gail.discriminador.activacion', 'gail.discriminador.capas', 'experto.trpo.r']);
     expect(campos.get('gail.discriminador.lr')).toBe(REAL);
+  });
+});
+
+describe('duracionEditada', () => {
+  const esquema = (duracion) => ({ metodo: 'experto', duracion, secciones: [
+    { clave: 'experto', campos: [{ clave: 'pasos_totales', tipo: 'entero', valor: 100, min: 1 }] },
+    { clave: 'experto.trpo', campos: [{ clave: 'pasos_por_iteracion', tipo: 'entero', valor: 30, min: 1 }] },
+  ] });
+  const CON_BLOQUE = { unidad: 'pasos', total: 120, campo: 'experto.pasos_totales',
+    bloque: 'experto.trpo.pasos_por_iteracion' };
+
+  it('sin cambios da la del perfil', () => {
+    expect(duracionEditada(esquema(CON_BLOQUE), {})).toBe(120);
+  });
+
+  it.each([['90', '30', 90], ['91', '30', 120], ['1', '30', 30], ['100', '1', 100], ['7', '8', 8]])(
+    '%s pasos en bloques de %s dan %i', (pasos, bloque, esperado) => {
+      expect(duracionEditada(esquema(CON_BLOQUE), { 'experto.pasos_totales': pasos,
+        'experto.trpo.pasos_por_iteracion': bloque })).toBe(esperado);
+    });
+
+  it('sin bloque es el valor del campo', () => {
+    const duracion = { unidad: 'pasos', total: 100, campo: 'experto.pasos_totales' };
+    expect(duracionEditada(esquema(duracion), { 'experto.pasos_totales': '91' })).toBe(91);
+  });
+
+  it.each([['abc', '30'], ['0', '30'], ['91', ''], ['91', '0'], ['-5', '30']])(
+    'con %j y %j no se puede calcular', (pasos, bloque) => {
+      expect(duracionEditada(esquema(CON_BLOQUE), { 'experto.pasos_totales': pasos,
+        'experto.trpo.pasos_por_iteracion': bloque })).toBeNull();
+    });
+
+  it('si cita un campo que no está en el formulario no la inventa', () => {
+    expect(duracionEditada(esquema({ ...CON_BLOQUE, campo: 'experto.no_existe' }), {})).toBeNull();
+    expect(duracionEditada(esquema({ ...CON_BLOQUE, bloque: 'trpo.no_existe' }), {})).toBeNull();
+  });
+
+  it('un esquema sin campo (backend anterior) da la del perfil', () => {
+    expect(duracionEditada(esquema({ unidad: 'pasos', total: 120 }), { 'experto.pasos_totales': '7' })).toBe(120);
   });
 });

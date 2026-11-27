@@ -16,8 +16,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from src.app.contrato import EsquemaAjustesApi
 from src.utils.configuracion import TipoEntorno, leer_configuracion_base, resolver_configuracion
-from src.utils.reglas_config import METODOS, comprobar_config_metodo
+from src.utils.reglas_config import METODOS, comprobar_calidad, comprobar_config_metodo
 from src.utils.validacion import es_entero, es_real_finito
 
 NIVELES = ("basico", "avanzado")
@@ -28,6 +29,8 @@ EXCLUIDAS = {"experto": {"semilla", "trpo"}, "gail": {"discriminador"}}
 DURACION = {"experto": ("pasos", ("experto", "pasos_totales")),
             "bc": ("epocas", ("bc", "epocas_maximas")),
             "gail": ("iteraciones", ("gail", "iteraciones"))}
+# Campo del formulario al que se redondea la duración (pasos_reales_experto).
+BLOQUE_EXPERTO = "experto.trpo.pasos_por_iteracion"
 DESCRIPCION_CAMPO = {"etiqueta", "ayuda", "nivel", "tipo", "min", "max", "paso"}
 
 
@@ -44,7 +47,7 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
         ValueError: Si falta algo o alguna descripción no es válida.
     """
     datos = leer_configuracion_base(Path(ruta))
-    for clave in ("laboratorio", "opciones", "secciones", "campos"):
+    for clave in ("laboratorio", "vista", "opciones", "secciones", "campos"):
         if not isinstance(datos.get(clave), dict):
             raise ValueError(f"{ruta}: falta la sección {clave}")
     laboratorio = datos["laboratorio"]
@@ -55,6 +58,10 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
         raise ValueError(f"{ruta}: laboratorio.jugar_a_mano solo admite {sorted(validos)}")
     if not es_entero(laboratorio.get("partidas_maximas")) or laboratorio["partidas_maximas"] < 1:
         raise ValueError(f"{ruta}: laboratorio.partidas_maximas debe ser un entero positivo")
+    try:
+        comprobar_calidad(datos["vista"].get("calidad_jpeg"))
+    except ValueError as error:
+        raise ValueError(f"{ruta}: vista.calidad_jpeg: {error}") from None
     grupo = datos.get("wandb", {}).get("grupo") if isinstance(datos.get("wandb"), dict) else None
     try:
         valido = isinstance(grupo, str) and bool(re.fullmatch(r"[A-Za-z0-9_.-]+",
@@ -64,6 +71,9 @@ def cargar_dashboard(ruta: Path) -> dict[str, Any]:
     if not valido:
         raise ValueError(f"{ruta}: wandb.grupo debe ser un nombre de grupo de W&B, con "
                          "{entorno} si se quiere el del entorno")
+    for seccion, titulo in datos["secciones"].items():
+        if not isinstance(titulo, str) or not titulo.strip():
+            raise ValueError(f"{ruta}: el título de la sección {seccion} debe ser un texto")
     for seccion, campos in datos["campos"].items():
         if seccion not in datos["secciones"]:
             raise ValueError(f"{ruta}: la sección {seccion} no tiene título en secciones")
@@ -186,6 +196,24 @@ def semilla_por_defecto(cfg: dict[str, Any], metodo: str) -> int:
                else cfg["experimento"]["semilla_repeticiones"])
 
 
+def pasos_reales_experto(cfg: dict[str, Any]) -> int:
+    """Pasos que da como mucho el experto: bloques completos hasta pasar el presupuesto.
+
+    TRPO recoge cada iteración un bloque entero de ``trpo.pasos_por_iteracion`` (con los
+    cambios de ``experto.trpo``) y entrenar_experto para en el primero que llega a
+    ``experto.pasos_totales``: con 25 000 000 y bloques de 2048, 25 001 984.
+
+    Args:
+        cfg: Configuración resuelta del entorno.
+
+    Returns:
+        El múltiplo de pasos_por_iteracion igual o inmediatamente superior al presupuesto.
+    """
+    presupuesto = int(cfg["experto"]["pasos_totales"])
+    bloque = int({**cfg["trpo"], **cfg["experto"].get("trpo", {})}["pasos_por_iteracion"])
+    return -(-presupuesto // bloque) * bloque
+
+
 def esquema_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str,
                     dashboard: dict[str, Any], ajustes: dict[str, Any] | None = None
                     ) -> dict[str, Any]:
@@ -210,7 +238,11 @@ def esquema_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str,
                              for clave, valor in valores.items()]}
                  for seccion, valores in secciones_de_metodo(cfg, metodo)]
     unidad, (seccion, clave) = DURACION[metodo]
-    return {"metodo": metodo, "duracion": {"unidad": unidad, "total": int(cfg[seccion][clave])},
+    duracion = {"unidad": unidad, "total": int(cfg[seccion][clave]),
+                "campo": f"{seccion}.{clave}"}
+    if metodo == "experto":
+        duracion.update(total=pasos_reales_experto(cfg), bloque=BLOQUE_EXPERTO)
+    return {"metodo": metodo, "duracion": duracion,
             "semilla": semilla_por_defecto(cfg, metodo), "secciones": secciones}
 
 
@@ -296,8 +328,9 @@ def comprobar_ajustes(ruta_config: Path, entorno: TipoEntorno | str, metodo: str
 def comprobar_esquemas(ruta_config: Path, dashboard: dict[str, Any]) -> None:
     """Genera el esquema de cada entorno y método, para no descubrir un fallo al pedirlo.
 
-    Lo llama la API al crearse: si dashboard.yaml no describe algún campo o un perfil
-    no vale, no arranca (en lugar de responder 500 al abrir ese formulario).
+    Lo llama la API al crearse: si dashboard.yaml no describe algún campo, un perfil
+    no vale o el esquema no encaja con el modelo de la respuesta (EsquemaAjustesApi),
+    no arranca (en lugar de responder 500 al abrir ese formulario).
 
     Raises:
         ValueError: Con el entorno, el método y el motivo del primero que falle.
@@ -305,6 +338,7 @@ def comprobar_esquemas(ruta_config: Path, dashboard: dict[str, Any]) -> None:
     for entorno in TipoEntorno:
         for metodo in METODOS:
             try:
-                esquema_ajustes(ruta_config, entorno, metodo, dashboard)
+                EsquemaAjustesApi.model_validate(
+                    esquema_ajustes(ruta_config, entorno, metodo, dashboard))
             except (ValueError, KeyError, TypeError) as error:
                 raise ValueError(f"Formulario de {metodo} en {entorno.value}: {error}") from error

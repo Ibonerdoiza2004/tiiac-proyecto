@@ -7,6 +7,7 @@ política se construye con sus espacios.
 """
 
 import copy
+import io
 import math
 from pathlib import Path
 
@@ -850,6 +851,183 @@ def test_entrenar_bc_no_supera_las_epocas_maximas(epocas_maximas):
     assert resultado["epocas"] == epocas_maximas
 
 
+def _entrenar_bc_con(continua: bool, parar=None, **cambios):
+    """Entrena BC con datos y semilla fijos; devuelve los pesos y el resultado."""
+    espacio = CONTINUO if continua else DISCRETO
+    estados, acciones = _datos_aprendibles(continua, n=64)
+    fijar_seed(3)
+    politica = _politica(continua)
+    resultado = entrenar_bc(politica, _loader(estados, acciones, espacio, barajar=True),
+                            _loader(estados, acciones, espacio),
+                            _cfg(**{"epocas_maximas": 6, "paciencia": 100, **cambios}),
+                            parar=parar)
+    return politica.state_dict(), resultado
+
+
+def _mismos_pesos(a: dict, b: dict) -> bool:
+    return a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
+
+
+@TIPOS
+def test_entrenar_bc_parar_nunca_no_cambia_nada(continua):
+    """El enganche del dashboard no toca lo que se entrena."""
+    pesos_a, resultado_a = _entrenar_bc_con(continua)
+    pesos_b, resultado_b = _entrenar_bc_con(continua, parar=lambda: False)
+    assert _mismos_pesos(pesos_a, pesos_b) and resultado_a == resultado_b
+    assert resultado_b["epocas"] == 6
+
+
+@TIPOS
+@pytest.mark.parametrize("parada", [1, 2, 4])
+def test_entrenar_bc_parado_es_como_si_esa_fuera_la_ultima_epoca(continua, parada):
+    consultas = []
+    pesos, resultado = _entrenar_bc_con(
+        continua, parar=lambda: consultas.append(1) or len(consultas) >= parada)
+    pesos_corto, resultado_corto = _entrenar_bc_con(continua, epocas_maximas=parada)
+    assert len(consultas) == resultado["epocas"] == parada
+    # Con los pesos de la mejor época hasta entonces, como al terminar.
+    assert _mismos_pesos(pesos, pesos_corto) and resultado == resultado_corto
+
+
+def test_entrenar_bc_parar_no_alarga_la_parada_temprana():
+    """Con la paciencia agotada para igual, aunque parar diga que no."""
+    _, resultado = _entrenar_bc_con(False, parar=lambda: False, epocas_maximas=50, paciencia=1)
+    _, sin_parar = _entrenar_bc_con(False, epocas_maximas=50, paciencia=1)
+    assert resultado == sin_parar
+
+
+# --- checkpoints: guardar el estado y reanudar ---------------------------------------
+
+def _entrenar_bc_reanudable(continua: bool, estado_inicial=None, optimizador: str = "adam",
+                            contraria: bool = False, run=None, **cambios):
+    """Como _entrenar_bc_con, con estado inicial; devuelve pesos, resultado y estados.
+
+    Con ``contraria``, la validación tiene los estados cambiados de signo: empeora al
+    aprender train, así que la mejor época es de las primeras y la paciencia se agota.
+    """
+    espacio = CONTINUO if continua else DISCRETO
+    estados, acciones = _datos_aprendibles(continua, n=64)
+    fijar_seed(3)
+    politica = _politica(continua)
+    guardados = []
+    resultado = entrenar_bc(
+        politica, _loader(estados, acciones, espacio, barajar=True),
+        _loader(-estados if contraria else estados, acciones, espacio),
+        _cfg(**{"epocas_maximas": 6, "paciencia": 100, "optimizador": optimizador, **cambios}),
+        run, estado_inicial=estado_inicial, guardar_estado=guardados.append)
+    return copy.deepcopy(politica.state_dict()), resultado, guardados
+
+
+def _por_disco(estado: dict) -> dict:
+    """Lo guarda y lo lee como un checkpoint (torch.load con weights_only)."""
+    memoria = io.BytesIO()
+    torch.save(estado, memoria)
+    memoria.seek(0)
+    return torch.load(memoria, weights_only=True)
+
+
+@TIPOS
+def test_guardar_estado_no_cambia_nada_y_da_uno_por_epoca_salvo_la_ultima(continua):
+    pesos_g, resultado_g, guardados = _entrenar_bc_reanudable(continua)
+    pesos, resultado = _entrenar_bc_con(continua)
+    assert _mismos_pesos(pesos, pesos_g) and resultado == resultado_g
+    assert [e["epoca"] for e in guardados] == [1, 2, 3, 4, 5]
+    assert all(e["mejor_epoca"] + e["sin_mejora"] == e["epoca"] for e in guardados)
+
+
+@TIPOS
+@pytest.mark.parametrize("optimizador", ["adam", "sgd", "rmsprop"])
+def test_reanudar_desde_cualquier_epoca_acaba_igual(continua, optimizador):
+    """BC no juega partidas: con el estado de los generadores, reanudar es exacto."""
+    pesos, resultado, guardados = _entrenar_bc_reanudable(continua, optimizador=optimizador)
+    # La mejor época es de las últimas: lo entrenado tras reanudar cuenta.
+    assert resultado["mejor_epoca"] >= 5
+    for estado in guardados:
+        pesos_r, resultado_r, siguientes = _entrenar_bc_reanudable(
+            continua, _por_disco(estado), optimizador)
+        assert _mismos_pesos(pesos, pesos_r) and resultado == resultado_r
+        assert [e["epoca"] for e in siguientes] == list(range(estado["epoca"] + 1, 6))
+
+
+def test_reanudar_conserva_la_parada_temprana():
+    """Validación contraria a train: la paciencia se agota y reanudar para en la misma."""
+    pesos, resultado, guardados = _entrenar_bc_reanudable(False, contraria=True,
+                                                          epocas_maximas=50, paciencia=3)
+    assert resultado["epocas"] < 50 and any(e["sin_mejora"] for e in guardados)
+    for estado in guardados:
+        pesos_r, resultado_r, _ = _entrenar_bc_reanudable(
+            False, _por_disco(estado), contraria=True, epocas_maximas=50, paciencia=3)
+        assert _mismos_pesos(pesos, pesos_r) and resultado == resultado_r
+
+
+def test_sin_guardar_estado_al_parar_ni_al_agotar_la_paciencia():
+    guardados = []
+    estados, acciones = _datos_aprendibles(False, n=64)
+    fijar_seed(3)
+    entrenar_bc(_politica(False), _loader(estados, acciones, DISCRETO, barajar=True),
+                _loader(estados, acciones, DISCRETO), _cfg(epocas_maximas=6, paciencia=100),
+                parar=lambda: len(guardados) == 2, guardar_estado=guardados.append)
+    assert [e["epoca"] for e in guardados] == [1, 2]
+    _, resultado, guardados = _entrenar_bc_reanudable(False, contraria=True, epocas_maximas=50,
+                                                      paciencia=3)
+    assert guardados[-1]["epoca"] == resultado["epocas"] - 1
+
+
+@TIPOS
+def test_reanudar_sigue_con_los_mismos_pasos_en_wandb(continua):
+    completo = RunFalso()
+    _, _, guardados = _entrenar_bc_reanudable(continua, run=completo)
+    reanudado = RunFalso()
+    _entrenar_bc_reanudable(continua, _por_disco(guardados[2]), run=reanudado)
+    assert completo.registros[-len(reanudado.registros):] == reanudado.registros
+
+
+def _estado_valido() -> dict:
+    return _entrenar_bc_reanudable(False)[2][2]  # tras la época 3
+
+
+@pytest.mark.parametrize("cambio, mensaje", [
+    (lambda e: e.pop("paso"), "claves"),
+    (lambda e: e.update(extra=1), "claves"),
+    (lambda e: e.update(epoca=6), "epocas_maximas"),
+    (lambda e: e.update(epoca=0), "epocas_maximas"),
+    (lambda e: e.update(epoca=True), "epocas_maximas"),
+    (lambda e: e.update(paso=0), "epocas_maximas"),
+    (lambda e: e.update(mejor_epoca=4), "epocas_maximas"),
+    (lambda e: e.update(sin_mejora=1), "epocas_maximas"),
+    (lambda e: e.update(mejores={"perdida": "x"}), "métricas"),
+    (lambda e: e.update(mejores=[]), "métricas"),
+    (lambda e: e["politica"].pop(next(iter(e["politica"]))), "no corresponde"),
+    (lambda e: e.update(optimizador={}), "no corresponde"),
+    (lambda e: e.update(mejor_estado={}), "no corresponde"),
+    (lambda e: e.update(aleatorio={}), "Estado aleatorio"),
+    (lambda e: e["aleatorio"].update(torch=[1, 2]), "Estado aleatorio"),
+])
+def test_un_estado_que_no_vale_no_se_reanuda(cambio, mensaje):
+    estado = _estado_valido()
+    cambio(estado)
+    with pytest.raises(ValueError, match=mensaje):
+        _entrenar_bc_reanudable(False, estado)
+
+
+def test_un_estado_de_otra_arquitectura_no_se_reanuda():
+    estado = _estado_valido()
+    estados, acciones = _datos_aprendibles(False, n=64)
+    with pytest.raises(ValueError, match="no corresponde"):
+        entrenar_bc(_politica(False, capas=(8,)), _loader(estados, acciones, DISCRETO),
+                    _loader(estados, acciones, DISCRETO), _cfg(epocas_maximas=6, paciencia=100),
+                    estado_inicial=estado)
+
+
+@pytest.mark.parametrize("cambios", [{"epocas_maximas": 3}, {"paciencia": 1}])
+def test_un_estado_que_no_encaja_con_la_config_no_se_reanuda(cambios):
+    estado = _entrenar_bc_reanudable(False, contraria=True, epocas_maximas=50, paciencia=3)[2]
+    estado = next(e for e in estado if e["epoca"] >= 3 and e["sin_mejora"])
+    with pytest.raises(ValueError, match="epocas_maximas"):
+        _entrenar_bc_reanudable(False, estado, **{"epocas_maximas": 50, "paciencia": 3,
+                                                  **cambios})
+
+
 @TIPOS
 def test_entrenar_bc_restaura_los_pesos_de_la_mejor_epoca(continua):
     """Validación con las acciones contrarias a train: empeora al aprender train."""
@@ -1074,6 +1252,17 @@ def test_entrenar_bc_subconjunto_resume_cantidad_y_pares(cantidad, continua):
                                          for i in splits.subconjuntos[cantidad])
     assert resumen["pares_validacion"] == sum(por_id[i].numero_pasos for i in splits.validacion)
     assert {"mejor_epoca", "epocas", "val_perdida"} <= resumen.keys()
+
+
+def test_entrenar_bc_subconjunto_pasa_parar_a_entrenar_bc():
+    trayectorias = _quince()
+    splits = _splits(trayectorias)
+    consultas = []
+    fijar_seed(0)
+    _, resumen = entrenar_bc_subconjunto(
+        trayectorias, splits, 4, OBSERVACION, DISCRETO, _cfg(epocas_maximas=10, paciencia=100),
+        crear_generador(0), parar=lambda: consultas.append(1) or len(consultas) >= 2)
+    assert len(consultas) == resumen["epocas"] == 2
 
 
 def test_entrenar_bc_subconjunto_normaliza_con_las_partidas_del_subconjunto():

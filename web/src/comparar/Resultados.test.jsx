@@ -69,6 +69,14 @@ describe('Resultados', () => {
     expect(filas).toEqual(['151', '27—']);
   });
 
+  it('la tabla de partidas va por número de partida aunque falte alguna', () => {
+    // Regresión: iba por posición y, si faltaba la partida 2, la 3 subía a su fila.
+    const { container } = pintar({ a: { 0: 1, 2: 3 }, b: { 0: 5, 1: 6, 2: 7 } }, ['a', 'b']);
+    const filas = [...container.querySelector('.detalle-partidas tbody').rows]
+      .map((f) => [...f.cells].map((c) => c.textContent));
+    expect(filas).toEqual([['1', '1', '5'], ['2', '—', '6'], ['3', '3', '7']]);
+  });
+
   it('el historial solo se rellena para modelos de la biblioteca', () => {
     const { container } = pintar({ a: { 0: 1 }, b: { 0: 1 } }, ['a', 'b']);
     const historial = [...container.querySelectorAll('.resultados-bloque')[1].querySelectorAll('tbody tr')]

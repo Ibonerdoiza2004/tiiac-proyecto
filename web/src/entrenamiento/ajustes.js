@@ -41,8 +41,29 @@ export function valoresIniciales(esquema) {
     .map((campo) => [idCampo(seccion, campo), aFormulario(campo, campo.valor)])));
 }
 
-const conMinimo = (campo, numero) => (campo.min !== undefined && numero < campo.min
-  ? { error: `Tiene que ser como mínimo ${campo.min}.` } : { valor: numero });
+/**
+ * Comprueba que los números estén entre el mínimo y el máximo del campo, si los tiene
+ * (el esquema los omite cuando no hay límite).
+ *
+ * @param {import('../api/entrenamiento.js').CampoAjuste} campo
+ * @param {number[]} numeros
+ * @param {string} sujeto «Tiene» para un número, «Cada número tiene» para una lista.
+ * @returns {string | null} El error, o null si están dentro.
+ */
+function fueraDeRango(campo, numeros, sujeto) {
+  if (campo.min != null && numeros.some((n) => n < campo.min)) {
+    return `${sujeto} que ser como mínimo ${campo.min}.`;
+  }
+  if (campo.max != null && numeros.some((n) => n > campo.max)) {
+    return `${sujeto} que ser como mucho ${campo.max}.`;
+  }
+  return null;
+}
+
+const enRango = (campo, numero) => {
+  const error = fueraDeRango(campo, [numero], 'Tiene');
+  return error ? { error } : { valor: numero };
+};
 
 /**
  * Lee lo escrito en un campo según su tipo.
@@ -61,7 +82,7 @@ export function leerCampo(campo, entrada) {
     if (!ENTERO.test(texto) || !Number.isSafeInteger(numero)) {
       return { error: 'Escribe un número entero.' };
     }
-    return conMinimo(campo, numero);
+    return enRango(campo, numero);
   }
   if (campo.tipo === 'real') {
     // Se admite la coma decimal: «0,01» es 0.01.
@@ -70,7 +91,7 @@ export function leerCampo(campo, entrada) {
     if (!REAL.test(normalizado) || !Number.isFinite(numero)) {
       return { error: 'Escribe un número, como 0.01 o 1e-3.' };
     }
-    return conMinimo(campo, numero);
+    return enRango(campo, numero);
   }
   if (campo.tipo === 'lista_enteros') {
     const partes = texto.split(/[\s,;]+/).filter(Boolean);
@@ -78,10 +99,8 @@ export function leerCampo(campo, entrada) {
       return { error: 'Escribe números enteros separados por comas, como 100, 100.' };
     }
     const numeros = partes.map(Number);
-    if (campo.min !== undefined && numeros.some((n) => n < campo.min)) {
-      return { error: `Cada número tiene que ser como mínimo ${campo.min}.` };
-    }
-    return { valor: numeros };
+    const error = fueraDeRango(campo, numeros, 'Cada número tiene');
+    return error ? { error } : { valor: numeros };
   }
   if (campo.tipo === 'opcion') {
     return (campo.opciones ?? []).includes(texto) ? { valor: texto }
@@ -123,6 +142,38 @@ export function validarAjustes(esquema, valores) {
     }
   }
   return { valido: Object.keys(errores).length === 0, errores, ajustes, cambiados };
+}
+
+/**
+ * Duración con lo escrito en el formulario: el valor del campo de la duración o, si hay
+ * bloque (el experto), ese valor redondeado hacia arriba a un múltiplo del bloque, como
+ * pasos_reales_experto en src/app/ajustes.py.
+ *
+ * @param {import('../api/entrenamiento.js').EsquemaAjustes} esquema
+ * @param {Record<string, string | boolean>} valores Valores del formulario por idCampo.
+ * @returns {number | null} null si lo escrito en esos campos no es válido; la del perfil
+ *   si el esquema no dice de qué campo sale.
+ */
+export function duracionEditada(esquema, valores) {
+  const { total, campo, bloque } = esquema.duracion;
+  if (!campo) {
+    return total;
+  }
+  const campos = camposPorRuta(esquema);
+  const leer = (id) => {
+    const descripcion = campos.get(id);
+    if (!descripcion) {
+      return null;
+    }
+    const leido = leerCampo(descripcion, valores[id] ?? aFormulario(descripcion, descripcion.valor));
+    return typeof leido.valor === 'number' && leido.valor > 0 ? leido.valor : null;
+  };
+  const valor = leer(campo);
+  if (valor === null || !bloque) {
+    return valor;
+  }
+  const tamano = leer(bloque);
+  return tamano === null ? null : Math.ceil(valor / tamano) * tamano;
 }
 
 /**

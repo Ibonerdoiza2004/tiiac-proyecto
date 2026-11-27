@@ -29,6 +29,7 @@ export const ESPERA_FIN_ENTRENO_MS = 60_000;
 const CONEXION_PERDIDA = 'Se perdió la conexión con el servidor. El entrenamiento puede seguir allí, pero esta página ya no lo sigue.';
 const FIN_SIN_RESPUESTA = 'El servidor no confirmó el final del entrenamiento.';
 const CREAR_SIN_RESPUESTA = 'El servidor no respondió al crear el entrenamiento.';
+const AUN_CONECTANDO = 'Todavía se está conectando con el servidor: vuelve a intentarlo en un momento.';
 
 const mensajeDe = (error) => (error instanceof Error ? error.message : String(error));
 
@@ -135,9 +136,10 @@ export default function useEntrenamiento(api) {
       alError: (e) => setError(mensajeDe(e)),
       // Solo hay conexión hasta el mensaje terminado: después se cierra desde aquí, y
       // cerrar() ya no avisa.
-      alCambiarEstado: (estadoConexion) => {
+      // Si el servidor avisó de un error justo antes de cerrar, ese es el motivo.
+      alCambiarEstado: (estadoConexion, cierre) => {
         if (estadoConexion === ESTADOS_CONEXION.CERRADA) {
-          abandonar(CONEXION_PERDIDA);
+          abandonar(cierre?.error ?? CONEXION_PERDIDA);
         }
       },
     });
@@ -147,8 +149,15 @@ export default function useEntrenamiento(api) {
     if (!conexion.current) {
       return;
     }
+    // El aviso anterior se quita antes: la respuesta puede llegar dentro del envío.
+    setError(null);
     if (!enviar(conexion.current)) {
-      abandonar(CONEXION_PERDIDA);
+      // Aún conectando se puede reintentar; si no, la conexión se ha perdido.
+      if (conexion.current.conectando?.()) {
+        setError(AUN_CONECTANDO);
+      } else {
+        abandonar(CONEXION_PERDIDA);
+      }
       return;
     }
     alEnviar?.();

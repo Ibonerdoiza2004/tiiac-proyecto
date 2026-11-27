@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { ESTADOS_FINALES, ESTADOS_TRABAJO } from '../api/trabajos.js';
+import { CIERRE_NO_EXISTE, ESTADOS_FINALES, ESTADOS_TRABAJO } from '../api/trabajos.js';
 import { ESTADOS_CONEXION } from '../api/websocket.js';
 import { acumular, acumularTodo, desdeResultado } from './estadisticas.js';
 
@@ -12,6 +12,7 @@ export const FASES_COMPARACION = Object.freeze({
   TERMINANDO: 'terminando',
   TERMINADA: 'terminada',
   DESCONECTADA: 'desconectada',
+  INEXISTENTE: 'inexistente',
 });
 
 /** Milisegundos que se espera la respuesta al crear la comparación. */
@@ -22,6 +23,8 @@ export const ESPERA_FIN_MS = 30_000;
 const CONEXION_PERDIDA = 'Se perdió la conexión con el servidor. La comparación puede seguir allí: reconecta para verla.';
 const FIN_SIN_RESPUESTA = 'El servidor no confirmó el final de la comparación. Reconecta para ver cómo va.';
 const CREAR_SIN_RESPUESTA = 'El servidor no respondió al crear la comparación.';
+const NO_EXISTE = 'Esta comparación ya no existe en el servidor: no las conserva al reiniciarse.';
+const AUN_CONECTANDO = 'Todavía se está conectando con el servidor: vuelve a intentarlo en un momento.';
 const mensajeDe = (error) => (error instanceof Error ? error.message : String(error));
 
 /**
@@ -31,7 +34,9 @@ const mensajeDe = (error) => (error instanceof Error ? error.message : String(er
  * El protocolo de trabajos permite reconectarse: el historial que llega al conectar trae
  * todo lo anterior y se rehace la vista desde él. Si la conexión se cierra antes del
  * estado final, o este no llega en ESPERA_FIN_MS tras finalizar, la fase pasa a
- * DESCONECTADA con un error y se puede reconectar.
+ * DESCONECTADA con un error (el del servidor, si avisó antes de cerrar) y se puede
+ * reconectar. Si el servidor ya no tiene el trabajo (cierre 4404, por ejemplo tras
+ * reiniciarse), pasa a INEXISTENTE, sin reconectar.
  *
  * @param {import('../api/comparar.js').ApiComparar} api
  * @returns {object} Estado (fase, trabajo, acumulado, imagen, vista, error) y acciones
@@ -57,9 +62,9 @@ export default function useComparacion(api) {
     conexion.current = null;
   }, []);
 
-  const desconectar = useCallback((motivo) => {
+  const desconectar = useCallback((motivo, fase = FASES_COMPARACION.DESCONECTADA) => {
     cerrarConexion();
-    setFase(FASES_COMPARACION.DESCONECTADA);
+    setFase(fase);
     setError(motivo);
   }, [cerrarConexion]);
 
@@ -97,9 +102,15 @@ export default function useComparacion(api) {
           } else if (nuevo.estado !== ESTADOS_TRABAJO.TERMINADO) {
             setError(nuevo.error ?? 'La comparación falló.');
           }
+        } else {
+          setError(null);  // un aviso anterior del servidor ya no viene al caso
         }
       },
-      alHistorial: ({ progreso }) => setAcumulado(acumularTodo(progreso)),
+      // Al conectar llega el estado antes que el historial: si ya era final, su resultado
+      // manda sobre el progreso.
+      alHistorial: ({ progreso }) => setAcumulado(
+        (ESTADOS_FINALES.has(ultimo.current?.estado) && desdeResultado(ultimo.current.resultado))
+          || acumularTodo(progreso)),
       alProgreso: (medidas) => setAcumulado((anterior) => acumular(anterior, medidas)),
       alImagen: (nueva) => {
         if (vistaActiva.current) {
@@ -108,10 +119,14 @@ export default function useComparacion(api) {
       },
       alError: (e) => setError(mensajeDe(e)),
       // El servidor cierra tras el estado final; cerrar antes es perder la conexión.
-      alCambiarEstado: (estado) => {
+      alCambiarEstado: (estado, cierre) => {
         if (estado === ESTADOS_CONEXION.CERRADA && conexion.current === propia
             && !ESTADOS_FINALES.has(ultimo.current?.estado)) {
-          desconectar(CONEXION_PERDIDA);
+          if (cierre?.codigo === CIERRE_NO_EXISTE) {
+            desconectar(NO_EXISTE, FASES_COMPARACION.INEXISTENTE);
+          } else {
+            desconectar(cierre?.error ?? CONEXION_PERDIDA);
+          }
         } else if (estado === ESTADOS_CONEXION.CERRADA && conexion.current === propia) {
           conexion.current = null;
         }
@@ -151,8 +166,9 @@ export default function useComparacion(api) {
   }, [api, cerrarConexion, seguir]);
 
   const ver = useCallback((anterior) => {
-    vistaActiva.current = false;
-    setVista(false);
+    // Lo último que se sabe de la vista es lo que se pidió al crearla.
+    vistaActiva.current = Boolean(anterior.argumentos?.vista);
+    setVista(vistaActiva.current);
     setAcumulado({});
     setTrabajo(anterior);
     seguir(anterior.id);
@@ -162,8 +178,15 @@ export default function useComparacion(api) {
     if (!conexion.current) {
       return;
     }
+    // El aviso anterior se quita antes: la respuesta puede llegar dentro del envío.
+    setError(null);
     if (!enviar(conexion.current)) {
-      desconectar(CONEXION_PERDIDA);
+      // Aún conectando se puede reintentar; si no, la conexión se ha perdido.
+      if (conexion.current.conectando?.()) {
+        setError(AUN_CONECTANDO);
+      } else {
+        desconectar(CONEXION_PERDIDA);
+      }
       return;
     }
     alEnviar?.();

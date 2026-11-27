@@ -2,9 +2,12 @@
 
 La usan ``scripts/preparar_biblioteca.py`` y, al arrancar, el contenedor de Docker.
 Es idempotente: cada elemento guarda en su ficha el artefacto del que salió y no se
-vuelve a descargar si ya está y es válido (uno roto se descarga de nuevo). Dos
-precargas a la vez sobre la misma biblioteca se turnan con un cerrojo de archivo, así
-que no añaden dos veces el mismo artefacto.
+vuelve a descargar si ya está y es válido. Los congelados que ya están se comprueban
+con sus huellas, como los recién descargados; si alguno no pasa (un archivo vaciado o
+que falta), se borran los dos y se vuelven a descargar. Dos precargas a la vez sobre
+la misma biblioteca se turnan con un cerrojo de archivo, así que no añaden dos veces
+el mismo artefacto. Si falla la descarga de un BC o un GAIL, se sigue con los demás y
+se avisa al final.
 
 - *Congelados*: el experto y las demostraciones del perfil (``datos.artefacto_*``),
   comprobados con sus huellas (``comprobar_datos_congelados``), como hace
@@ -90,10 +93,13 @@ def _precargar_congelados(cfg: dict[str, Any], biblioteca: Biblioteca, nombres: 
                           descargar: Descargar, informar: Registro) -> list[str]:
     """Cuerpo de precargar_congelados, con el turno de la biblioteca tomado."""
     entorno = cfg["origen"]["entorno"]
-    presentes = _artefactos_presentes(biblioteca, entorno)
-    if all(nombre in presentes for nombre in nombres.values()):
+    if _congelados_integros(cfg, biblioteca, nombres, informar):
         informar(f"{entorno}: los congelados ya están en la biblioteca")
         return []
+    # Lo que haya de esos artefactos está incompleto o estropeado: se sustituye entero.
+    for elemento in biblioteca.listar(entorno, tuple(nombres)):
+        if elemento["artefacto"] in nombres.values():
+            biblioteca.quitar(elemento["id"])
     with tempfile.TemporaryDirectory(prefix=".precarga-",
                                      dir=_carpeta_temporal(biblioteca)) as tmp:
         carpetas = {tipo: Path(tmp) / tipo for tipo in nombres}
@@ -108,9 +114,6 @@ def _precargar_congelados(cfg: dict[str, Any], biblioteca: Biblioteca, nombres: 
                     "demostraciones": {ARCHIVO_DEMOSTRACIONES: ARCHIVO_DEMOSTRACIONES,
                                        "splits.json": "splits.json"}}
         for tipo, nombre in nombres.items():
-            if nombre in presentes:
-                informar(f"{entorno}: {nombre} ya está")
-                continue
             extra = {"fuente": "experto"} if tipo == "demostraciones" else {}
             ficha = agregar_nuevo(biblioteca.raiz, entorno, tipo, textos[tipo], "congelado",
                                   _copiar(carpetas[tipo], archivos[tipo]), artefacto=nombre,
@@ -118,6 +121,30 @@ def _precargar_congelados(cfg: dict[str, Any], biblioteca: Biblioteca, nombres: 
             informar(f"{entorno}: añadido {nombre} ({ficha['id']})")
             anadidos.append(ficha["id"])
     return anadidos
+
+
+def _congelados_integros(cfg: dict[str, Any], biblioteca: Biblioteca, nombres: dict[str, str],
+                         informar: Registro) -> bool:
+    """Si el experto y las demostraciones congelados del perfil están y pasan sus huellas.
+
+    Se comprueban con comprobar_datos_congelados, como al descargarlos: que existan
+    los archivos no basta (un modelo.zip vacío o un splits.json borrado no pasan).
+    """
+    entorno = cfg["origen"]["entorno"]
+    carpetas = {}
+    for tipo, nombre in nombres.items():
+        validos = [e for e in biblioteca.listar(entorno, (tipo,))
+                   if e["valido"] and e["artefacto"] == nombre]
+        if not validos:
+            return False
+        carpetas[tipo] = biblioteca.ruta(validos[-1]["id"])
+    try:
+        comprobar_datos_congelados(cfg, carpetas["demostraciones"], carpetas["experto"])
+    except Exception as error:  # noqa: BLE001 - cualquier fallo: hay que volver a bajarlos
+        informar(f"{entorno}: los congelados de la biblioteca no pasan sus huellas ({error}); "
+                 "se vuelven a descargar")
+        return False
+    return True
 
 
 def _carpeta_temporal(biblioteca: Biblioteca) -> Path:
@@ -172,6 +199,7 @@ def precargar_entrega(cfg: dict[str, Any], biblioteca: Biblioteca, artefactos: l
 
     Raises:
         ValueError: Si no están las demostraciones congeladas en la biblioteca.
+        RuntimeError: Si no se pudo descargar alguno (después de añadir los demás).
     """
     with _turno(biblioteca):
         return _precargar_entrega(cfg, biblioteca, artefactos, informar)
@@ -204,7 +232,7 @@ def _precargar_entrega(cfg: dict[str, Any], biblioteca: Biblioteca, artefactos: 
         raise ValueError(f"{entorno}: faltan las demostraciones congeladas en la biblioteca; "
                          "precarga antes los congelados")
     presentes = _artefactos_presentes(biblioteca, entorno)
-    anadidos = []
+    anadidos, sin_descargar = [], []
     for artefacto in artefactos:
         if artefacto.name in presentes:
             informar(f"{entorno}: {artefacto.name} ya está")
@@ -218,7 +246,12 @@ def _precargar_entrega(cfg: dict[str, Any], biblioteca: Biblioteca, artefactos: 
             "repeticion")
         with tempfile.TemporaryDirectory(prefix=".precarga-",
                                          dir=_carpeta_temporal(biblioteca)) as tmp:
-            carpeta = Path(artefacto.download(root=tmp))
+            try:
+                carpeta = Path(artefacto.download(root=tmp))
+            except Exception as error:  # noqa: BLE001 - W&B lanza varios tipos (CommError…)
+                informar(f"{entorno}: no se pudo descargar {artefacto.name}: {error}")
+                sin_descargar.append(artefacto.name)
+                continue
             if tipo == "bc":
                 pesos = sorted(carpeta.glob("*.pt"))
                 if len(pesos) != 1:
@@ -245,4 +278,8 @@ def _precargar_entrega(cfg: dict[str, Any], biblioteca: Biblioteca, artefactos: 
                 continue
         informar(f"{entorno}: añadido {artefacto.name} ({ficha['id']})")
         anadidos.append(ficha["id"])
+        presentes.add(artefacto.name)  # si viene repetido en la lista, no se añade dos veces
+    if sin_descargar:
+        raise RuntimeError(f"{entorno}: no se pudieron descargar {', '.join(sin_descargar)} "
+                           f"(sí se añadieron los otros {len(anadidos)})")
     return anadidos

@@ -78,9 +78,10 @@ export default function PanelComparar({ entorno, api, alCambiarOcupado }) {
   const ocupado = FASES_COMPARACION_OCUPADAS.has(fase);
 
   const modelos = useCarga(() => api.modelos(entorno), entorno);
-  // La lista se vuelve a pedir al empezar o terminar una comparación.
+  // La lista se vuelve a pedir al empezar o terminar una comparación, y si la que se
+  // intenta ver ya no existe en el servidor.
   const anteriores = useCarga(() => api.comparaciones(entorno),
-    `${entorno}:${trabajo?.id ?? ''}:${fase === FASES_COMPARACION.TERMINADA}`);
+    `${entorno}:${trabajo?.id ?? ''}:${fase === FASES_COMPARACION.TERMINADA}:${fase === FASES_COMPARACION.INEXISTENTE}`);
   const [elegidos, setElegidos] = useState(new Set());
   const [aleatorio, setAleatorio] = useState(true);
   const [partidas, setPartidas] = useState('');
@@ -130,7 +131,7 @@ export default function PanelComparar({ entorno, api, alCambiarOcupado }) {
   const estadoTrabajo = trabajo?.estado;
   const enMarcha = estadoTrabajo === ESTADOS_TRABAJO.EN_MARCHA;
   const etiqueta = { [FASES_COMPARACION.PREPARANDO]: 'Preparando…', [FASES_COMPARACION.TERMINANDO]: 'Terminando…',
-    [FASES_COMPARACION.DESCONECTADA]: 'Sin conexión' }[fase]
+    [FASES_COMPARACION.DESCONECTADA]: 'Sin conexión', [FASES_COMPARACION.INEXISTENTE]: 'No existe' }[fase]
     ?? ETIQUETAS_ESTADO[estadoTrabajo] ?? 'Conectando…';
   const siguiendo = fase === FASES_COMPARACION.SIGUIENDO;
 
@@ -225,7 +226,7 @@ export default function PanelComparar({ entorno, api, alCambiarOcupado }) {
             {fase === FASES_COMPARACION.DESCONECTADA ? (
               <button type="button" onClick={comp.reconectar}>Reconectar</button>
             ) : null}
-            {fase === FASES_COMPARACION.TERMINADA || fase === FASES_COMPARACION.DESCONECTADA ? (
+            {[FASES_COMPARACION.TERMINADA, FASES_COMPARACION.DESCONECTADA, FASES_COMPARACION.INEXISTENTE].includes(fase) ? (
               <button type="button" className="primario" onClick={comp.nueva}>Nueva comparación</button>
             ) : null}
           </div>

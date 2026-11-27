@@ -205,7 +205,9 @@ flowchart TD
 - Vista del entrenamiento opcional y cambiable en marcha (experto y GAIL), con un
   test de que no cambia el modelo final.
 - Test de regresión: los scripts y los trabajadores dan los mismos resultados que la
-  E1 con los datos congelados.
+  E1 con los datos congelados. Decisión del usuario (2026-11-27): sin test, porque los
+  datos congelados no están en el repositorio ni en el CI; la comprobación se hizo a
+  mano y está en el README.
 
 **6. `datos-dashboard`**: los datos que crea el dashboard.
 - `combinar_demostraciones`: varios NPZ en uno nuevo con IDs sin repetir antes de

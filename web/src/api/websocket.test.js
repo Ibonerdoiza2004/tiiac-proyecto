@@ -40,9 +40,9 @@ class WebSocketSimulado {
     this.onerror?.({});
   }
 
-  cerrarDesdeServidor() {
+  cerrarDesdeServidor(code) {
     this.readyState = 3;
-    this.onclose?.({});
+    this.onclose?.(code === undefined ? {} : { code });
   }
 }
 
@@ -235,5 +235,83 @@ describe('conectarWebSocket', () => {
       conectarWebSocket('trabajos', { ubicacion: LOCAL, WebSocket: WebSocketSimulado }),
     ).toThrow(TypeError);
     expect(WebSocketSimulado.creados).toEqual([]);
+  });
+});
+
+describe('cómo terminó la conexión', () => {
+  const cierre = (alCambiarEstado) => alCambiarEstado.mock.calls.at(-1);
+
+  it('da el código de cierre y el error del servidor si fue lo último que llegó', () => {
+    // Regresión: sin esto, «Se perdió la conexión» tapaba el motivo (por ejemplo, 4404).
+    const { socket, alCambiarEstado } = conectar();
+    socket.abrir();
+    socket.recibir(JSON.stringify({ tipo: 'error', mensaje: 'No existe el trabajo 3' }));
+    socket.cerrarDesdeServidor(4404);
+    expect(cierre(alCambiarEstado)).toEqual(['cerrada', { codigo: 4404, error: 'No existe el trabajo 3' }]);
+  });
+
+  it.each([
+    ['otro mensaje JSON', (s) => s.recibir(JSON.stringify({ tipo: 'progreso', medidas: {} }))],
+    ['una imagen', (s) => s.recibir(new Blob(['x']))],
+    ['un texto que no es JSON', (s) => s.recibir('no json')],
+  ])('un error del servidor seguido de %s no es el motivo del cierre', (_, despues) => {
+    const { socket, alCambiarEstado } = conectar();
+    socket.abrir();
+    socket.recibir(JSON.stringify({ tipo: 'error', mensaje: 'orden no válida' }));
+    despues(socket);
+    socket.cerrarDesdeServidor(1006);
+    expect(cierre(alCambiarEstado)).toEqual(['cerrada', { codigo: 1006, error: null }]);
+  });
+
+  it('un error sin mensaje cuenta con un texto genérico', () => {
+    const { socket, alCambiarEstado } = conectar();
+    socket.recibir(JSON.stringify({ tipo: 'error' }));
+    socket.cerrarDesdeServidor(1000);
+    expect(cierre(alCambiarEstado)).toEqual(['cerrada', { codigo: 1000, error: 'Error del servidor' }]);
+  });
+
+  it('sin código de cierre da null', () => {
+    const { socket, alCambiarEstado } = conectar();
+    socket.cerrarDesdeServidor();
+    expect(cierre(alCambiarEstado)).toEqual(['cerrada', { codigo: null, error: null }]);
+  });
+
+  it('los demás cambios de estado no llevan detalle', () => {
+    const { socket, alCambiarEstado } = conectar();
+    socket.abrir();
+    expect(alCambiarEstado.mock.calls).toEqual([['conectando'], ['abierta']]);
+  });
+});
+
+describe('conectando', () => {
+  it.each([[0, true], [1, false], [2, false], [3, false]])('con readyState %i es %s', (estado, esperado) => {
+    const { conexion, socket } = conectar();
+    socket.readyState = estado;
+    expect(conexion.conectando()).toBe(esperado);
+  });
+
+  it('tras cerrar desde aquí ya no está conectando', () => {
+    const { conexion } = conectar();
+    conexion.cerrar();
+    expect(conexion.conectando()).toBe(false);
+  });
+});
+
+describe('urlWebSocket con una base absoluta', () => {
+  it.each([
+    ['http://api.local:8000/api', 'ws://api.local:8000/api/x'],
+    ['https://gail.example/v2/api/', 'wss://gail.example/v2/api/x'],
+    ['http://api.local:8000', 'ws://api.local:8000/x'],
+  ])('%s da %s, sin mezclarla con la página', (base, esperada) => {
+    // Regresión: salía «ws://127.0.0.1:5173http://api.local:8000/api/x».
+    expect(urlWebSocket('/x', { base, ubicacion: LOCAL })).toBe(esperada);
+  });
+
+  it('con una base absoluta no necesita la ubicación de la página', () => {
+    expect(urlWebSocket('/x', { base: 'http://api.local/api', ubicacion: null })).toBe('ws://api.local/api/x');
+  });
+
+  it.each(['ftp://api.local/api', 'file:///api'])('rechaza la base %s', (base) => {
+    expect(() => urlWebSocket('/x', { base, ubicacion: LOCAL })).toThrow(TypeError);
   });
 });

@@ -33,7 +33,7 @@ describe('ajustes y demostraciones', () => {
   it('ofrece los hiperparámetros del perfil y copias que no se pueden estropear', async () => {
     const api = crearApiEntrenamientoSimulada({ dibujar });
     const esquema = await api.ajustes('cartpole', 'gail');
-    expect(esquema.duracion).toEqual({ unidad: 'iteraciones', total: 20 });
+    expect(esquema.duracion).toEqual({ unidad: 'iteraciones', total: 20, campo: 'gail.iteraciones' });
     esquema.secciones.length = 0;
     expect((await api.ajustes('cartpole', 'gail')).secciones.length).toBeGreaterThan(0);
     await expect(api.ajustes('pendulum', 'gail')).rejects.toMatchObject({ estado: 404 });
@@ -67,6 +67,10 @@ describe('crear', () => {
       duracion: { unidad: 'iteraciones', total: 7 } });
     expect((await api.crear({ entorno: 'cartpole', metodo: 'experto' })).duracion)
       .toEqual({ unidad: 'pasos', total: 100000 });
+    // Como el real: en el experto, bloques completos de pasos_por_iteracion.
+    expect((await api.crear({ entorno: 'cartpole', metodo: 'experto',
+      ajustes: { experto: { pasos_totales: 12001, trpo: { pasos_por_iteracion: 1000 } } } })).duracion)
+      .toEqual({ unidad: 'pasos', total: 13000 });
     expect((await api.crear({ entorno: 'cartpole', metodo: 'bc', datos: DATOS })).duracion)
       .toEqual({ unidad: 'epocas', total: 500 });
   });

@@ -162,6 +162,27 @@ class ResultadoEntrenamiento(BaseModel):
     resumen: dict[str, Any]
 
 
+class ModeloComparado(BaseModel):
+    """Retornos de un modelo en una comparación (``aleatorio`` para el agente aleatorio)."""
+
+    id: str
+    retornos: list[float]
+
+
+class ResultadoComparacion(BaseModel):
+    """``resultado`` del estado final de una comparación: solo las rondas completas.
+
+    ``partidas`` son las rondas que jugaron todos los modelos (cada uno tiene ese número
+    de retornos) y ``semilla``, la de evaluacion en configs/. Incompleta si se finalizó
+    antes de jugarlas todas.
+    """
+
+    partidas: Natural
+    semilla: Natural
+    incompleta: bool
+    modelos: list[ModeloComparado]
+
+
 # --- Mensajes del navegador por el WebSocket --------------------------------------------
 
 class OrdenAccion(_Estricto):
@@ -320,10 +341,20 @@ class SeccionAjustesApi(BaseModel):
 
 
 class DuracionApi(BaseModel):
-    """Lo que mide el progreso y cuánto dura con los valores del perfil."""
+    """Lo que mide el progreso y cuánto dura como mucho con los valores del perfil.
+
+    En el experto son los pasos reales, no el presupuesto: TRPO da bloques completos y
+    para en el primero que llega a experto.pasos_totales (pasos_reales_experto).
+    ``campo`` y ``bloque`` dicen de qué campos del formulario sale, para que la interfaz
+    la recalcule con lo que se edite: el total es el valor de ``campo`` o, con
+    ``bloque``, ese valor redondeado hacia arriba a un múltiplo del de ``bloque``.
+    """
 
     unidad: UnidadDuracion
     total: Positivo
+    campo: str = Field(description="Campo del formulario (sección.clave) con la duración.")
+    bloque: str | None = Field(None, description="Campo con el tamaño del bloque al que se "
+                                                 "redondea (solo el experto).")
 
 
 class EsquemaAjustesApi(BaseModel):

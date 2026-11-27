@@ -140,6 +140,14 @@ python run.py --smoke
 El checker ya ejecuta el smoke; el último comando sirve para verlo por separado
 (ver [El smoke](#el-smoke)).
 
+Algunos tests dibujan Reacher y HalfCheetah. Sin pantalla (como en el CI o por SSH),
+`tests/conftest.py` hace que MuJoCo dibuje con EGL de Mesa, que necesita estos paquetes
+del sistema:
+
+```bash
+sudo apt install libegl1 libegl-mesa0 libgl1-mesa-dri
+```
+
 ### 3. Iniciar sesión en W&B
 
 ```bash
@@ -453,6 +461,70 @@ sesión al arrancar y lo dice en `/api/estado`; pedir un entrenamiento con W&B s
 da 503. Sus runs van al grupo `dashboard-<entorno>` (`configs/dashboard.yaml`) o al que
 se indique en la petición.
 
+La vista en directo de un entrenamiento dibuja una de sus partidas mientras entrena
+(`src/training/vista.py`), como mucho a las imágenes por segundo del entorno
+(`render_fps`); si el entrenamiento va más rápido, se salta imágenes. Cada imagen va en
+JPEG con la calidad de `vista.calidad_jpeg` en `configs/dashboard.yaml`. Dibujar no
+cambia el entrenamiento: con la vista encendida, apagada o cambiando en marcha salen los
+mismos pesos.
+
+Los entrenamientos del dashboard los hacen los trabajadores de
+`src/training/trabajadores.py`, que el gestor ejecuta en un proceso propio con las
+mismas funciones que los scripts de la E1: experto, GAIL y BC (la ruta
+`POST /api/entrenamientos` responde 501 hasta la rama `laboratorio-entrenar-api`).
+Mandan un progreso por iteración (en BC, por época), `{"paso", ...}`, con `paso` en la
+unidad de la duración y las mismas medidas que van a W&B con su sección (`trpo/…`,
+`bc/val/…`; en BC, la pérdida de train es la media de la época), más las de la
+evaluación (`evaluacion/…`, `validacion/…`) si toca evaluar. Obedecen `vista` (BC no
+tiene) y `finalizar`: este termina tras la iteración o época en curso y guarda lo que
+daría el entrenamiento al acabar (el experto, el mejor evaluado; GAIL, la última
+iteración; BC, la mejor época), marcado como incompleto. BC y GAIL entrenan la
+repetición 0 de la semilla pedida, como en la E1, con los datos elegidos de la
+biblioteca (preparados en el propio trabajador) y las N primeras partidas de train que
+pida el usuario (por defecto, todas). El modelo se guarda en la
+biblioteca con origen «dashboard» y, con W&B, se registran las medidas, el resumen y el
+modelo como artefacto.
+
+Comprobado a mano el 2026-11-27 en este portátil (Linux WSL2, i7-11800H), en una copia de
+la biblioteca con los datos congelados de CartPole: los trabajadores de BC (1, 4, 7 y 10
+partidas, repetición 0) y de GAIL (1 partida, repetición 0, 20 s) dan exactamente los
+modelos de la entrega de la E1 (los del run de comparación `ft49odps`). El del experto,
+con la semilla y la configuración del perfil, no da byte a byte el experto congelado:
+el gestor entrena cada trabajo con un hilo de PyTorch (un núcleo por trabajo) y el
+congelado se entrenó con los hilos por defecto, que cambian el redondeo; con los 8
+hilos de este portátil, `entrenar_experto` sí da el congelado. No hay test de esta
+comprobación porque los datos congelados no están en el repositorio (decisión del
+usuario).
+
+Las comparaciones las hace `tarea_comparar`, en el mismo módulo (la ruta de crearlas
+llega con `comparar-api`). Juega como la evaluación de la E1: cada partida con su
+semilla, derivada de `evaluacion.semilla`, la misma para todos los modelos, y en modo
+`evaluacion.determinista`, así que sus retornos son los que daría `evaluar_final` con
+esas partidas. Por defecto juega `evaluacion.episodios` partidas por modelo. Todos los
+modelos juegan la partida i antes de la i + 1, y cada partida manda un progreso
+`{"modelo", "partida", "retorno", "pasos"}` (el agente aleatorio es `aleatorio`). Con
+la vista encendida, las partidas van a velocidad real (las imágenes por segundo del
+entorno); apagada, a toda velocidad. `finalizar` corta la partida en curso, y el
+resultado, `{"partidas", "semilla", "incompleta", "modelos": [{"id", "retornos"}]}`, se
+queda solo con las rondas que jugaron todos. No se guarda nada fuera del trabajo.
+
+Un entrenamiento cortado (se cae el proceso o se cierra la aplicación) se puede reanudar
+desde su último checkpoint. Cada entrenamiento con checkpoints tiene su carpeta en
+`<biblioteca>/.en_curso/`, con los argumentos con los que empezó y el último estado
+(`src/training/checkpoints.py`). Relanzarlo con los mismos argumentos (listar los
+cortados y relanzarlos llega con `laboratorio-entrenar-api`) sigue desde ahí:
+vuelve a mandar el progreso guardado, entrena el resto y anota en el resumen desde
+dónde se reanudó. Con W&B, abre un run nuevo con la etiqueta `reanudado`. No se puede
+reanudar si cambian los argumentos que definen el entrenamiento o la configuración
+resuelta. Mientras un entrenamiento usa su carpeta, la tiene reservada: otro con la
+misma carpeta (por ejemplo, al pulsar dos veces «Reanudar») se rechaza al momento. Al terminar bien, la carpeta se borra. BC guarda un checkpoint por época, el
+experto tras cada evaluación (cada `experto.evaluar_cada` iteraciones) y GAIL tras cada
+validación (cada `gail.evaluar_cada`). BC no juega partidas, así que, reanudado, acaba
+exactamente igual que sin cortar. El experto y GAIL sí las juegan, y los entornos no se
+pueden guardar a mitad de partida: al reanudar se crean otros nuevos, con una semilla
+derivada de la iteración (`semilla_reanudacion`). Por eso, reanudados, no son los
+mismos que sin cortar, pero reanudar dos veces desde el mismo checkpoint da lo mismo.
+
 La biblioteca del dashboard es la carpeta `aplicativo.biblioteca` (por defecto
 `biblioteca/`, no se versiona), con una carpeta por elemento
 (`<entorno>/<experto|bc|gail|demostraciones>/<id>/`): sus archivos de siempre y una
@@ -477,8 +549,11 @@ python scripts/preparar_biblioteca.py
 Descarga de los cinco entornos unos 42 MB en un minuto y medio (medido el 2026-11-24 en
 este portátil) y comprueba las huellas de los congelados y, en cada BC y GAIL, la del
 NPZ con el que se entrenó, tanto la del artefacto como la de sus propios metadatos. Se
-puede repetir: lo que ya está y es válido no se descarga otra vez (lo roto, sí), y dos a
-la vez se turnan. `--entorno` elige entornos y `--sin-entrega` deja solo los congelados.
+puede repetir: lo que ya está no se descarga otra vez; los congelados se vuelven a
+comprobar con sus huellas y, si alguno está estropeado (un `modelo.zip` vaciado, un
+`splits.json` borrado), se sustituyen. Dos a la vez se turnan, y si falla la descarga
+de un modelo o de un entorno, sigue con los demás y sale con 1. `--entorno` elige
+entornos y `--sin-entrega` deja solo los congelados.
 
 Hecho hasta ahora: las pestañas, el selector de entorno y, en el Laboratorio, «Jugar tú»
 (CartPole y MountainCar, con las flechas o A y D) y «Ver agente» (los cinco entornos), con

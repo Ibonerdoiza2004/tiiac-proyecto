@@ -84,7 +84,8 @@ export const MENSAJES_SERVIDOR = Object.freeze({
  * @property {(partida: Partida) => void} [alTerminarPartida]
  * @property {(partidas: Partida[]) => void} [alTerminarSesion]
  * @property {(error: Error) => void} [alError]
- * @property {(estado: string) => void} [alCambiarEstado] Recibe los cambios de la conexión
+ * @property {(estado: string, cierre?: import('./websocket.js').Cierre) => void} [alCambiarEstado]
+ *   Recibe los cambios de la conexión; al cerrarse, también cómo terminó
  *   (ESTADOS_CONEXION de ./websocket.js).
  */
 
@@ -149,12 +150,13 @@ export function crearApiLaboratorio({ http = crearClienteHttp(), conectar = cone
         alMensaje: (mensaje) => repartirMensaje(mensaje, callbacks),
         alImagen: (imagen) => callbacks.alImagen?.(imagen),
         alError: (error) => callbacks.alError?.(error),
-        alCambiarEstado: (estado) => callbacks.alCambiarEstado?.(estado),
+        alCambiarEstado: (estado, ...cierre) => callbacks.alCambiarEstado?.(estado, ...cierre),
       });
       return {
         enviarAccion: (accion) => conexion.enviar({ tipo: 'accion', accion }),
         finalizar: () => conexion.enviar({ tipo: 'finalizar' }),
         cerrar: () => conexion.cerrar(),
+        conectando: () => conexion.conectando?.() ?? false,
       };
     },
     guardar: (id, datos) => http.enviar(`${ruta(id)}/guardar`, datos),

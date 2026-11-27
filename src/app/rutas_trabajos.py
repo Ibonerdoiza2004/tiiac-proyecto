@@ -64,52 +64,57 @@ _FINALES = {estado.value for estado in ESTADOS_FINALES}
 
 
 class _Imagen:
-    """Hueco de una imagen en la cola de envío; guarda la más reciente de su tanda."""
+    """Hueco de una imagen en la cola de envío; si llega otra más nueva, se descarta."""
 
     def __init__(self, datos: bytes):
-        """Hueco con su primera imagen."""
+        """Hueco con su imagen, todavía vigente."""
         self.datos = datos
+        self.vigente = True
 
 
 class ColaEnvio:
     """Lo que falta por enviar por un WebSocket, en orden; de las imágenes, solo la última.
 
-    Si llegan varias imágenes seguidas antes de enviar la primera, se envía una sola
-    vez la más reciente: el navegador nunca recibe imágenes repetidas ni atrasadas.
-    Una imagen nunca adelanta a un evento que llegó antes que ella: si entre dos
-    imágenes hay otro evento, van las tres en su orden.
+    Cuando llega una imagen, la que esperaba sin enviar (si había) se descarta y la
+    nueva se pone al final: nunca hay más de una imagen pendiente, aunque se alternen
+    con el progreso, y ninguna adelanta a un evento que llegó antes que ella. El
+    navegador nunca recibe imágenes repetidas ni atrasadas.
     """
 
     def __init__(self) -> None:
         """Crea la cola vacía. Se usa desde un único bucle de asyncio."""
         self._cola: asyncio.Queue[Any] = asyncio.Queue()
-        # El hueco de imagen al final de la cola, si lo último que entró fue una imagen.
-        self._ultima: _Imagen | None = None
+        self._pendiente: _Imagen | None = None  # la imagen que espera sin enviar
+        self._vigentes = 0  # elementos de la cola que todavía se van a enviar
 
     def poner(self, evento: dict[str, Any]) -> None:
         """Añade un evento del gestor (estado, progreso o imagen)."""
         if evento["tipo"] == "imagen":
-            if self._ultima is not None:
-                self._ultima.datos = evento["datos"]  # sustituye a la de su tanda
-            else:
-                self._ultima = _Imagen(evento["datos"])
-                self._cola.put_nowait(self._ultima)
-        else:
-            self._ultima = None
-            self._cola.put_nowait(evento)
+            if self._pendiente is not None:
+                self._pendiente.vigente = False  # la nueva la sustituye
+                self._vigentes -= 1
+            self._pendiente = _Imagen(evento["datos"])
+            evento = self._pendiente
+        self._vigentes += 1
+        self._cola.put_nowait(evento)
 
     def vacia(self) -> bool:
         """Si no queda nada por enviar."""
-        return self._cola.empty()
+        return self._vigentes == 0
 
     async def sacar(self) -> dict[str, Any] | bytes:
         """Espera y devuelve lo siguiente: un evento o los bytes de una imagen."""
-        evento = await self._cola.get()
-        if isinstance(evento, _Imagen):
-            if evento is self._ultima:
-                self._ultima = None  # ya salió: la siguiente imagen va en otro hueco
-            return evento.datos
-        return evento
+        while True:
+            evento = await self._cola.get()
+            if isinstance(evento, _Imagen):
+                if not evento.vigente:
+                    continue
+                if evento is self._pendiente:
+                    self._pendiente = None
+                self._vigentes -= 1
+                return evento.datos
+            self._vigentes -= 1
+            return evento
 
 
 def a_json_finito(valor: Any) -> Any:

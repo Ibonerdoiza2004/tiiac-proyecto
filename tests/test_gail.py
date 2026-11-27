@@ -21,6 +21,7 @@ import torch
 import yaml
 from gymnasium import spaces
 from sb3_contrib import TRPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
@@ -1147,10 +1148,10 @@ def _espiar(monkeypatch, registro: dict) -> None:
         "reajustar_valor_tras_discriminador")}
     registro["orden"] = []
 
-    def trpo(agente):
+    def trpo(agente, callback=None):
         discriminador = registro["discriminador"]
         antes = _estado(discriminador)
-        resultado = originales["iteracion_trpo"](agente)
+        resultado = originales["iteracion_trpo"](agente, callback)
         registro["fijo_en_el_bloque"] = _iguales(antes, _estado(discriminador))
         registro["orden"].append("trpo")
         return resultado
@@ -1483,6 +1484,73 @@ def test_entrenar_gail_es_reproducible():
     np.testing.assert_equal(resumen_a["validaciones"], resumen_b["validaciones"])
 
 
+class _ContadorPasos(BaseCallback):
+    """Callback de sb3 que solo cuenta los pasos que ve."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pasos = 0
+
+    def _on_step(self) -> bool:
+        self.pasos += 1
+        return True
+
+
+def _mismo_gail(a, b) -> None:
+    (agente_a, d_a, resumen_a), (agente_b, d_b, resumen_b) = a, b
+    assert _iguales(_estado(agente_a.policy), _estado(agente_b.policy))
+    assert _iguales(_estado(d_a), _estado(d_b))
+    np.testing.assert_equal(resumen_a["historial"], resumen_b["historial"])
+    np.testing.assert_equal(resumen_a["validaciones"], resumen_b["validaciones"])
+    assert resumen_a["iteraciones"] == resumen_b["iteraciones"]
+
+
+def test_parar_nunca_y_un_callback_no_cambian_gail():
+    """Los enganches del dashboard no tocan lo que se entrena ni lo que se valida."""
+    from src.training.gail import entrenar_gail
+    trayectorias, splits = _datos_gail()
+    contador = _ContadorPasos()
+    sin = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0)
+    con = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0, parar=lambda: False,
+                        callback=contador)
+    _mismo_gail(sin, con)
+    # 3 iteraciones de 64 pasos en 2 entornos; validar no pasa por el callback.
+    assert contador.pasos == 3 * 64 // 2
+
+
+@pytest.mark.parametrize("activa", [False, True])
+def test_gail_es_el_mismo_con_y_sin_vista(activa):
+    """Dibujar el entorno 0 mientras se entrena no cambia GAIL (vista del dashboard)."""
+    from src.training.gail import entrenar_gail
+    from src.training.vista import CallbackVista
+    trayectorias, splits = _datos_gail()
+    emitidas = []
+    reloj = iter(range(10**6))
+    vista = CallbackVista(emitidas.append, 50, 80, activa=activa, reloj=lambda: next(reloj))
+    sin = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0)
+    con = entrenar_gail(_cfg_gail(), trayectorias, splits, 4, 0, callback=vista, dibujable=True)
+    _mismo_gail(sin, con)
+    # 3 iteraciones de 64 pasos en 2 entornos; el reloj avanza 1 s por lectura.
+    assert len(emitidas) == (3 * 64 // 2 if activa else 0)
+
+
+@pytest.mark.parametrize("parada", [1, 2])
+def test_gail_parado_es_como_si_esa_fuera_la_ultima_iteracion(parada):
+    from src.training.gail import entrenar_gail
+    trayectorias, splits = _datos_gail()
+    consultas = []
+    parado = entrenar_gail(_cfg_gail(evaluar_cada=5), trayectorias, splits, 4, 0,
+                           parar=lambda: consultas.append(1) or len(consultas) >= parada)
+    corto = entrenar_gail(_cfg_gail(evaluar_cada=5, iteraciones=parada), trayectorias,
+                          splits, 4, 0)
+    _mismo_gail(parado, corto)
+    resumen = parado[2]
+    assert len(consultas) == resumen["iteraciones"] == parada
+    assert resumen["pasos"] == 64 * parada
+    # Se valida la iteración en la que se para, aunque no toque por evaluar_cada.
+    assert [v["iteracion"] for v in resumen["validaciones"]] == [parada]
+
+
 def test_validar_no_cambia_el_entrenamiento():
     """Las partidas de validación no tocan los generadores del entrenamiento."""
     agente_a, d_a, resumen_a = _entrenar(_cfg_gail(evaluar_cada=1))
@@ -1572,6 +1640,147 @@ def test_entrenar_gail_normaliza_observaciones_si_el_perfil_lo_pide(monkeypatch)
     assert resumen["normalizacion"]["limite"] == cfg["trpo"]["limite_normalizacion"]
     assert all(e is not None for e in estadisticas)
     assert estadisticas[-1] == resumen["normalizacion"]
+
+
+# --- checkpoints de GAIL: guardar el estado y reanudar -------------------------------------
+
+def _entrenar_reanudable(cfg=None, estado_inicial=None, guardar_estado=None):
+    from src.training.gail import entrenar_gail
+    trayectorias, splits = _datos_gail()
+    return entrenar_gail(cfg or _cfg_gail(iteraciones=6), trayectorias, splits, 4, 0,
+                         estado_inicial=estado_inicial, guardar_estado=guardar_estado)
+
+
+def _por_disco(estado: dict) -> dict:
+    """Lo guarda y lo lee como un checkpoint (torch.load con weights_only)."""
+    import io
+    memoria = io.BytesIO()
+    torch.save(estado, memoria)
+    memoria.seek(0)
+    return torch.load(memoria, weights_only=True)
+
+
+def _cfg_normaliza() -> dict:
+    cfg = _cfg_gail(iteraciones=6)
+    cfg["trpo"]["normalizar_observaciones"] = True
+    return cfg
+
+
+@pytest.mark.parametrize("normalizar", [False, True])
+def test_guardar_estado_no_cambia_gail_y_guarda_tras_cada_validacion(normalizar):
+    cfg = _cfg_normaliza() if normalizar else _cfg_gail(iteraciones=6)
+    guardados = []
+    con_guardado = _entrenar_reanudable(cfg, guardar_estado=guardados.append)
+    _mismo_gail(_entrenar_reanudable(cfg), con_guardado)
+    # Validaciones en 2, 4 y 6; la de la 6 es la última.
+    assert [e["iteracion"] for e in guardados] == [2, 4]
+    assert [e["pasos"] for e in guardados] == [128, 256]
+    assert all((e["normalizacion"] is not None) == normalizar for e in guardados)
+    assert [len(e["historial"]) for e in guardados] == [2, 4]
+
+
+def test_sin_guardar_estado_al_parar():
+    from src.training.gail import entrenar_gail
+    trayectorias, splits = _datos_gail()
+    guardados, consultas = [], []
+    entrenar_gail(_cfg_gail(iteraciones=6), trayectorias, splits, 4, 0,
+                  parar=lambda: consultas.append(1) or len(consultas) == 4,
+                  guardar_estado=guardados.append)
+    assert [e["iteracion"] for e in guardados] == [2]
+
+
+@pytest.mark.parametrize("normalizar", [False, True])
+def test_reanudar_gail_sigue_desde_el_checkpoint_y_dos_veces_da_lo_mismo(normalizar):
+    from src.utils.seed import semilla_reanudacion
+    cfg = _cfg_normaliza() if normalizar else _cfg_gail(iteraciones=6)
+    guardados = []
+    _, _, completo = _entrenar_reanudable(cfg, guardar_estado=guardados.append)
+    a = _entrenar_reanudable(cfg, _por_disco(guardados[0]))
+    b = _entrenar_reanudable(cfg, _por_disco(guardados[0]))
+    _mismo_gail(a, b)
+    resumen = a[2]
+    assert resumen["iteraciones"] == 6 and resumen["pasos"] == 6 * 64
+    assert [m["iteracion"] for m in resumen["historial"]] == [1, 2, 3, 4, 5, 6]
+    np.testing.assert_equal(resumen["historial"][:2], completo["historial"][:2])
+    np.testing.assert_equal(resumen["validaciones"][:1], completo["validaciones"][:1])
+    assert [v["iteracion"] for v in resumen["validaciones"]] == [2, 4, 6]
+    semillas = resumen["semillas"]
+    assert semillas["entornos_reanudacion"] == semilla_reanudacion(semillas["entornos"], 2)
+    assert "entornos_reanudacion" not in completo["semillas"]
+    assert (resumen["normalizacion"] is not None) == normalizar
+
+
+def test_reanudar_gail_crea_los_entornos_con_la_semilla_de_reanudacion(monkeypatch):
+    import src.training.gail as gail
+    from src.utils.seed import semilla_reanudacion
+    guardados = []
+    _, _, completo = _entrenar_reanudable(guardar_estado=guardados.append)
+    usadas = []
+    original = gail.crear_entorno_vectorizado
+
+    def espia(cfg, n, semilla, dibujable=False):
+        usadas.append(semilla)
+        return original(cfg, n, semilla, dibujable)
+
+    monkeypatch.setattr(gail, "crear_entorno_vectorizado", espia)
+    _entrenar_reanudable(estado_inicial=guardados[1])
+    assert usadas == [semilla_reanudacion(completo["semillas"]["entornos"], 4)]
+
+
+@pytest.mark.parametrize("pieza", ["discriminador", "optimizador_discriminador", "generador",
+                                   "optimizador", "aleatorio"])
+def test_reanudar_gail_usa_cada_parte_del_estado(pieza):
+    """Con una parte del estado de otro checkpoint, el resultado cambia: se usa."""
+    guardados = []
+    _entrenar_reanudable(guardar_estado=guardados.append)
+    base = _entrenar_reanudable(estado_inicial=_por_disco(guardados[1]))
+    mezclado = _por_disco(guardados[1])
+    mezclado[pieza] = _por_disco(guardados[0])[pieza]
+    otro = _entrenar_reanudable(estado_inicial=mezclado)
+    assert not (_iguales(_estado(base[0].policy), _estado(otro[0].policy))
+                and _iguales(_estado(base[1]), _estado(otro[1])))
+
+
+@pytest.fixture(scope="module")
+def estado_gail() -> dict:
+    guardados = []
+    _entrenar_reanudable(guardar_estado=guardados.append)
+    return guardados[1]
+
+
+@pytest.mark.parametrize("cambio, mensaje", [
+    (lambda e: e.pop("pasos"), "claves"), (lambda e: e.update(extra=1), "claves"),
+    (lambda e: e.update(pasos=200), "trpo.pasos_por_iteracion"),
+    (lambda e: e.update(iteracion=3, pasos=192), "evaluar_cada"),
+    (lambda e: e.update(iteracion=6, pasos=384), "gail.iteraciones"),
+    (lambda e: e.update(iteracion=0, pasos=0), "gail.iteraciones"),
+    (lambda e: e.update(iteracion=True), "gail.iteraciones"),
+    (lambda e: e.update(historial=e["historial"][:3]), "historial"),
+    (lambda e: e["historial"][0].update(iteracion=7), "historial"),
+    (lambda e: e.update(validaciones=[]), "validaciones"),
+    (lambda e: e["validaciones"][-1].update(iteracion=2), "validaciones"),
+    (lambda e: e.update(historial=None), "historial"),
+    (lambda e: e["politica"].pop(next(iter(e["politica"]))), "no corresponde"),
+    (lambda e: e.update(optimizador={}), "no corresponde"),
+    (lambda e: e["discriminador"].pop(next(iter(e["discriminador"]))), "no corresponde"),
+    (lambda e: e.update(optimizador_discriminador={}), "no corresponde"),
+    (lambda e: e.update(normalizacion={"media": [0.0] * 4, "varianza": [1.0] * 4,
+                                       "cuenta": 2.0}), "no coinciden"),
+    (lambda e: e.update(generador={"bit_generator": "MT19937"}), "generador"),
+    (lambda e: e.update(aleatorio={}), "Estado aleatorio"),
+])
+def test_un_estado_de_gail_que_no_vale_no_se_reanuda(estado_gail, cambio, mensaje):
+    estado = copy.deepcopy(estado_gail)
+    cambio(estado)
+    with pytest.raises(ValueError, match=mensaje):
+        _entrenar_reanudable(estado_inicial=estado)
+
+
+def test_un_estado_de_gail_de_otra_red_no_se_reanuda(estado_gail):
+    cfg = _cfg_gail(iteraciones=6)
+    cfg["trpo"]["capas_ocultas"] = [4]
+    with pytest.raises(ValueError, match="no corresponde"):
+        _entrenar_reanudable(cfg, copy.deepcopy(estado_gail))
 
 
 def _cfg_sin(seccion: str, clave: str) -> dict:

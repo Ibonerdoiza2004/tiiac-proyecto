@@ -30,6 +30,9 @@ export const ESTADOS_TRABAJO = Object.freeze({
   CANCELADO: 'cancelado',
 });
 
+/** Código con el que la API cierra el WebSocket de un trabajo que no existe. */
+export const CIERRE_NO_EXISTE = 4404;
+
 /** Estados en los que el trabajo ya no cambia. */
 export const ESTADOS_FINALES = Object.freeze(new Set([ESTADOS_TRABAJO.TERMINADO,
   ESTADOS_TRABAJO.FALLIDO, ESTADOS_TRABAJO.CANCELADO]));
@@ -58,7 +61,8 @@ export const ESTADOS_FINALES = Object.freeze(new Set([ESTADOS_TRABAJO.TERMINADO,
  * @property {(evento: object) => void} [alEvento] Eventos propios de la funcionalidad.
  * @property {(imagen: Blob) => void} [alImagen]
  * @property {(error: Error) => void} [alError]
- * @property {(estado: string) => void} [alCambiarEstado] Cambios de la conexión
+ * @property {(estado: string, cierre?: import('./websocket.js').Cierre) => void} [alCambiarEstado]
+ *   Cambios de la conexión y, al cerrarse, cómo terminó
  *   (ESTADOS_CONEXION de ./websocket.js).
  */
 
@@ -124,7 +128,7 @@ export function crearApiTrabajos({ http = crearClienteHttp(), conectar = conecta
         alMensaje: (mensaje) => repartirMensajeTrabajo(mensaje, callbacks),
         alImagen: (imagen) => callbacks.alImagen?.(imagen),
         alError: (error) => callbacks.alError?.(error),
-        alCambiarEstado: (estado) => callbacks.alCambiarEstado?.(estado),
+        alCambiarEstado: (estado, ...cierre) => callbacks.alCambiarEstado?.(estado, ...cierre),
       });
       return {
         pausar: () => conexion.enviar({ tipo: 'pausar' }),
@@ -132,6 +136,7 @@ export function crearApiTrabajos({ http = crearClienteHttp(), conectar = conecta
         cancelar: () => conexion.enviar({ tipo: 'cancelar' }),
         ordenar: (orden) => conexion.enviar(orden),
         cerrar: () => conexion.cerrar(),
+        conectando: () => conexion.conectando?.() ?? false,
       };
     },
   };

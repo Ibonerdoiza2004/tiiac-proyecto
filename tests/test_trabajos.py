@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from pathlib import Path
 from collections.abc import Callable, Iterator
 
 import numpy as np
@@ -20,6 +21,11 @@ from src.app.trabajos import (ESTADOS_FINALES, GestorTrabajos, OperacionNoValida
                               TrabajoDesconocido, comprobar_ruta_tarea, resolver_tarea)
 
 LIMITE = 30.0  # segundos como mucho para cualquier espera
+
+
+def vivo(pid: int) -> bool:
+    """Si el proceso existe todavía (tampoco como zombi sin recoger)."""
+    return Path(f"/proc/{pid}").exists()
 
 
 def esperar_hasta(condicion: Callable[[], bool], limite: float = LIMITE) -> None:
@@ -271,7 +277,7 @@ def test_cancelar_en_marcha_o_en_pausa_termina_el_proceso_y_libera_el_hueco(
         crear_gestor, pausado) -> None:
     gestor = crear_gestor(1)
     trabajo = contar(gestor)
-    proceso = gestor._trabajos[trabajo].proceso
+    proceso = gestor._trabajos[trabajo].proceso.pid
     siguiente = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [5]})
     if pausado:
         gestor.pausar(trabajo)
@@ -279,7 +285,7 @@ def test_cancelar_en_marcha_o_en_pausa_termina_el_proceso_y_libera_el_hueco(
     final = gestor.esperar(trabajo, LIMITE)
     assert final["estado"] == "cancelado"
     assert final["resultado"] is None and final["error"] is None
-    assert not proceso.is_alive()
+    assert not vivo(proceso)
     assert gestor.esperar(siguiente["id"], LIMITE)["resultado"] == {"suma": 5}
 
 
@@ -469,10 +475,10 @@ def test_cerrar_cancela_todo_y_no_deja_procesos(crear_gestor) -> None:
     a, b = contar(gestor), contar(gestor)
     gestor.pausar(b)
     en_cola = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})["id"]
-    procesos = [gestor._trabajos[t].proceso for t in (a, b)]
+    procesos = [gestor._trabajos[t].proceso.pid for t in (a, b)]
     gestor.cerrar()
     assert [gestor.obtener(t)["estado"] for t in (a, b, en_cola)] == ["cancelado"] * 3
-    assert not any(p.is_alive() for p in procesos)
+    assert not any(vivo(p) for p in procesos)
     with pytest.raises(RuntimeError, match="cerrado"):
         gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
 
@@ -484,11 +490,11 @@ def test_cerrar_mata_a_los_que_no_terminan_por_las_buenas(crear_gestor, monkeypa
     gestor = crear_gestor(1)
     terco = gestor.crear("entrenamiento", "tareas_app:ignorar_terminar")["id"]
     esperar_hasta(lambda: len(gestor.historial(terco)) >= 3)
-    proceso = gestor._trabajos[terco].proceso
+    proceso = gestor._trabajos[terco].proceso.pid
     inicio = time.monotonic()
     gestor.cerrar(timeout=0.3)
     assert time.monotonic() - inicio < 10
-    assert not proceso.is_alive()
+    assert not vivo(proceso)
     assert gestor.obtener(terco)["estado"] == "cancelado"
 
 
@@ -520,14 +526,78 @@ def test_un_trabajo_que_no_arranca_con_hueco_libre_falla_al_crearlo(crear_gestor
                                        {"numeros": [1]})["id"], LIMITE)["estado"] == "terminado"
 
 
+def test_si_falla_algo_tras_arrancar_el_proceso_no_queda_vivo(crear_gestor,
+                                                              monkeypatch) -> None:
+    """Regresión: si fallaba algo justo después de start() (abrir el pidfd sin
+    descriptores libres), el trabajo quedaba fallido pero su proceso seguía vivo y sin
+    vigilar."""
+    import multiprocessing
+
+    def sin_descriptores(pid: int) -> int:
+        raise OSError(24, "Too many open files")
+
+    gestor = crear_gestor(1)
+    monkeypatch.setattr(trabajos.os, "pidfd_open", sin_descriptores, raising=False)
+    trabajo = gestor.crear("entrenamiento", "tareas_app:contar_hasta_orden")
+    monkeypatch.undo()
+    assert trabajo["estado"] == "fallido" and "Too many open files" in trabajo["error"]
+    assert multiprocessing.active_children() == []
+    assert gestor.libres() == 1
+
+
+def test_enviar_ordenes_nunca_bloquea_el_gestor(crear_gestor) -> None:
+    """Regresión: las órdenes se escribían con el cerrojo tomado; si la tarea no las leía
+    y se llenaba la tubería (unas 1600), el gestor entero se quedaba esperando."""
+    gestor = crear_gestor(2)
+    sordo = gestor.crear("entrenamiento", "tareas_app:esperar", {"segundos": 60})["id"]
+    inicio = time.monotonic()
+    for _ in range(5000):
+        gestor.enviar_orden(sordo, {"tipo": "accion", "accion": 1})
+    assert time.monotonic() - inicio < 5
+    otro = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [4]})["id"]
+    assert gestor.esperar(otro, LIMITE)["resultado"] == {"suma": 4}
+    gestor.cancelar(sordo)
+    assert gestor.esperar(sordo, LIMITE)["estado"] == "cancelado"
+
+
+def test_las_ordenes_siguen_llegando_en_orden_por_su_hilo(crear_gestor) -> None:
+    gestor = crear_gestor(1)
+    trabajo = contar(gestor)
+    gestor.pausar(trabajo)
+    for i in range(2000):  # más de lo que cabe en la tubería
+        gestor.enviar_orden(trabajo, {"tipo": "accion", "accion": i})
+    gestor.enviar_orden(trabajo, {"tipo": "finalizar"}, reanudar=True)
+    final = gestor.esperar(trabajo, LIMITE)
+    assert [o.get("accion") for o in final["resultado"]["ordenes"][:-1]] == list(range(2000))
+
+
+def test_los_trabajos_terminados_no_dejan_descriptores_abiertos(crear_gestor) -> None:
+    """Regresión: cada trabajo terminado dejaba dos descriptores abiertos (los del
+    objeto Process, que no se cerraba tras recogerlo)."""
+    gestor = crear_gestor(1)
+
+    def abiertos() -> int:
+        return len(list(Path("/proc/self/fd").iterdir()))
+
+    cuentas = []
+    for _ in range(6):
+        trabajo = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})["id"]
+        gestor.esperar(trabajo, LIMITE)
+        esperar_hasta(lambda: gestor._trabajos[trabajo].proceso is None)
+        time.sleep(0.2)  # que acaben los hilos del trabajo
+        cuentas.append(abiertos())
+    assert cuentas[-1] <= cuentas[1], cuentas
+
+
 def test_cancelar_mata_a_un_proceso_que_ignora_sigterm(crear_gestor, monkeypatch) -> None:
     monkeypatch.setattr(trabajos, "ESPERA_TERMINAR", 0.5)
     gestor = crear_gestor(1)
     terco = gestor.crear("entrenamiento", "tareas_app:ignorar_terminar")["id"]
     esperar_hasta(lambda: len(gestor.historial(terco)) >= 3)
+    pid = gestor._trabajos[terco].proceso.pid
     gestor.cancelar(terco)
     assert gestor.esperar(terco, LIMITE)["estado"] == "cancelado"
-    assert not gestor._trabajos[terco].proceso.is_alive()
+    assert not vivo(pid)
     assert gestor.libres() == 1
 
 
@@ -559,6 +629,9 @@ def test_la_ultima_imagen_llega_antes_que_el_estado_final(crear_gestor, monkeypa
         leer(self, trabajo, lectura)
 
     monkeypatch.setattr(GestorTrabajos, "_leer_imagenes", lento)
+    # Regresión: la espera al hilo de imágenes tenía tope (ESPERA_TERMINAR); con el lector
+    # más lento que ese tope, el estado final volvía a salir antes que la imagen.
+    monkeypatch.setattr(trabajos, "ESPERA_TERMINAR", 0.1)
     gestor = crear_gestor(1)
     eventos = []
     gestor.observar(lambda id_, e: eventos.append(e))

@@ -26,6 +26,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +55,9 @@ _ID = re.compile(rf"^[0-9a-f]{{{CARACTERES_ID}}}$")
 CARPETA_IDS = ".ids"
 # Ids nuevos que prueba agregar_nuevo antes de rendirse si salen repetidos.
 INTENTOS_ID = 5
+# Checkpoints de los entrenamientos en curso (src/training/checkpoints.py), una carpeta
+# por entrenamiento. Es oculta, así que el índice no la lee.
+CARPETA_EN_CURSO = ".en_curso"
 
 
 class IdRepetido(FileExistsError):
@@ -146,6 +150,9 @@ def comprobar_ficha(ficha: Any, entorno: str | None = None, tipo: str | None = N
         raise ValueError(f"entorno no válido: {ficha['entorno']!r}; opciones: {entornos}")
     if "fuente" in ficha and ficha["fuente"] not in FUENTES:
         raise ValueError(f"fuente no válida: {ficha['fuente']!r}")
+    for campo in ("descripcion", "artefacto"):
+        if ficha.get(campo) is not None and not isinstance(ficha[campo], str):
+            raise ValueError(f"{campo} debe ser un texto, no {ficha[campo]!r}")
     for campo, esperado in (("entorno", entorno), ("tipo", tipo), ("id", id_elemento)):
         if esperado is not None and ficha[campo] != esperado:
             raise ValueError(f"la ficha dice {campo} {ficha[campo]!r} pero la carpeta es "
@@ -330,6 +337,9 @@ def _detalles_demostraciones(carpeta: Path, gym: str) -> dict[str, Any]:
     entorno = resumen["metadatos"].get("entorno")
     if entorno != gym:
         raise ValueError(f"demostraciones.npz es de {entorno!r}, no de {gym}")
+    for clave in ("partidas", "pares"):
+        if not isinstance(resumen[clave], int) or resumen[clave] < 1:
+            raise ValueError(f"demostraciones.npz no tiene {clave}: {resumen[clave]!r}")
     splits = carpeta / "splits.json"
     if splits.is_file():
         try:
@@ -495,6 +505,21 @@ class Biblioteca:
                     if carpeta.is_dir():
                         return carpeta
         raise KeyError(id_elemento)
+
+    def quitar(self, id_elemento: str) -> None:
+        """Borra un elemento de la biblioteca y libera su id.
+
+        Primero lo renombra a una carpeta oculta, así deja de verse de golpe aunque el
+        borrado tarde o falle a medias.
+
+        Raises:
+            KeyError: Si no existe.
+        """
+        carpeta = self.ruta(id_elemento)
+        oculta = carpeta.with_name(f".borrando-{carpeta.name}")
+        carpeta.rename(oculta)
+        shutil.rmtree(oculta)
+        _liberar_id(self.raiz, id_elemento)
 
     def experto_por_defecto(self, entorno: str) -> dict[str, Any] | None:
         """El experto congelado válido del entorno (el más antiguo si hay varios), o None."""

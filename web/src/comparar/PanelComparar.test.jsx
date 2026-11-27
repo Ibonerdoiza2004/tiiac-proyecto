@@ -414,6 +414,96 @@ describe('PanelComparar con el protocolo de trabajos', () => {
     expect(estado()).toHaveTextContent('Terminada');
   });
 
+  const ANTERIOR = { id: 'c0', tipo: 'comparacion', estado: 'en_marcha', creado: 1, resultado: null, error: null,
+    argumentos: { entorno: 'cartpole', modelos: ['exp'], aleatorio: true, partidas: 3, semilla: 9000, vista: true } };
+
+  async function verAnterior(anterior = ANTERIOR) {
+    const doble = apiCompararConSocket();
+    doble.http.obtener.mockImplementation(async (ruta) => (ruta === '/trabajos' ? [anterior]
+      : MODELOS_PRUEBA.map((m) => ({ ...m }))));
+    const montado = await montar(doble.api);
+    await pulsar(boton('Ver'));
+    const socket = doble.sockets.at(-1);
+    socket.abrir();
+    return { ...doble, ...montado, socket };
+  }
+
+  it('el resultado guardado manda sobre el historial que llega después', async () => {
+    // Regresión: el servidor manda el estado y después el historial, y este lo pisaba.
+    const terminada = { ...ANTERIOR, estado: 'terminado', resultado: { partidas: 3, semilla: 9000, incompleta: false,
+      modelos: [{ id: 'exp', retornos: [500, 480, 460] }, { id: 'aleatorio', retornos: [20, 10, 30] }] } };
+    const { socket } = await verAnterior(terminada);
+    socket.recibir({ tipo: 'estado', trabajo: terminada });
+    socket.recibir({ tipo: 'historial', progreso: [progreso('exp', 0, 500).medidas], eventos: [] });
+    socket.caer(1000);
+    await avanzar(0);
+    expect(filas('Recompensa media por partida').map((f) => f.slice(0, 2)))
+      .toEqual([['Experto congelado', '3'], ['Aleatorio', '3']]);
+    expect(estado()).toHaveTextContent('Terminada');
+  });
+
+  it('una comparación que ya no existe en el servidor no ofrece reconectar', async () => {
+    // Regresión: el 4404 salía como conexión perdida y Reconectar volvía a fallar.
+    const { socket, ocupado, http } = await verAnterior();
+    const listados = http.obtener.mock.calls.filter(([ruta]) => ruta === '/trabajos').length;
+    socket.recibir({ tipo: 'error', mensaje: 'No existe el trabajo c0' });
+    socket.caer(4404);
+    await avanzar(0);
+    expect(estado()).toHaveTextContent('No existe');
+    expect(screen.getByRole('alert')).toHaveTextContent('ya no existe en el servidor');
+    expect(screen.queryByRole('button', { name: 'Reconectar' })).toBeNull();
+    expect(boton('Nueva comparación')).toBeEnabled();
+    expect(ocupado).toHaveBeenLastCalledWith(false);
+    // La lista de anteriores se vuelve a pedir: la que había ya no vale.
+    expect(http.obtener.mock.calls.filter(([ruta]) => ruta === '/trabajos').length).toBeGreaterThan(listados);
+  });
+
+  it('si el servidor avisa de un error y cierra, se ve su motivo y se puede reconectar', async () => {
+    const { socket } = await enMarcha();
+    socket.recibir({ tipo: 'error', mensaje: 'El proceso de la comparación murió' });
+    socket.caer(1011);
+    await avanzar(0);
+    expect(screen.getByRole('alert')).toHaveTextContent('El proceso de la comparación murió');
+    expect(boton('Reconectar')).toBeEnabled();
+  });
+
+  it('un aviso del servidor con la conexión abierta se quita con el siguiente estado', async () => {
+    const { socket } = await enMarcha();
+    socket.recibir({ tipo: 'error', mensaje: 'Orden no válida' });
+    await avanzar(0);
+    expect(screen.getByRole('alert')).toHaveTextContent('Orden no válida');
+    socket.recibir({ tipo: 'estado', trabajo: { id: 'c1', estado: 'pausado', argumentos:
+      { entorno: 'cartpole', modelos: ['exp'], aleatorio: true, partidas: 2, semilla: 9000 } } });
+    await avanzar(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('una orden mientras el socket aún conecta avisa sin dar la conexión por perdida', async () => {
+    // Regresión: Cancelar está activo en cuanto se crea, y con readyState 0 salía «Se perdió la conexión».
+    const doble = apiCompararConSocket();
+    const { ocupado } = await montar(doble.api);
+    fireEvent.click(casilla(/Experto congelado/));
+    await pulsar(boton('Iniciar comparación'));
+    const socket = doble.sockets.at(-1);
+    await pulsar(boton('Cancelar'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Todavía se está conectando');
+    expect(ocupado).toHaveBeenLastCalledWith(true);
+    expect(socket.enviados).toEqual([]);
+    socket.abrir();
+    await pulsar(boton('Cancelar'));
+    expect(socket.enviados).toEqual([{ tipo: 'cancelar' }]);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('ver una comparación en marcha empieza con la vista que se pidió al crearla', async () => {
+    const { socket } = await verAnterior();
+    socket.recibir({ tipo: 'estado', trabajo: ANTERIOR });
+    socket.recibir({ tipo: 'historial', progreso: [], eventos: [] });
+    await avanzar(0);
+    expect(casilla('Ver las partidas')).toBeChecked();
+    expect(screen.getByText('Esperando la primera imagen…')).toBeInTheDocument();
+  });
+
   it('una orden que no sale porque el socket ya está cerrado cuenta como desconexión', async () => {
     const { socket } = await enMarcha();
     socket.readyState = 3;

@@ -101,7 +101,7 @@ def espacios_entorno(cfg: dict[str, Any]) -> tuple[gym.Space, gym.Space]:
 
 
 def crear_entorno_vectorizado(
-    cfg: dict[str, Any], n_entornos: int, semilla: int,
+    cfg: dict[str, Any], n_entornos: int, semilla: int, dibujable: bool = False,
 ) -> VecEnv:
     """Crea un DummyVecEnv con Monitor y una semilla independiente por instancia.
 
@@ -114,6 +114,11 @@ def crear_entorno_vectorizado(
         n_entornos: número de instancias, debe ser entero positivo.
         semilla: semilla base no negativa; las de cada instancia salen de
             ``semillas_independientes`` y no se solapan entre bases cercanas.
+        dibujable: si es True, las instancias se crean con
+            ``render_mode="rgb_array"`` para la vista del dashboard, que solo dibuja
+            la primera (sb3 exige el mismo modo en todas; no cuesta nada mientras no
+            se dibuja). Dibujar no cambia la dinámica ni la siembra: las partidas
+            son las mismas.
 
     Returns:
         ``DummyVecEnv`` listo para resetear y usar.
@@ -126,13 +131,14 @@ def crear_entorno_vectorizado(
     # Se comprueba antes de crear los entornos, para no dejar ninguno abierto.
     validar_semilla(semilla)
 
-    def crear_fabrica() -> Callable[[], gym.Env]:
+    def crear_fabrica(render_mode: str | None) -> Callable[[], gym.Env]:
         """Crea una fábrica aislada para una instancia del vectorizador."""
         def fabrica() -> gym.Env:
             """Crea una instancia sin sembrar, envuelta en Monitor; se siembra después."""
-            return Monitor(crear_entorno(cfg, None))
+            return Monitor(crear_entorno(cfg, None, render_mode))
         return fabrica
 
-    venv = DummyVecEnv([crear_fabrica() for _ in range(int(n_entornos))])
+    render_mode = "rgb_array" if dibujable else None
+    venv = DummyVecEnv([crear_fabrica(render_mode) for _ in range(int(n_entornos))])
     sembrar_entorno_vectorizado(venv, semilla)
     return venv

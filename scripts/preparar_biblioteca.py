@@ -76,8 +76,8 @@ def preparar(config: Path, entornos: Sequence[str], con_entrega: bool) -> int:
                     continue
                 precargar_entrega(cfg, biblioteca,
                                   artefactos_de_comparacion(cfg, comparaciones[entorno]))
-        except (ValueError, RuntimeError, OSError) as error:
-            print(f"error en {entorno}: {error}", file=sys.stderr)
+        except Exception as error:  # noqa: BLE001 - un entorno que falla no para los demás
+            print(f"error en {entorno}: {error or type(error).__name__}", file=sys.stderr)
             fallos.append(entorno)
     return CODIGO_FALLO if fallos else 0
 

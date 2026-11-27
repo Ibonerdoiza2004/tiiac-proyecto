@@ -3,7 +3,7 @@ import { useCallback, useEffect, useId, useState } from 'react';
 import { METODOS, METODOS_CON_DATOS, METODOS_CON_VISTA } from '../api/entrenamiento.js';
 import { buscarEntorno } from '../entornos.js';
 import VistaEntorno from '../laboratorio/VistaEntorno.jsx';
-import { valoresIniciales, validarAjustes } from './ajustes.js';
+import { duracionEditada, valoresIniciales, validarAjustes } from './ajustes.js';
 import Curvas from './Curvas.jsx';
 import { formatearNumero } from './curvas.js';
 import FormularioAjustes from './FormularioAjustes.jsx';
@@ -88,7 +88,9 @@ export default function PanelEntrenamiento({ entorno, api, metodos, alCambiarOcu
     });
   };
 
-  const total = entreno.entreno?.duracion.total ?? esquema.datos?.duracion.total;
+  // En el formulario, con lo que se haya editado; entrenando, la que confirmó el servidor.
+  const total = entreno.entreno?.duracion.total
+    ?? (esquema.datos ? duracionEditada(esquema.datos, valores) : undefined);
   const unidad = UNIDADES[entreno.entreno?.duracion.unidad ?? esquema.datos?.duracion.unidad] ?? '';
   const porcentaje = total ? Math.min(100, Math.round((entreno.paso / total) * 100)) : 0;
   const etiqueta = { [FASES_ENTRENO.PREPARANDO]: 'Preparando…', [FASES_ENTRENO.TERMINANDO]: 'Terminando…',
@@ -137,7 +139,8 @@ export default function PanelEntrenamiento({ entorno, api, metodos, alCambiarOcu
           {esquema.datos ? (
             <>
               <p className="nota">
-                Valores del perfil de {nombre}; cambia los que quieras. Dura {formatearNumero(total)} {unidad}.
+                Valores del perfil de {nombre}; cambia los que quieras.
+                {total ? ` Dura ${formatearNumero(total)} ${unidad}.` : ''}
               </p>
               <FormularioAjustes key={esquema.datos.metodo} esquema={esquema.datos} valores={valores}
                 errores={intentado ? revision.errores : {}}

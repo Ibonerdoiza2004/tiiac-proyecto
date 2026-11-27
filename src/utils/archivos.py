@@ -19,20 +19,25 @@ from pathlib import Path
 
 
 @contextmanager
-def turno_exclusivo(cerrojo: Path) -> Iterator[None]:
+def turno_exclusivo(cerrojo: Path, esperar: bool = True) -> Iterator[None]:
     """Espera a que ningún otro proceso tenga el cerrojo y lo retiene mientras dura.
 
     Usa ``fcntl.flock`` sobre el archivo cerrojo (lo crea si no existe, con su
     carpeta): dos procesos que piden el mismo cerrojo se turnan. Se suelta al cerrar el
-    archivo, también si algo falla dentro o el proceso muere.
+    archivo, también si algo falla dentro o el proceso muere. Vale también entre hilos
+    de un mismo proceso: cada llamada abre el archivo por su cuenta.
 
     Args:
         cerrojo: Archivo que hace de cerrojo.
+        esperar: Con False no espera: si otro tiene el cerrojo, falla al momento.
+
+    Raises:
+        BlockingIOError: Sin esperar, si otro tiene el cerrojo.
     """
     cerrojo = Path(cerrojo)
     cerrojo.parent.mkdir(parents=True, exist_ok=True)
     with cerrojo.open("a", encoding="utf-8") as archivo:
-        fcntl.flock(archivo, fcntl.LOCK_EX)
+        fcntl.flock(archivo, fcntl.LOCK_EX if esperar else fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
 
 

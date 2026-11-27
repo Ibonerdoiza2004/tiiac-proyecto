@@ -61,9 +61,17 @@ describe('perfiles.json', () => {
   });
 
   it('la duración es la del perfil', () => {
-    expect(PERFILES.cartpole.experto.duracion).toEqual({ unidad: 'pasos', total: 100000 });
-    expect(PERFILES.cartpole.bc.duracion).toEqual({ unidad: 'epocas', total: 500 });
-    expect(PERFILES.cartpole.gail.duracion).toEqual({ unidad: 'iteraciones', total: 20 });
+    expect(PERFILES.cartpole.experto.duracion).toEqual({ unidad: 'pasos', total: 100000,
+      campo: 'experto.pasos_totales', bloque: 'experto.trpo.pasos_por_iteracion' });
+    expect(PERFILES.cartpole.bc.duracion).toEqual({ unidad: 'epocas', total: 500, campo: 'bc.epocas_maximas' });
+    expect(PERFILES.cartpole.gail.duracion).toEqual({ unidad: 'iteraciones', total: 20, campo: 'gail.iteraciones' });
+  });
+
+  it('la duración del experto son bloques completos, como pasos_reales_experto', () => {
+    // Reacher y HalfCheetah: 25 000 000 de presupuesto con bloques de 2048.
+    for (const entorno of ['reacher', 'halfcheetah']) {
+      expect(PERFILES[entorno].experto.duracion.total).toBe(25_001_984);
+    }
   });
 
   it('guarda de dónde sale cada valor cuando el YAML lo comenta', () => {
