@@ -1385,3 +1385,122 @@ def test_gail_no_se_reanuda_con_otros_datos(tmp_path):
     for cambio in ({"datos": [_conjunto(raiz, partidas=9)]}, {"cantidad": 2}):
         with pytest.raises(ValueError, match="No se puede reanudar"):
             tarea_entrenar_gail({**argumentos, **cambio}, CanalFalso())
+
+
+# --- reserva de la carpeta y checkpoint incompleto (auditoría) ----------------------------------
+
+@pytest.mark.parametrize("tarea, metodo", [(tarea_entrenar_experto, "experto"),
+                                           (tarea_entrenar_gail, "gail"),
+                                           (tarea_entrenar_bc, "bc")])
+def test_con_la_carpeta_en_uso_se_rechaza_sin_entrenar(tmp_path, tarea, metodo):
+    """Regresión: dos entrenamientos con la misma carpeta se pisaban."""
+    from src.training.checkpoints import CarpetaOcupada, en_uso
+    raiz = tmp_path / "biblioteca"
+    argumentos = (_argumentos_experto_reanudable(tmp_path) if metodo == "experto" else
+                  _argumentos_gail_reanudable(tmp_path, _conjunto(raiz)) if metodo == "gail"
+                  else _argumentos_bc_reanudable(tmp_path, _conjunto(raiz)))
+    canal = CanalFalso()
+    with en_uso(Path(argumentos["checkpoint"])):
+        with pytest.raises(CarpetaOcupada, match="Ya hay un entrenamiento"):
+            tarea(argumentos, canal)
+    assert canal.progresos == []
+    biblioteca = Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+    assert biblioteca.listar("cartpole", (metodo,)) == []
+    # Suelta la reserva, el siguiente entrena.
+    assert tarea(argumentos, CanalFalso())["modelo"]["incompleto"] is False
+
+
+def test_dos_reanudaciones_a_la_vez_solo_sigue_una(tmp_path):
+    """Regresión: la que terminaba borraba la carpeta y la otra fallaba tras entrenar."""
+    import threading
+    from src.training.checkpoints import CarpetaOcupada
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(raiz))
+    argumentos["ajustes"]["bc"]["epocas_maximas"] = 300
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    resultados = {}
+
+    def lanzar(n: int) -> None:
+        try:
+            resultados[n] = tarea_entrenar_bc(dict(argumentos), CanalFalso())
+        except Exception as error:  # noqa: BLE001 - se mira cuál falló y cómo
+            resultados[n] = error
+
+    hilos = [threading.Thread(target=lanzar, args=(n,)) for n in range(2)]
+    for hilo in hilos:
+        hilo.start()
+    for hilo in hilos:
+        hilo.join()
+    terminados = [r for r in resultados.values() if isinstance(r, dict)]
+    rechazados = [r for r in resultados.values() if isinstance(r, CarpetaOcupada)]
+    assert len(terminados) == 1 and len(rechazados) == 1
+    assert terminados[0]["resumen"]["reanudado_desde"] == [2]
+    assert len(Biblioteca(raiz, {"cartpole": "CartPole-v1"}).listar("cartpole", ("bc",))) == 1
+    assert not Path(argumentos["checkpoint"]).exists()
+
+
+@pytest.mark.parametrize("cambio, mensaje", [
+    (lambda c: c.pop("config"), "no está completo"),
+    (lambda c: c.pop("segundos"), "no está completo"),
+    (lambda c: c.update(extra=1), "no está completo"),
+    (lambda c: c.update(estado={}), "el estado"),
+    (lambda c: c.update(estado=[]), "el estado"),
+    (lambda c: c.update(progreso={}), "el progreso"),
+    (lambda c: c.update(progreso=[1]), "el progreso"),
+    (lambda c: c.update(reanudado_desde=[0]), "el progreso"),
+    (lambda c: c.update(reanudado_desde=None), "el progreso"),
+    (lambda c: c.update(run=3), "el progreso"),
+    (lambda c: c.update(segundos=-1.0), "el progreso"),
+    (lambda c: c.update(segundos=float("nan")), "el progreso"),
+])
+def test_un_checkpoint_incompleto_da_un_error_claro(tmp_path, cambio, mensaje):
+    """Regresión: le faltaba una clave y daba KeyError."""
+    from src.training.checkpoints import escribir_checkpoint, leer_checkpoint
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(raiz))
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_bc(argumentos, CanalQueSeCae(3))
+    carpeta = Path(argumentos["checkpoint"])
+    contenido = {k: v for k, v in leer_checkpoint(carpeta, "bc").items()
+                 if k not in ("formato", "version", "metodo")}
+    cambio(contenido)
+    escribir_checkpoint(carpeta, "bc", contenido)
+    canal = CanalFalso()
+    with pytest.raises(ValueError, match=mensaje):
+        tarea_entrenar_bc(argumentos, canal)
+    assert canal.progresos == []
+    # El error suelta la reserva: con la carpeta ya libre, otro intento da el mismo error.
+    with pytest.raises(ValueError, match=mensaje):
+        tarea_entrenar_bc(argumentos, CanalFalso())
+
+
+def _argumentos_en_curso(carpeta: Path) -> dict:
+    return {"entorno": "cartpole", "nombre": "x", "ajustes": {}, "semilla": 1, "datos": ["a"],
+            "cantidad": None, "checkpoint": str(carpeta)}
+
+
+def test_en_curso_suelta_la_carpeta_al_salir_aunque_siga_vivo(tmp_path):
+    """La reserva se suelta al salir del bloque, no cuando se libera el objeto."""
+    from src.training.checkpoints import CarpetaOcupada, en_uso
+    carpeta = tmp_path / "t"
+    with trabajadores.EnCurso(_argumentos_en_curso(carpeta), "bc", {}, "epoca") as en_curso:
+        with pytest.raises(CarpetaOcupada):
+            with en_uso(carpeta):
+                pass
+    with en_uso(carpeta):  # en_curso sigue vivo aquí
+        pass
+    assert en_curso.previo is None
+
+
+def test_en_curso_suelta_la_carpeta_si_falla_al_prepararla(tmp_path):
+    """Con la excepción (y su traceback) aún viva, la carpeta ya está libre."""
+    from src.training.checkpoints import en_uso, escribir_checkpoint
+    carpeta = tmp_path / "t"
+    trabajadores.EnCurso(_argumentos_en_curso(carpeta), "bc", {}, "epoca").__exit__()
+    escribir_checkpoint(carpeta, "bc", {"estado": {}})  # incompleto
+    with pytest.raises(ValueError, match="no está completo") as fallo:
+        trabajadores.EnCurso(_argumentos_en_curso(carpeta), "bc", {}, "epoca")
+    with en_uso(carpeta):
+        pass
+    assert fallo.value is not None

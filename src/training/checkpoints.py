@@ -9,6 +9,9 @@ archivos:
 - ``checkpoint.pt``: el último estado guardado (el del bucle, el progreso mandado hasta
   entonces y la configuración resuelta), que se lee con ``weights_only=True``.
 
+Mientras un entrenamiento la usa, la carpeta está reservada (en_uso, con el cerrojo
+``.en_uso``): otro que quiera usarla a la vez, por ejemplo al pulsar dos veces
+«Reanudar», se rechaza al momento (CarpetaOcupada) en lugar de pisarse con el primero.
 El checkpoint se escribe en un temporal que se renombra al final, así que un corte a
 mitad deja el anterior intacto. Al terminar bien, el trabajador borra la carpeta; si
 falla o se corta, se queda para reanudar.
@@ -20,15 +23,19 @@ import json
 import os
 import pickle
 import shutil
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from src.utils.archivos import turno_exclusivo
 from src.utils.procedencia import a_json
 
 ARCHIVO_ARGUMENTOS = "argumentos.json"
 ARCHIVO_CHECKPOINT = "checkpoint.pt"
+ARCHIVO_EN_USO = ".en_uso"
 FORMATO_CHECKPOINT = "tiiac-checkpoint"
 VERSION_CHECKPOINT = 1
 # Argumentos que definen el entrenamiento: para reanudar tienen que ser los mismos. Los
@@ -36,6 +43,30 @@ VERSION_CHECKPOINT = 1
 CLAVES_REANUDAR = ("entorno", "nombre", "ajustes", "semilla", "datos", "cantidad")
 # Partes de la configuración resuelta que pueden cambiar al reanudar.
 SECCIONES_LIBRES = ("wandb", "origen")
+
+
+class CarpetaOcupada(ValueError):
+    """Otro entrenamiento está usando la carpeta de checkpoints."""
+
+
+@contextmanager
+def en_uso(carpeta: Path) -> Iterator[None]:
+    """Reserva la carpeta de un entrenamiento mientras dura el bloque, sin esperar.
+
+    La crea si no existe. El cerrojo se suelta al salir del bloque, también si algo
+    falla, y si el proceso muere.
+
+    Raises:
+        CarpetaOcupada: Si otro entrenamiento (otro proceso u otro hilo) la está usando.
+    """
+    carpeta = Path(carpeta)
+    with ExitStack() as pila:
+        try:
+            pila.enter_context(turno_exclusivo(carpeta / ARCHIVO_EN_USO, esperar=False))
+        except BlockingIOError:
+            raise CarpetaOcupada(f"Ya hay un entrenamiento usando {carpeta}: espera a que "
+                                 "termine") from None
+        yield
 
 
 def _a_json(argumentos: dict[str, Any]) -> Any:
@@ -47,18 +78,23 @@ def preparar_en_curso(carpeta: Path, metodo: str,
                       argumentos: dict[str, Any]) -> dict[str, Any] | None:
     """Prepara la carpeta de un entrenamiento y devuelve su último checkpoint, si hay.
 
-    Si la carpeta no existe, la crea con argumentos.json. Si existe, comprueba que es
-    del mismo método y con los mismos CLAVES_REANUDAR, y devuelve el checkpoint
+    Se llama con la carpeta reservada (en_uso). Si no tiene argumentos.json (es nueva,
+    o se cortó justo al crearla), los escribe y empieza de cero. Si los tiene, comprueba
+    que es del mismo método y con los mismos CLAVES_REANUDAR, y devuelve el checkpoint
     (leer_checkpoint), o None si se cortó antes de guardar el primero.
 
     Raises:
-        ValueError: Si la carpeta es de otro entrenamiento o su contenido no vale.
+        ValueError: Si la carpeta es de otro entrenamiento, tiene un checkpoint sin sus
+            argumentos o su contenido no vale.
     """
     carpeta = Path(carpeta)
     ruta = carpeta / ARCHIVO_ARGUMENTOS
     actuales = _a_json(argumentos)
-    if not carpeta.exists():
-        carpeta.mkdir(parents=True)
+    if not ruta.exists():
+        if (carpeta / ARCHIVO_CHECKPOINT).exists():
+            raise ValueError(f"{carpeta} tiene un checkpoint pero no sus argumentos: no se "
+                             "sabe de qué entrenamiento es")
+        carpeta.mkdir(parents=True, exist_ok=True)
         temporal = carpeta / f".{ARCHIVO_ARGUMENTOS}.tmp"
         temporal.write_text(json.dumps({"metodo": metodo, "argumentos": actuales},
                                        ensure_ascii=False, indent=2), encoding="utf-8")

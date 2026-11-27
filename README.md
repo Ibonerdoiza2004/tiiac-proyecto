@@ -516,7 +516,8 @@ cortados y relanzarlos llega con `laboratorio-entrenar-api`) sigue desde ahí:
 vuelve a mandar el progreso guardado, entrena el resto y anota en el resumen desde
 dónde se reanudó. Con W&B, abre un run nuevo con la etiqueta `reanudado`. No se puede
 reanudar si cambian los argumentos que definen el entrenamiento o la configuración
-resuelta. Al terminar bien, la carpeta se borra. BC guarda un checkpoint por época, el
+resuelta. Mientras un entrenamiento usa su carpeta, la tiene reservada: otro con la
+misma carpeta (por ejemplo, al pulsar dos veces «Reanudar») se rechaza al momento. Al terminar bien, la carpeta se borra. BC guarda un checkpoint por época, el
 experto tras cada evaluación (cada `experto.evaluar_cada` iteraciones) y GAIL tras cada
 validación (cada `gail.evaluar_cada`). BC no juega partidas, así que, reanudado, acaba
 exactamente igual que sin cortar. El experto y GAIL sí las juegan, y los entornos no se

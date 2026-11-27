@@ -10,9 +10,10 @@ import pytest
 import torch
 
 from src.data.biblioteca import CARPETA_EN_CURSO, Biblioteca
-from src.training.checkpoints import (ARCHIVO_ARGUMENTOS, ARCHIVO_CHECKPOINT, CLAVES_REANUDAR,
-                                      borrar_en_curso, comprobar_misma_config,
-                                      escribir_checkpoint, leer_checkpoint, preparar_en_curso)
+from src.training.checkpoints import (ARCHIVO_ARGUMENTOS, ARCHIVO_CHECKPOINT, ARCHIVO_EN_USO,
+                                      CLAVES_REANUDAR, CarpetaOcupada, borrar_en_curso,
+                                      comprobar_misma_config, en_uso, escribir_checkpoint,
+                                      leer_checkpoint, preparar_en_curso)
 
 ARGUMENTOS = {"entorno": "cartpole", "nombre": "Mi BC", "ajustes": {"bc": {"paciencia": 3}},
               "semilla": 7, "datos": ["a" * 12], "cantidad": None, "vista": False,
@@ -59,14 +60,82 @@ def test_una_carpeta_de_otro_metodo_no_se_reanuda(tmp_path):
         preparar_en_curso(tmp_path / "t", "bc", ARGUMENTOS)
 
 
-@pytest.mark.parametrize("contenido", [None, "{", "[]", '{"metodo": "bc"}'])
+@pytest.mark.parametrize("contenido", ["{", "[]", '{"metodo": "bc"}'])
 def test_unos_argumentos_que_no_valen(tmp_path, contenido):
     carpeta = tmp_path / "t"
     carpeta.mkdir()
-    if contenido is not None:
-        (carpeta / ARCHIVO_ARGUMENTOS).write_text(contenido, encoding="utf-8")
+    (carpeta / ARCHIVO_ARGUMENTOS).write_text(contenido, encoding="utf-8")
     with pytest.raises(ValueError, match=ARCHIVO_ARGUMENTOS):
         preparar_en_curso(carpeta, "bc", ARGUMENTOS)
+
+
+def test_una_carpeta_sin_argumentos_ni_checkpoint_empieza_de_cero(tmp_path):
+    """Regresión: un corte justo al crearla la dejaba bloqueada para siempre."""
+    carpeta = tmp_path / "t"
+    carpeta.mkdir()
+    (carpeta / ARCHIVO_EN_USO).touch()  # la reserva de un intento anterior
+    assert preparar_en_curso(carpeta, "bc", ARGUMENTOS) is None
+    guardados = json.loads((carpeta / ARCHIVO_ARGUMENTOS).read_text(encoding="utf-8"))
+    assert guardados == {"metodo": "bc", "argumentos": ARGUMENTOS}
+
+
+def test_un_checkpoint_sin_sus_argumentos_no_se_reanuda(tmp_path):
+    carpeta = tmp_path / "t"
+    carpeta.mkdir()
+    escribir_checkpoint(carpeta, "bc", {"n": 1})
+    with pytest.raises(ValueError, match="no sus argumentos"):
+        preparar_en_curso(carpeta, "bc", ARGUMENTOS)
+    assert not (carpeta / ARCHIVO_ARGUMENTOS).exists()
+
+
+# --- reserva de la carpeta -----------------------------------------------------------------
+
+def test_en_uso_crea_la_carpeta_y_la_reserva(tmp_path):
+    carpeta = tmp_path / "a" / "t"
+    with en_uso(carpeta):
+        assert carpeta.is_dir() and (carpeta / ARCHIVO_EN_USO).is_file()
+        with pytest.raises(CarpetaOcupada, match="Ya hay un entrenamiento"):
+            with en_uso(carpeta):
+                pass
+    with en_uso(carpeta):  # al salir se suelta
+        pass
+
+
+def test_en_uso_se_suelta_aunque_falle_el_bloque(tmp_path):
+    with pytest.raises(RuntimeError):
+        with en_uso(tmp_path / "t"):
+            raise RuntimeError("falla dentro")
+    with en_uso(tmp_path / "t"):
+        pass
+
+
+def test_carpeta_ocupada_es_un_value_error():
+    assert issubclass(CarpetaOcupada, ValueError)
+
+
+def test_en_uso_entre_procesos(tmp_path):
+    """Otro proceso con la carpeta reservada: aquí se rechaza hasta que la suelta."""
+    import subprocess
+    import sys
+    carpeta = tmp_path / "t"
+    codigo = ("import sys\n"
+              "from src.training.checkpoints import en_uso\n"
+              "with en_uso(sys.argv[1]):\n"
+              "    print('reservada', flush=True)\n"
+              "    sys.stdin.readline()\n")
+    otro = subprocess.Popen([sys.executable, "-c", codigo, str(carpeta)], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True,
+                            cwd=Path(__file__).resolve().parent.parent)
+    try:
+        assert otro.stdout.readline().strip() == "reservada"
+        with pytest.raises(CarpetaOcupada):
+            with en_uso(carpeta):
+                pass
+    finally:
+        otro.communicate("\n", timeout=60)
+    with en_uso(carpeta):
+        pass
+
 
 
 def test_escribir_sustituye_el_anterior_y_no_deja_temporales(tmp_path):

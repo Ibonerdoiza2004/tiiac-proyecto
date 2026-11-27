@@ -68,6 +68,7 @@ import dataclasses
 import math
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +85,7 @@ from src.data.splits import SplitsDemostraciones, huella_archivo, validar_splits
 from src.data.tipos import Trayectoria
 from src.training.barrido import cargar_datos
 from src.training.bc import cargar_politica_bc, entrenar_bc_repeticion, guardar_bc_repeticion
-from src.training.checkpoints import (borrar_en_curso, comprobar_misma_config,
+from src.training.checkpoints import (borrar_en_curso, comprobar_misma_config, en_uso,
                                       escribir_checkpoint, preparar_en_curso)
 from src.training.evaluacion import config_evaluacion, predecir_accion
 from src.training.gail import cargar_gail, entrenar_gail, guardar_gail
@@ -95,7 +96,7 @@ from src.utils.procedencia import a_json
 from src.utils.tracking import (abrir_run, nombre_artefacto, registrar, registrar_resumen,
                                 subir_artefacto, terminar_run)
 from src.utils.seed import semillas_independientes
-from src.utils.validacion import es_entero_positivo, es_semilla
+from src.utils.validacion import es_entero_positivo, es_real_finito, es_semilla
 
 # Claves que tiene que traer argumentos en un entrenamiento de cada método.
 ARGUMENTOS_ENTRENAMIENTO = frozenset({"ruta_config", "biblioteca", "calidad_jpeg", "entorno",
@@ -444,20 +445,28 @@ def datos_de_entrenamiento(argumentos: dict[str, Any], cfg: dict[str, Any],
     return trayectorias, splits, procedencia, int(cantidad), id_conjunto
 
 
+# Lo que guarda EnCurso en cada checkpoint, además del formato, la versión y el método.
+CLAVES_CHECKPOINT = frozenset({"estado", "config", "progreso", "reanudado_desde", "run",
+                               "segundos"})
+
+
 class EnCurso:
     """Checkpoints de un entrenamiento del dashboard (src/training/checkpoints.py).
 
-    Con ``checkpoint`` en los argumentos, prepara su carpeta y, si ya había un
-    checkpoint de una ejecución cortada, lo lee (con la configuración comprobada).
-    Da lo que necesita la tarea para seguir desde él (``estado_inicial``,
-    ``historial``, ``reanudado`` para W&B) y la función ``guardar_estado`` del bucle,
-    que escribe el estado con el progreso mandado, las reanudaciones, el run y los
-    segundos. Sin ``checkpoint``, todo es None y no se guarda nada.
+    Se usa como ``with EnCurso(...) as en_curso:`` alrededor de todo el entrenamiento.
+    Con ``checkpoint`` en los argumentos, reserva su carpeta mientras dura el bloque
+    (en_uso: otro entrenamiento con la misma carpeta se rechaza), la prepara y, si ya
+    había un checkpoint de una ejecución cortada, lo lee (con sus claves y la
+    configuración comprobadas). Da lo que necesita la tarea para seguir desde él
+    (``estado_inicial``, ``historial``, ``reanudado`` para W&B) y la función
+    ``guardar_estado`` del bucle, que escribe el estado con el progreso mandado, las
+    reanudaciones, el run y los segundos. Sin ``checkpoint``, todo es None y no se
+    guarda nada.
     """
 
     def __init__(self, argumentos: dict[str, Any], metodo: str, cfg: dict[str, Any],
                  unidad: str) -> None:
-        """Prepara la carpeta y lee el checkpoint, si hay.
+        """Reserva y prepara la carpeta y lee el checkpoint, si hay.
 
         Args:
             argumentos: Los de la tarea, ya comprobados.
@@ -467,14 +476,24 @@ class EnCurso:
                 (``iteracion`` o ``epoca``).
 
         Raises:
-            ValueError: Si la carpeta es de otro entrenamiento o la configuración cambió.
+            CarpetaOcupada: Si otro entrenamiento está usando la carpeta.
+            ValueError: Si la carpeta es de otro entrenamiento, el checkpoint no está
+                completo o la configuración cambió.
         """
         self.metodo, self.cfg = metodo, cfg
         self.carpeta = Path(argumentos["checkpoint"]) if argumentos["checkpoint"] else None
-        self.previo = (preparar_en_curso(self.carpeta, metodo, argumentos)
-                       if self.carpeta else None)
-        if self.previo is not None:
-            comprobar_misma_config(self.previo["config"], cfg)
+        self._reserva = ExitStack()
+        self.previo = None
+        if self.carpeta is not None:
+            self._reserva.enter_context(en_uso(self.carpeta))
+            try:
+                self.previo = preparar_en_curso(self.carpeta, metodo, argumentos)
+                if self.previo is not None:
+                    _comprobar_checkpoint(self.previo, unidad, self.carpeta)
+                    comprobar_misma_config(self.previo["config"], cfg)
+            except BaseException:
+                self._reserva.close()
+                raise
         self.reanudado_desde: list[int] = (
             [*self.previo["reanudado_desde"], int(self.previo["estado"][unidad])]
             if self.previo else [])
@@ -524,6 +543,36 @@ class EnCurso:
         if self.carpeta is not None:
             borrar_en_curso(self.carpeta)
 
+    def __enter__(self) -> EnCurso:
+        """La carpeta ya está reservada desde que se creó."""
+        return self
+
+    def __exit__(self, *excepcion: object) -> None:
+        """Suelta la reserva de la carpeta, haya ido bien o mal."""
+        self._reserva.close()
+
+
+def _comprobar_checkpoint(previo: dict[str, Any], unidad: str, carpeta: Path) -> None:
+    """Comprueba que un checkpoint leído tiene lo que guarda EnCurso.
+
+    Raises:
+        ValueError: Si le falta o sobra alguna clave o no tienen su tipo.
+    """
+    claves = set(previo) - {"formato", "version", "metodo"}
+    if claves != CLAVES_CHECKPOINT:
+        raise ValueError(f"El checkpoint de {carpeta} no está completo: tiene {sorted(claves)}"
+                         f" y debe tener {sorted(CLAVES_CHECKPOINT)}")
+    estado, segundos = previo["estado"], previo["segundos"]
+    if (not isinstance(estado, dict) or not es_entero_positivo(estado.get(unidad))
+            or not isinstance(previo["progreso"], list)
+            or not all(isinstance(m, dict) for m in previo["progreso"])
+            or not isinstance(previo["reanudado_desde"], list)
+            or not all(es_entero_positivo(i) for i in previo["reanudado_desde"])
+            or not (previo["run"] is None or isinstance(previo["run"], str))
+            or not es_real_finito(segundos) or segundos < 0):
+        raise ValueError(f"El checkpoint de {carpeta} no tiene el estado, el progreso, las "
+                         "reanudaciones, el run o los segundos de uno de EnCurso")
+
 
 def tarea_entrenar_experto(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     """Entrena un experto desde el dashboard y lo guarda en la biblioteca.
@@ -549,29 +598,29 @@ def tarea_entrenar_experto(argumentos: dict[str, Any], canal: Any) -> dict[str, 
     cfg["experto"]["semilla"] = int(argumentos["semilla"])
     vista = CallbackVista(canal.imagen, fps_entorno(cfg), argumentos["calidad_jpeg"],
                           activa=argumentos["vista"])
-    en_curso = EnCurso(argumentos, "experto", cfg, "iteracion")
-    run = _abrir_run(cfg, argumentos, "experto", en_curso.reanudado)
-    try:
-        progreso = ProgresoTrabajo(canal, run, "pasos", en_curso.historial)
-        control = ControlEntrenamiento(canal, vista, progreso)
-        modelo, resumen = entrenar_experto(
-            cfg, progreso, parar=control.parar, callback=control, dibujable=True,
-            estado_inicial=en_curso.estado_inicial,
-            guardar_estado=en_curso.guardador(progreso, run))
-        # La última iteración siempre se evalúa: su mensaje ya salió con la evaluación.
-        incompleto = (control.finalizar_pedido and not resumen["objetivo_alcanzado"]
-                      and resumen["pasos"] < cfg["experto"]["pasos_totales"])
-        resumen = {**en_curso.completar(resumen), "incompleto": incompleto}
-        ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "experto",
-                              argumentos["nombre"].strip(), "dashboard",
-                              lambda carpeta: guardar_experto(carpeta, modelo, cfg, resumen))
-        _subir_modelo(run, "experto", _carpeta(argumentos, "experto", ficha),
-                      ["modelo.zip", "experto.json"], cfg, resumen)
-    except BaseException as error:
-        terminar_run(run, error)
-        raise
-    terminar_run(run)
-    en_curso.terminar()
+    with EnCurso(argumentos, "experto", cfg, "iteracion") as en_curso:
+        run = _abrir_run(cfg, argumentos, "experto", en_curso.reanudado)
+        try:
+            progreso = ProgresoTrabajo(canal, run, "pasos", en_curso.historial)
+            control = ControlEntrenamiento(canal, vista, progreso)
+            modelo, resumen = entrenar_experto(
+                cfg, progreso, parar=control.parar, callback=control, dibujable=True,
+                estado_inicial=en_curso.estado_inicial,
+                guardar_estado=en_curso.guardador(progreso, run))
+            # La última iteración siempre se evalúa: su mensaje ya salió con la evaluación.
+            incompleto = (control.finalizar_pedido and not resumen["objetivo_alcanzado"]
+                          and resumen["pasos"] < cfg["experto"]["pasos_totales"])
+            resumen = {**en_curso.completar(resumen), "incompleto": incompleto}
+            ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "experto",
+                                  argumentos["nombre"].strip(), "dashboard",
+                                  lambda carpeta: guardar_experto(carpeta, modelo, cfg, resumen))
+            _subir_modelo(run, "experto", _carpeta(argumentos, "experto", ficha),
+                          ["modelo.zip", "experto.json"], cfg, resumen)
+        except BaseException as error:
+            terminar_run(run, error)
+            raise
+        terminar_run(run)
+        en_curso.terminar()
     return _resultado(ficha, incompleto, argumentos["semilla"], resumen)
 
 
@@ -609,35 +658,35 @@ def tarea_entrenar_gail(argumentos: dict[str, Any], canal: Any) -> dict[str, Any
     cfg = _config_imitacion(argumentos)
     vista = CallbackVista(canal.imagen, fps_entorno(cfg), argumentos["calidad_jpeg"],
                           activa=argumentos["vista"])
-    en_curso = EnCurso(argumentos, "gail", cfg, "iteracion")
-    run = _abrir_run(cfg, argumentos, "gail", en_curso.reanudado)
-    try:
-        trayectorias, splits, procedencia, cantidad, id_datos = datos_de_entrenamiento(
-            argumentos, cfg)
-        progreso = ProgresoTrabajo(canal, run, "iteraciones", en_curso.historial)
-        control = ControlEntrenamiento(canal, vista, progreso)
-        agente, discriminador, resumen = entrenar_gail(
-            cfg, trayectorias, splits, cantidad, REPETICION_DASHBOARD, progreso,
-            parar=control.parar, callback=control, dibujable=True,
-            estado_inicial=en_curso.estado_inicial,
-            guardar_estado=en_curso.guardador(progreso, run))
-        # La última iteración siempre se valida: su mensaje ya salió con la validación.
-        incompleto = (control.finalizar_pedido
-                      and resumen["iteraciones"] < cfg["gail"]["iteraciones"])
-        resumen = {**en_curso.completar(resumen), "incompleto": incompleto,
-                   "datos_biblioteca": id_datos}
-        ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "gail",
-                              argumentos["nombre"].strip(), "dashboard",
-                              lambda carpeta: guardar_gail(carpeta, agente, discriminador, cfg,
-                                                           resumen, procedencia))
-        _subir_modelo(run, "gail", _carpeta(argumentos, "gail", ficha),
-                      ["modelo.zip", "discriminador.pt", "gail.json"], cfg,
-                      {**resumen, **procedencia}, {"cantidad": cantidad, **procedencia})
-    except BaseException as error:
-        terminar_run(run, error)
-        raise
-    terminar_run(run)
-    en_curso.terminar()
+    with EnCurso(argumentos, "gail", cfg, "iteracion") as en_curso:
+        run = _abrir_run(cfg, argumentos, "gail", en_curso.reanudado)
+        try:
+            trayectorias, splits, procedencia, cantidad, id_datos = datos_de_entrenamiento(
+                argumentos, cfg)
+            progreso = ProgresoTrabajo(canal, run, "iteraciones", en_curso.historial)
+            control = ControlEntrenamiento(canal, vista, progreso)
+            agente, discriminador, resumen = entrenar_gail(
+                cfg, trayectorias, splits, cantidad, REPETICION_DASHBOARD, progreso,
+                parar=control.parar, callback=control, dibujable=True,
+                estado_inicial=en_curso.estado_inicial,
+                guardar_estado=en_curso.guardador(progreso, run))
+            # La última iteración siempre se valida: su mensaje ya salió con la validación.
+            incompleto = (control.finalizar_pedido
+                          and resumen["iteraciones"] < cfg["gail"]["iteraciones"])
+            resumen = {**en_curso.completar(resumen), "incompleto": incompleto,
+                       "datos_biblioteca": id_datos}
+            ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "gail",
+                                  argumentos["nombre"].strip(), "dashboard",
+                                  lambda carpeta: guardar_gail(carpeta, agente, discriminador, cfg,
+                                                               resumen, procedencia))
+            _subir_modelo(run, "gail", _carpeta(argumentos, "gail", ficha),
+                          ["modelo.zip", "discriminador.pt", "gail.json"], cfg,
+                          {**resumen, **procedencia}, {"cantidad": cantidad, **procedencia})
+        except BaseException as error:
+            terminar_run(run, error)
+            raise
+        terminar_run(run)
+        en_curso.terminar()
     return _resultado(ficha, incompleto, argumentos["semilla"], resumen)
 
 
@@ -649,12 +698,12 @@ def tarea_entrenar_bc(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     finalizar. Se guarda como en la E1 (guardar_bc_repeticion, politica.pt) con origen
     «dashboard».
 
+    Con ``checkpoint``, guarda uno al acabar cada época y, si ya había uno, sigue
+    desde él (ver el docstring del módulo).
+
     Args:
         argumentos: Ver el docstring del módulo.
         canal: CanalTrabajo.
-
-    Con ``checkpoint``, guarda uno al acabar cada época y, si ya había uno, sigue
-    desde él (ver el docstring del módulo).
 
     Returns:
         ResultadoEntrenamiento; incompleto si se finalizó antes de llegar a las épocas
@@ -665,34 +714,35 @@ def tarea_entrenar_bc(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     """
     argumentos = comprobar_argumentos_entrenamiento(argumentos, "bc")
     cfg = _config_imitacion(argumentos)
-    en_curso = EnCurso(argumentos, "bc", cfg, "epoca")
-    run = _abrir_run(cfg, argumentos, "bc", en_curso.reanudado)
-    try:
-        trayectorias, splits, procedencia, cantidad, id_datos = datos_de_entrenamiento(
-            argumentos, cfg)
-        control = ControlEntrenamiento(canal)
-        progreso = ProgresoEpocas(canal, run, en_curso.historial)
-        politica, resumen = entrenar_bc_repeticion(
-            cfg, trayectorias, splits, cantidad, REPETICION_DASHBOARD, progreso,
-            parar=control.parar, estado_inicial=en_curso.estado_inicial,
-            guardar_estado=en_curso.guardador(progreso, run))
-        # Al agotar la paciencia, entrenar_bc para antes de consultar parar: si se pidió
-        # finalizar, paró por la orden, salvo que fuera ya la última época.
-        incompleto = (control.finalizar_pedido
-                      and resumen["epocas"] < cfg["bc"]["epocas_maximas"])
-        resumen = {**en_curso.completar(resumen), "incompleto": incompleto,
-                   "datos_biblioteca": id_datos}
-        ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "bc",
-                              argumentos["nombre"].strip(), "dashboard",
-                              lambda carpeta: guardar_bc_repeticion(
-                                  carpeta / "politica.pt", politica, cfg, resumen, procedencia))
-        _subir_modelo(run, "bc", _carpeta(argumentos, "bc", ficha), ["politica.pt"], cfg,
-                      {**resumen, **procedencia}, {"cantidad": cantidad, **procedencia})
-    except BaseException as error:
-        terminar_run(run, error)
-        raise
-    terminar_run(run)
-    en_curso.terminar()
+    with EnCurso(argumentos, "bc", cfg, "epoca") as en_curso:
+        run = _abrir_run(cfg, argumentos, "bc", en_curso.reanudado)
+        try:
+            trayectorias, splits, procedencia, cantidad, id_datos = datos_de_entrenamiento(
+                argumentos, cfg)
+            control = ControlEntrenamiento(canal)
+            progreso = ProgresoEpocas(canal, run, en_curso.historial)
+            politica, resumen = entrenar_bc_repeticion(
+                cfg, trayectorias, splits, cantidad, REPETICION_DASHBOARD, progreso,
+                parar=control.parar, estado_inicial=en_curso.estado_inicial,
+                guardar_estado=en_curso.guardador(progreso, run))
+            # Al agotar la paciencia, entrenar_bc para antes de consultar parar: si se pidió
+            # finalizar, paró por la orden, salvo que fuera ya la última época.
+            incompleto = (control.finalizar_pedido
+                          and resumen["epocas"] < cfg["bc"]["epocas_maximas"])
+            resumen = {**en_curso.completar(resumen), "incompleto": incompleto,
+                       "datos_biblioteca": id_datos}
+            ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "bc",
+                                  argumentos["nombre"].strip(), "dashboard",
+                                  lambda carpeta: guardar_bc_repeticion(
+                                      carpeta / "politica.pt", politica, cfg, resumen,
+                                      procedencia))
+            _subir_modelo(run, "bc", _carpeta(argumentos, "bc", ficha), ["politica.pt"], cfg,
+                          {**resumen, **procedencia}, {"cantidad": cantidad, **procedencia})
+        except BaseException as error:
+            terminar_run(run, error)
+            raise
+        terminar_run(run)
+        en_curso.terminar()
     return _resultado(ficha, incompleto, argumentos["semilla"], resumen)
 
 
