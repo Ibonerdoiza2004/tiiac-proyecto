@@ -22,6 +22,7 @@ from src.app.contrato import EntornoApi, EstadoApi, WandbApi
 from src.app import estado_wandb as modulo_wandb
 from src.app.estado_wandb import Comprobacion, EstadoWandb
 from src.app.rutas_biblioteca import crear_router_biblioteca
+from src.app.rutas_comparar import crear_router_comparar
 from src.app.rutas_laboratorio import crear_router_laboratorio
 from src.app.rutas_trabajos import crear_router_trabajos
 from src.app.trabajos import GestorTrabajos, OperacionNoValida, SinHueco, TrabajoDesconocido
@@ -166,6 +167,7 @@ def crear_app(ruta_config: Path = CONFIG_POR_DEFECTO,
     api.include_router(crear_router_trabajos(gestor))
     api.include_router(crear_router_laboratorio(Path(ruta_config), dashboard, gestor,
                                                 estado_wandb, biblioteca))
+    api.include_router(crear_router_comparar(Path(ruta_config), dashboard, gestor, biblioteca))
     api.include_router(crear_router_biblioteca(biblioteca))
     app.include_router(api)
 

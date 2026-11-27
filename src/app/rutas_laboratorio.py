@@ -88,25 +88,28 @@ def config_wandb(peticion: EntrenamientoCrear, dashboard: dict[str, Any]) -> dic
     return {"activo": True, "grupo": grupo}
 
 
-def comprobar_referencia(biblioteca: Biblioteca, id_elemento: str, tipo: str,
-                         entorno: TipoEntorno) -> None:
+def comprobar_referencia(biblioteca: Biblioteca, id_elemento: str,
+                         tipo: str | tuple[str, ...], entorno: TipoEntorno) -> None:
     """Comprueba que un id de la petición sea un elemento válido, de su tipo y entorno.
 
     Args:
         biblioteca: Índice de la biblioteca.
         id_elemento: Id que manda el navegador.
-        tipo: Tipo que tiene que tener (experto o demostraciones).
+        tipo: Tipo que tiene que tener (experto o demostraciones), o los tipos que valen
+            (experto, bc o gail en una comparación).
         entorno: Entorno de la petición.
 
     Raises:
         ValueError: Con el motivo si no existe, es de otro tipo o entorno o no es válido.
     """
+    tipos = (tipo,) if isinstance(tipo, str) else tuple(tipo)
     try:
         elemento = biblioteca.obtener(id_elemento)
     except KeyError:
         raise ValueError(f"No hay ningún elemento {id_elemento!r} en la biblioteca") from None
-    if elemento["tipo"] != tipo:
-        raise ValueError(f"{id_elemento} es de tipo {elemento['tipo']}, no {tipo}")
+    if elemento["tipo"] not in tipos:
+        validos = " o ".join([", ".join(tipos[:-1]), tipos[-1]] if len(tipos) > 1 else tipos)
+        raise ValueError(f"{id_elemento} es de tipo {elemento['tipo']}, no {validos}")
     if elemento["entorno"] != entorno.value:
         raise ValueError(f"{id_elemento} es de {elemento['entorno']}, no de {entorno.value}")
     if not elemento["valido"]:

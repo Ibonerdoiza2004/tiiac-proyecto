@@ -435,6 +435,7 @@ común a cualquier trabajo.
 | `POST /api/sesiones` | Jugar a mano o ver al experto (llega con `laboratorio-jugar-api`; hasta entonces valida y responde 501) |
 | `POST /api/sesiones/{id}/guardar` | Guardar partidas enteras de una sesión y cerrarla (ídem) |
 | `POST /api/entrenamientos` | Entrenar un experto, BC o GAIL, con nombre opcional para la biblioteca y W&B opcional (llega con `laboratorio-entrenar-api`; ídem) |
+| `POST /api/comparaciones` | Comparar modelos de la biblioteca (y el aleatorio) con las mismas partidas; sin partidas, las de `evaluacion` (50), y como mucho `laboratorio.partidas_maximas` (1000) |
 | `GET /api/trabajos`, `GET /api/trabajos/{id}` | Listar y consultar trabajos |
 | `POST /api/trabajos/{id}/pausar`, `/reanudar`, `/cancelar` | Controlar cualquier trabajo |
 | WebSocket `/api/trabajos/{id}` | Seguir cualquier trabajo en directo |
@@ -445,7 +446,7 @@ común a cualquier trabajo.
 | Al conectar | `{"tipo": "estado", "trabajo"}`, `{"tipo": "historial", "progreso": [...], "eventos": [...]}` con todo lo anterior y la última imagen |
 | En directo | `{"tipo": "progreso", "medidas"}`, imágenes JPEG en binario (si el navegador va lento, solo la última), `{"tipo": "estado", "trabajo"}` y los eventos propios de cada funcionalidad, como `{"tipo": "partida_terminada", "partida"}` |
 | Al terminar | El último estado, con el resultado, y cierre normal (1000); 4404 si el trabajo no existe |
-| Del navegador | Texto JSON: `pausar`, `reanudar` y `cancelar` en cualquier trabajo; `accion` y `finalizar` en una sesión; `vista` y `finalizar` en un entrenamiento (`finalizar` en pausa reanuda para poder terminar). Lo que no vale, también un mensaje binario, recibe `{"tipo": "error", "mensaje"}` |
+| Del navegador | Texto JSON: `pausar`, `reanudar` y `cancelar` en cualquier trabajo; `accion` y `finalizar` en una sesión; `vista` y `finalizar` en un entrenamiento o una comparación (`finalizar` en pausa reanuda para poder terminar). Lo que no vale, también un mensaje binario, recibe `{"tipo": "error", "mensaje"}` |
 
 Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder ni repetir
 progreso; una sesión de jugar, en cambio, se descarta al cerrarse la última pestaña que
@@ -500,8 +501,10 @@ hilos de este portátil, `entrenar_experto` sí da el congelado. No hay test de 
 comprobación porque los datos congelados no están en el repositorio (decisión del
 usuario).
 
-Las comparaciones las hace `tarea_comparar`, en el mismo módulo (la ruta de crearlas
-llega con `comparar-api`). Juega como la evaluación de la E1: cada partida con su
+Las comparaciones las hace `tarea_comparar`, en el mismo módulo; las crea
+`POST /api/comparaciones` (`src/app/rutas_comparar.py`), que comprueba antes de encolar
+que cada modelo sea un experto, BC o GAIL válido del entorno, y cuyos `argumentos`
+llevan las partidas y la semilla que se usan. Juega como la evaluación de la E1: cada partida con su
 semilla, derivada de `evaluacion.semilla`, la misma para todos los modelos, y en modo
 `evaluacion.determinista`, así que sus retornos son los que daría `evaluar_final` con
 esas partidas. Por defecto juega `evaluacion.episodios` partidas por modelo. Todos los
@@ -569,13 +572,13 @@ biblioteca (y el agente aleatorio como referencia) y cuántas partidas (por defe
 la evaluación de la E1, con su semilla), verlas jugar si se quiere, pausar, reanudar,
 finalizar con lo jugado o cancelar, y resultados en directo (media ± desviación, última
 partida, puntuación de cada partida e historial de entrenamiento de cada modelo); las
-comparaciones anteriores se vuelven a abrir desde la lista. Comparar usa ya la API real
-para la biblioteca y para seguir el trabajo (protocolo de `/api/trabajos`); crearla
-(`POST /api/comparaciones`) llega con `comparar-api`, y lo que espera la interfaz está
-descrito en `web/src/api/comparar.js`. Mientras no existe el backend, la
-interfaz usa uno simulado en el navegador (`web/src/simulado/`): CartPole y MountainCar
-con las ecuaciones de Gymnasium, animaciones de ejemplo en los demás y curvas de
-entrenamiento y retornos inventados; no entrena ni guarda nada de verdad. Los
+comparaciones anteriores se vuelven a abrir desde la lista. Comparar tiene ya toda su
+API real: la biblioteca, crear la comparación (`POST /api/comparaciones`, con el formato
+de `web/src/api/comparar.js`) y seguir el trabajo (protocolo de `/api/trabajos`). Por
+defecto, mientras no está todo el backend, la interfaz usa uno simulado en el navegador
+(`web/src/simulado/`): CartPole y MountainCar con las ecuaciones de Gymnasium,
+animaciones de ejemplo en los demás y curvas de entrenamiento y retornos inventados; no
+entrena ni guarda nada de verdad. Los
 hiperparámetros del simulado y las partidas y la semilla de la evaluación salen de
 `configs/` con `npm run perfiles` (un test avisa si no están al día). Con
 `VITE_API=real npm run dev` usa el backend real.
