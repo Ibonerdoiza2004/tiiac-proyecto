@@ -176,7 +176,8 @@ def test_comparar_de_punta_a_punta(app, biblioteca):
     # El mismo resultado que el trabajador con los mismos argumentos.
     directo = tarea_comparar({"ruta_config": str(ruta), "biblioteca": str(raiz),
                               "calidad_jpeg": 80, "entorno": "cartpole", "modelos": modelos,
-                              "aleatorio": True, "partidas": 2, "vista": False}, CanalFalso())
+                              "aleatorio": True, "partidas": 2, "semilla": 9000,
+                              "vista": False}, CanalFalso())
     assert final["trabajo"]["resultado"] == directo
     # Aparece en la lista de comparaciones con sus argumentos públicos.
     lista = cliente.get("/api/trabajos", params={"tipo": "comparacion"}).json()
@@ -228,11 +229,7 @@ def test_usa_la_evaluacion_del_perfil_y_la_vista_del_dashboard(tmp_path, bibliot
     """Con otros valores en configs/: partidas, semilla y calidad salen de ahí."""
     raiz, ids = biblioteca
     ruta = _configs(tmp_path, raiz)
-    perfil = ruta.parent / "entornos" / "cartpole.yaml"
-    datos = yaml.safe_load(perfil.read_text(encoding="utf-8"))
-    datos["evaluacion"].update(episodios=3, semilla=77)
-    perfil.write_text(yaml.safe_dump(datos, allow_unicode=True, sort_keys=False),
-                      encoding="utf-8")
+    _perfil_con(ruta, episodios=3, semilla=77)
     dashboard = ruta.parent / "dashboard.yaml"
     dashboard.write_text(dashboard.read_text(encoding="utf-8").replace(
         "calidad_jpeg: 80", "calidad_jpeg: 30"), encoding="utf-8")
@@ -260,14 +257,55 @@ def test_usa_la_evaluacion_del_perfil_y_la_vista_del_dashboard(tmp_path, bibliot
     assert (tipo, tarea, interactivo) == ("comparacion", TAREA_COMPARAR, False)
     assert argumentos == {"ruta_config": str(ruta), "biblioteca": str(raiz), "calidad_jpeg": 30,
                           "entorno": "cartpole", "modelos": [ids["bc"]], "aleatorio": True,
-                          "partidas": 3, "vista": False}
+                          "partidas": 3, "semilla": 77, "vista": False}
+
+
+def _perfil_con(ruta: Path, **evaluacion) -> None:
+    """Cambia la sección evaluacion del perfil de CartPole de la copia de configs/."""
+    perfil = ruta.parent / "entornos" / "cartpole.yaml"
+    datos = yaml.safe_load(perfil.read_text(encoding="utf-8"))
+    datos["evaluacion"].update(evaluacion)
+    perfil.write_text(yaml.safe_dump(datos, allow_unicode=True, sort_keys=False),
+                      encoding="utf-8")
+
+
+def test_unas_partidas_por_defecto_por_encima_del_maximo_dan_422(app):
+    """Regresión: el máximo solo se comprobaba con las partidas pedidas."""
+    cliente, gestor, ruta = app
+    _perfil_con(ruta, episodios=5000)
+    respuesta = cliente.post("/api/comparaciones", json={"entorno": "cartpole",
+                                                         "aleatorio": True})
+    assert respuesta.status_code == 422
+    assert respuesta.json()["detail"] == ("Como mucho 1000 partidas, no 5000 (las de "
+                                          "evaluacion del perfil)")
+    assert gestor.listar() == []
+    _perfil_con(ruta, episodios=1000)  # justo en el máximo, vale
+    respuesta = cliente.post("/api/comparaciones", json={"entorno": "cartpole",
+                                                         "aleatorio": True})
+    assert respuesta.status_code == 201 and respuesta.json()["argumentos"]["partidas"] == 1000
+    gestor.cancelar(respuesta.json()["id"])
+
+
+def test_la_semilla_no_cambia_si_configs_cambia_en_la_cola(app):
+    """Regresión: el trabajador volvía a leer la semilla de configs/ al arrancar."""
+    cliente, gestor, ruta = app
+    ocupado = gestor.crear("entrenamiento", "tareas_app:contar_hasta_orden")
+    respuesta = cliente.post("/api/comparaciones", json={"entorno": "cartpole",
+                                                         "aleatorio": True, "partidas": 2})
+    assert respuesta.json()["estado"] == "en_cola"
+    _perfil_con(ruta, semilla=1234, episodios=7)
+    gestor.enviar_orden(ocupado["id"], {"tipo": "finalizar"})
+    final = gestor.esperar(respuesta.json()["id"], LIMITE)
+    assert final["argumentos"]["semilla"] == final["resultado"]["semilla"] == 9000
+    assert final["resultado"]["partidas"] == 2
 
 
 def test_mas_partidas_que_el_maximo_da_422(app):
     cliente, gestor, _ = app
     respuesta = cliente.post("/api/comparaciones", json={"entorno": "cartpole",
                                                          "aleatorio": True, "partidas": 1001})
-    assert respuesta.status_code == 422 and "Como mucho 1000" in respuesta.json()["detail"]
+    assert respuesta.status_code == 422
+    assert respuesta.json()["detail"] == "Como mucho 1000 partidas, no 1001"
     assert gestor.listar() == []
 
 

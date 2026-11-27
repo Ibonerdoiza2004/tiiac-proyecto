@@ -53,26 +53,33 @@ def crear_router_comparar(ruta_config: Path, dashboard: dict[str, Any],
         resultado (ResultadoComparacion). Sus ``argumentos`` llevan las partidas y la
         semilla que se usan (ArgumentosComparacionApi).
         """
+        # Las partidas efectivas: las pedidas o, sin ellas, las de evaluacion del perfil.
+        # El máximo vale para las dos (un perfil podría tener más que el máximo).
+        evaluacion = resolver_configuracion(ruta_config, peticion.entorno)["evaluacion"]
+        partidas = peticion.partidas or evaluacion["episodios"]
         maximo = dashboard["laboratorio"]["partidas_maximas"]
-        if peticion.partidas is not None and peticion.partidas > maximo:
-            raise HTTPException(status_code=422, detail=f"Como mucho {maximo} partidas")
+        if partidas > maximo:
+            origen = "" if peticion.partidas else " (las de evaluacion del perfil)"
+            raise HTTPException(status_code=422,
+                                detail=f"Como mucho {maximo} partidas, no {partidas}{origen}")
         for id_modelo in peticion.modelos:
             try:
                 comprobar_referencia(biblioteca, id_modelo, TIPOS_COMPARABLES,
                                      peticion.entorno)
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=f"modelos: {error}") from error
-        evaluacion = resolver_configuracion(ruta_config, peticion.entorno)["evaluacion"]
         publicos = ArgumentosComparacionApi(
             entorno=peticion.entorno, modelos=peticion.modelos, aleatorio=peticion.aleatorio,
-            partidas=peticion.partidas or evaluacion["episodios"],
-            semilla=evaluacion["semilla"], vista=peticion.vista).model_dump(mode="json")
-        # Lo que recibe el trabajador, con las rutas del servidor: no sale de él.
+            partidas=partidas, semilla=evaluacion["semilla"],
+            vista=peticion.vista).model_dump(mode="json")
+        # Lo que recibe el trabajador, con las rutas del servidor: no sale de él. Lleva las
+        # partidas y la semilla ya resueltas, las que ve el navegador, para que no cambien
+        # si configs/ cambia mientras la comparación espera en la cola.
         argumentos = {"ruta_config": str(ruta_config), "biblioteca": str(biblioteca.raiz),
                       "calidad_jpeg": dashboard["vista"]["calidad_jpeg"],
                       "entorno": peticion.entorno.value, "modelos": list(peticion.modelos),
                       "aleatorio": peticion.aleatorio, "partidas": publicos["partidas"],
-                      "vista": peticion.vista}
+                      "semilla": publicos["semilla"], "vista": peticion.vista}
         return gestor.crear("comparacion", TAREA_COMPARAR, argumentos, publicos=publicos)
 
     return router
