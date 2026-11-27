@@ -25,6 +25,7 @@ reparte con ejecutar_barrido (barrido.py).
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import time
@@ -50,13 +51,16 @@ from src.data.tipos import LoteTransiciones, Trayectoria
 from src.models.factory import Discriminador, construir_discriminador
 from src.training.barrido import MetodoBarrido, comprobar_config_comun
 from src.training.trpo import (SECCION_TRPO, config_trpo, crear_trpo,
-                               estadisticas_normalizacion, evaluar_retorno, iteracion_trpo)
+                               estadisticas_normalizacion, estado_normalizacion,
+                               evaluar_retorno, iteracion_trpo, restaurar_normalizacion)
 from src.utils.archivos import comprobar_directorio_libre, escribir_carpeta_nueva
 from src.utils.procedencia import a_json, estado_git, versiones_y_hardware
 from src.utils.reglas_config import MODOS_RECOMPENSA
 from src.utils.reglas_config import config_discriminador as _config_discriminador
 from src.utils.reglas_config import config_gail as _config_gail
-from src.utils.seed import crear_generador, fijar_seed, semillas_repeticion
+from src.utils.seed import (crear_generador, estado_aleatorio, estado_generador, fijar_seed,
+                            restaurar_estado_aleatorio, restaurar_generador,
+                            semilla_reanudacion, semillas_repeticion)
 from src.utils.tracking import (RegistroProgreso, abrir_run_barrido, con_seccion,
                                 nombre_artefacto, registrar, registrar_resumen,
                                 subir_artefacto, terminar_run, usar_artefacto)
@@ -644,7 +648,9 @@ def comprobar_config_barrido(cfg: dict) -> None:
 def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: SplitsDemostraciones,
                   cantidad: int, repeticion: int, run: Any = None,
                   parar: Callable[[], bool] | None = None, callback: BaseCallback | None = None,
-                  dibujable: bool = False) -> tuple[TRPO, Discriminador, dict[str, Any]]:
+                  dibujable: bool = False, estado_inicial: dict[str, Any] | None = None,
+                  guardar_estado: Callable[[dict[str, Any]], None] | None = None,
+                  ) -> tuple[TRPO, Discriminador, dict[str, Any]]:
     """Entrena GAIL con un subconjunto de partidas expertas, en una repetición.
 
     Las semillas son las de la repetición (semillas_repeticion con
@@ -683,18 +689,29 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
             dashboard); no se usa al validar.
         dibujable: Crea el primer entorno de entrenamiento con
             render_mode="rgb_array", el que dibuja la vista (src/training/vista.py).
+        estado_inicial: Estado que dio guardar_estado (checkpoint): sigue desde la
+            iteración siguiente con los mismos pesos y optimizadores del agente y del
+            discriminador, normalización, historial, validaciones y generadores
+            (también el de los pares expertos). Los entornos no se pueden guardar a
+            mitad de partida, así que se crean nuevos con semilla_reanudacion: el
+            resultado no es el mismo que sin cortar, pero reanudar dos veces desde el
+            mismo estado da lo mismo.
+        guardar_estado: Recibe el estado tras cada validación tras la que el
+            entrenamiento sigue (no en la última iteración ni al parar).
 
     Returns:
         El agente, el discriminador y un resumen: entorno, cantidad, repeticion,
         IDs de las partidas, número de pares expertos, huella del dataset,
-        semillas, iteraciones dadas (menos que gail.iteraciones si se paró), pasos,
-        medidas de cada iteración, validaciones, segundos medidos y estadísticas de
+        semillas (con entornos_reanudacion si se reanudó), iteraciones dadas
+        (menos que gail.iteraciones si se paró), pasos, medidas de cada iteración,
+        validaciones, segundos medidos (solo los de esta llamada) y estadísticas de
         normalización (None si no normaliza).
 
     Raises:
         ValueError: Si la configuración, los datos o los argumentos no son
             válidos. Todo se comprueba antes de crear los entornos salvo que
-            los pares encajen con sus espacios, que se comprueba antes de jugar.
+            los pares encajen con sus espacios, que se comprueba antes de jugar,
+            y que los pesos de estado_inicial sean de estos modelos.
     """
     gcfg, tcfg = _config_gail(cfg), config_trpo(cfg)
     _config_discriminador(cfg)
@@ -702,11 +719,15 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
     if not isinstance(ecfg, dict) or "semilla_repeticiones" not in ecfg:
         raise ValueError("La configuración necesita experimento.semilla_repeticiones")
     semillas = semillas_repeticion(ecfg["semilla_repeticiones"], repeticion)
+    semilla_entornos = semillas["entornos"]
+    if estado_inicial is not None:
+        _comprobar_estado_gail(estado_inicial, gcfg, tcfg)
+        semilla_entornos = semilla_reanudacion(semilla_entornos, estado_inicial["iteracion"])
     generador = crear_generador(semillas["pares"])
     _, pares = pares_de_subconjunto(trayectorias, splits, cantidad, cfg, generador)
 
     fijar_seed(semillas["modelo"])
-    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semillas["entornos"],
+    venv: VecEnv = crear_entorno_vectorizado(cfg, tcfg["n_entornos"], semilla_entornos,
                                              dibujable)
     inicio = time.perf_counter()
     try:
@@ -720,7 +741,10 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         agente = crear_trpo(cfg, capa)
         historial, validaciones = [], []
         iteracion = 0
-        for iteracion in range(1, gcfg["iteraciones"] + 1):
+        if estado_inicial is not None:
+            historial, validaciones, iteracion = _reanudar_gail(
+                estado_inicial, agente, capa, discriminador, optimizador, generador)
+        for iteracion in range(iteracion + 1, gcfg["iteraciones"] + 1):
             medidas = iteracion_gail(agente, envoltorio, optimizador, pares, generador, cfg,
                                      callback)
             registrar(run, con_seccion(medidas, SECCION_TRPO), paso=agente.num_timesteps)
@@ -740,6 +764,17 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
                       paso=agente.num_timesteps)
             if detener:
                 break
+            if guardar_estado is not None and iteracion < gcfg["iteraciones"]:
+                guardar_estado({
+                    "iteracion": iteracion, "pasos": int(agente.num_timesteps),
+                    "politica": copy.deepcopy(agente.policy.state_dict()),
+                    "optimizador": copy.deepcopy(agente.policy.optimizer.state_dict()),
+                    "discriminador": copy.deepcopy(discriminador.state_dict()),
+                    "optimizador_discriminador": copy.deepcopy(optimizador.state_dict()),
+                    "normalizacion": estado_normalizacion(capa),
+                    "historial": copy.deepcopy(historial),
+                    "validaciones": copy.deepcopy(validaciones),
+                    "generador": estado_generador(generador), "aleatorio": estado_aleatorio()})
         segundos = time.perf_counter() - inicio
         normalizacion = estadisticas_normalizacion(capa)
     finally:
@@ -751,7 +786,9 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         "ids_partidas": [int(i) for i in splits.subconjuntos[cantidad]],
         "pares_expertos": pares.numero_transiciones,
         "huella_dataset": splits.huella_dataset,
-        "semillas": {"base": int(ecfg["semilla_repeticiones"]), **semillas},
+        "semillas": {"base": int(ecfg["semilla_repeticiones"]), **semillas,
+                     **({"entornos_reanudacion": semilla_entornos}
+                        if estado_inicial is not None else {})},
         "iteraciones": iteracion,
         "pasos": int(agente.num_timesteps),
         "historial": historial,
@@ -760,6 +797,63 @@ def entrenar_gail(cfg: dict, trayectorias: Sequence[Trayectoria], splits: Splits
         "normalizacion": normalizacion,
     }
     return agente, discriminador, resumen
+
+
+_CLAVES_ESTADO_GAIL = frozenset({"iteracion", "pasos", "politica", "optimizador",
+                                 "discriminador", "optimizador_discriminador", "normalizacion",
+                                 "historial", "validaciones", "generador", "aleatorio"})
+
+
+def _comprobar_estado_gail(estado: object, gcfg: dict[str, Any], tcfg: dict[str, Any]) -> None:
+    """Comprueba, antes de crear nada, que el estado encaja con la configuración.
+
+    Raises:
+        ValueError: Si le faltan o sobran claves, o la iteración, los pasos, el
+            historial o las validaciones no encajan con gail y trpo.
+    """
+    if not isinstance(estado, dict) or set(estado) != _CLAVES_ESTADO_GAIL:
+        raise ValueError("El estado de GAIL no tiene las claves de un checkpoint")
+    iteracion, pasos = estado["iteracion"], estado["pasos"]
+    if not (es_entero_positivo(iteracion) and iteracion < gcfg["iteraciones"]
+            and iteracion % gcfg["evaluar_cada"] == 0
+            and es_entero_positivo(pasos) and pasos == iteracion * tcfg["pasos_por_iteracion"]):
+        raise ValueError("El estado de GAIL no encaja con gail.iteraciones, gail.evaluar_cada "
+                         "y trpo.pasos_por_iteracion")
+    historial, validaciones = estado["historial"], estado["validaciones"]
+    if (not isinstance(historial, list) or not isinstance(validaciones, list)
+            or not all(isinstance(m, dict) for m in historial + validaciones)
+            or [m.get("iteracion") for m in historial] != list(range(1, iteracion + 1))
+            or not validaciones or validaciones[-1].get("iteracion") != iteracion):
+        raise ValueError("El estado de GAIL no tiene un historial y unas validaciones que "
+                         "encajen")
+
+
+def _reanudar_gail(estado: dict[str, Any], agente: TRPO, capa: VecEnv,
+                   discriminador: Discriminador, optimizador: torch.optim.Optimizer,
+                   generador: np.random.Generator,
+                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Carga un estado de guardar_estado en los modelos, la normalización y los generadores.
+
+    Returns:
+        El historial, las validaciones y la iteración ya hecha.
+
+    Raises:
+        ValueError: Si los pesos, los optimizadores, la normalización o los generadores
+            no son de estos modelos y entorno.
+    """
+    try:
+        agente.policy.load_state_dict(estado["politica"])
+        agente.policy.optimizer.load_state_dict(estado["optimizador"])
+        discriminador.load_state_dict(estado["discriminador"])
+        optimizador.load_state_dict(estado["optimizador_discriminador"])
+    except (RuntimeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"El estado de GAIL no corresponde a estos modelos: {error}") from error
+    restaurar_normalizacion(capa, estado["normalizacion"])
+    restaurar_generador(generador, estado["generador"])
+    agente.num_timesteps = int(estado["pasos"])
+    restaurar_estado_aleatorio(estado["aleatorio"])
+    return (copy.deepcopy(estado["historial"]), copy.deepcopy(estado["validaciones"]),
+            int(estado["iteracion"]))
 
 
 def _para_json(valor: object) -> object:

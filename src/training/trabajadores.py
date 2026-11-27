@@ -25,12 +25,12 @@ POST /api/entrenamientos):
   es la base de las repeticiones (experimento.semilla_repeticiones) y se entrena la
   repetición 0, como en la E1. BC no tiene vista.
 - ``checkpoint``: carpeta de sus checkpoints (src/training/checkpoints.py; None, sin
-  checkpoints). Por ahora en BC y el experto (METODOS_CON_CHECKPOINT): BC guarda uno al
-  acabar cada época y el experto tras cada evaluación (``experto.evaluar_cada``). Si la
+  checkpoints). BC guarda uno al acabar cada época, el experto tras cada evaluación
+  (``experto.evaluar_cada``) y GAIL tras cada validación (``gail.evaluar_cada``). Si la
   carpeta ya tiene uno (de una ejecución cortada con los mismos argumentos), se sigue
   desde él (EnCurso): primero se vuelve a mandar el progreso guardado y después se
-  entrena el resto. BC sigue exactamente igual que sin corte; el experto, con entornos
-  nuevos (semilla_reanudacion), así que no sale idéntico. El resumen dice desde qué
+  entrena el resto. BC sigue exactamente igual que sin corte; el experto y GAIL, con
+  entornos nuevos (semilla_reanudacion), así que no salen idénticos. El resumen dice desde qué
   épocas o iteraciones se reanudó (``reanudado_desde``) y, con W&B, se abre un run
   nuevo con la etiqueta ``reanudado`` y el id del anterior en su config. Al terminar
   bien, la carpeta se borra.
@@ -104,8 +104,6 @@ ARGUMENTOS_ENTRENAMIENTO = frozenset({"ruta_config", "biblioteca", "calidad_jpeg
 ARGUMENTOS_IMITACION = ARGUMENTOS_ENTRENAMIENTO | {"datos", "cantidad"}
 ARGUMENTOS_POR_METODO = {"experto": ARGUMENTOS_ENTRENAMIENTO, "gail": ARGUMENTOS_IMITACION,
                          "bc": ARGUMENTOS_IMITACION}
-# Métodos que ya guardan checkpoints (los demás exigen checkpoint None).
-METODOS_CON_CHECKPOINT = ("bc", "experto")
 # Repetición que entrena un BC o GAIL suelto: la 0 de la semilla pedida, como en la E1.
 REPETICION_DASHBOARD = 0
 # Secciones de las medidas que se mandan juntas con las de la iteración en la que ocurren.
@@ -166,8 +164,6 @@ def comprobar_argumentos_entrenamiento(argumentos: object,
     checkpoint = argumentos["checkpoint"]
     if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint.strip()):
         raise ValueError("checkpoint debe ser la carpeta de los checkpoints (texto) o None")
-    if checkpoint is not None and metodo not in METODOS_CON_CHECKPOINT:
-        raise ValueError(f"{metodo} todavía no guarda checkpoints: checkpoint debe ser None")
     return dict(argumentos)
 
 
@@ -613,19 +609,23 @@ def tarea_entrenar_gail(argumentos: dict[str, Any], canal: Any) -> dict[str, Any
     cfg = _config_imitacion(argumentos)
     vista = CallbackVista(canal.imagen, fps_entorno(cfg), argumentos["calidad_jpeg"],
                           activa=argumentos["vista"])
-    run = _abrir_run(cfg, argumentos, "gail")
+    en_curso = EnCurso(argumentos, "gail", cfg, "iteracion")
+    run = _abrir_run(cfg, argumentos, "gail", en_curso.reanudado)
     try:
         trayectorias, splits, procedencia, cantidad, id_datos = datos_de_entrenamiento(
             argumentos, cfg)
-        progreso = ProgresoTrabajo(canal, run, "iteraciones")
+        progreso = ProgresoTrabajo(canal, run, "iteraciones", en_curso.historial)
         control = ControlEntrenamiento(canal, vista, progreso)
         agente, discriminador, resumen = entrenar_gail(
             cfg, trayectorias, splits, cantidad, REPETICION_DASHBOARD, progreso,
-            parar=control.parar, callback=control, dibujable=True)
+            parar=control.parar, callback=control, dibujable=True,
+            estado_inicial=en_curso.estado_inicial,
+            guardar_estado=en_curso.guardador(progreso, run))
         # La última iteración siempre se valida: su mensaje ya salió con la validación.
         incompleto = (control.finalizar_pedido
                       and resumen["iteraciones"] < cfg["gail"]["iteraciones"])
-        resumen = {**resumen, "incompleto": incompleto, "datos_biblioteca": id_datos}
+        resumen = {**en_curso.completar(resumen), "incompleto": incompleto,
+                   "datos_biblioteca": id_datos}
         ficha = agregar_nuevo(Path(argumentos["biblioteca"]), argumentos["entorno"], "gail",
                               argumentos["nombre"].strip(), "dashboard",
                               lambda carpeta: guardar_gail(carpeta, agente, discriminador, cfg,
@@ -637,6 +637,7 @@ def tarea_entrenar_gail(argumentos: dict[str, Any], canal: Any) -> dict[str, Any
         terminar_run(run, error)
         raise
     terminar_run(run)
+    en_curso.terminar()
     return _resultado(ficha, incompleto, argumentos["semilla"], resumen)
 
 

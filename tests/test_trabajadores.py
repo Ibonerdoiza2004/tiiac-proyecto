@@ -1150,12 +1150,6 @@ def test_bc_reanudado_con_wandb_abre_un_run_nuevo_marcado(tmp_path, monkeypatch)
     assert "reanudado" in op1["etiquetas"] and op1["grupo"] == "dashboard-cartpole"
 
 
-def test_gail_aun_no_guarda_checkpoints(tmp_path):
-    with pytest.raises(ValueError, match="todavía no guarda checkpoints"):
-        tarea_entrenar_gail(_argumentos_imitacion(tmp_path, ["a" * 12], checkpoint="x"),
-                            CanalFalso())
-
-
 @pytest.mark.parametrize("checkpoint", ["", " ", 3])
 def test_checkpoint_no_valido(tmp_path, checkpoint):
     with pytest.raises(ValueError, match="checkpoint"):
@@ -1253,13 +1247,17 @@ def test_experto_reanudado_con_wandb_abre_un_run_nuevo_marcado(tmp_path, monkeyp
     assert cfg1["reanudado"] == {"run_anterior": "run0", "desde_iteracion": 2}
 
 
-@pytest.mark.parametrize("metodo", ["experto", "bc"])
+@pytest.mark.parametrize("metodo", ["experto", "gail", "bc"])
 def test_checkpoint_con_el_gestor_se_reanuda_tras_matar_el_proceso(gestor, tmp_path, metodo):
     """Un corte de verdad: el proceso muere (cancelar) y otro trabajo sigue desde ahí."""
     if metodo == "experto":
         argumentos = _argumentos_experto_reanudable(tmp_path)
         argumentos["ajustes"]["experto"]["pasos_totales"] = 10**7
         tarea, unidad = TAREA_EXPERTO, "iteracion"
+    elif metodo == "gail":
+        argumentos = _argumentos_gail_reanudable(tmp_path, _conjunto(tmp_path / "biblioteca"))
+        argumentos["ajustes"]["gail"]["iteraciones"] = 10**5
+        tarea, unidad = TAREA_GAIL, "iteracion"
     else:
         argumentos = _argumentos_bc_reanudable(tmp_path, _conjunto(tmp_path / "biblioteca"))
         argumentos["ajustes"]["bc"].update(epocas_maximas=100_000)
@@ -1282,3 +1280,108 @@ def test_checkpoint_con_el_gestor_se_reanuda_tras_matar_el_proceso(gestor, tmp_p
     assert historial[:desde] == gestor.historial(trabajo["id"])[:desde]
     assert [m[unidad] for m in historial] == list(range(1, len(historial) + 1))
     assert not Path(argumentos["checkpoint"]).exists()
+
+
+# --- checkpoints de GAIL ----------------------------------------------------------------------
+
+def _argumentos_gail_reanudable(tmp_path: Path, conjunto: str, **cambios) -> dict:
+    """4 iteraciones con una validación en cada una."""
+    ajustes = copy.deepcopy(SMOKE)
+    ajustes["gail"].update(iteraciones=4, evaluar_cada=1)
+    return _argumentos_imitacion(tmp_path, [conjunto], ajustes=ajustes, cantidad=3,
+                                 checkpoint=str(tmp_path / "biblioteca" / ".en_curso" / "t1"),
+                                 **cambios)
+
+
+def _gail_de(raiz: Path, resultado: dict):
+    biblioteca = Biblioteca(raiz, {"cartpole": "CartPole-v1"})
+    return cargar_gail(biblioteca.ruta(resultado["modelo"]["id"]))
+
+
+def test_gail_con_checkpoint_sin_cortes_entrena_lo_mismo_y_borra_la_carpeta(tmp_path):
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_gail_reanudable(tmp_path, _conjunto(raiz))
+    resultado = tarea_entrenar_gail(argumentos, CanalFalso())
+    sin = tarea_entrenar_gail({**argumentos, "checkpoint": None}, CanalFalso())
+    (agente, discriminador, _), (agente_sin, discriminador_sin, _) = (
+        _gail_de(raiz, resultado), _gail_de(raiz, sin))
+    assert _iguales(agente.policy.state_dict(), agente_sin.policy.state_dict())
+    assert _iguales(discriminador.state_dict(), discriminador_sin.state_dict())
+    assert resultado["resumen"]["reanudado_desde"] == []
+    assert not Path(argumentos["checkpoint"]).exists()
+
+
+@pytest.mark.parametrize("corte", [1, 2, 4])
+def test_gail_cortado_se_reanuda_desde_la_ultima_validacion(tmp_path, corte):
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_gail_reanudable(tmp_path, _conjunto(raiz))
+    completo = CanalFalso()
+    referencia = tarea_entrenar_gail({**argumentos, "checkpoint": None}, completo)
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_gail(argumentos, CanalQueSeCae(corte))
+    carpeta = Path(argumentos["checkpoint"])
+    assert (carpeta / "checkpoint.pt").is_file() == (corte > 1)
+
+    canal = CanalFalso()
+    resultado = tarea_entrenar_gail({**argumentos, "vista": True}, canal)
+    resumen = resultado["resumen"]
+    assert canal.progresos[:corte - 1] == completo.progresos[:corte - 1]
+    assert [m["iteracion"] for m in canal.progresos] == [1, 2, 3, 4]
+    assert [m["paso"] for m in canal.progresos] == [1, 2, 3, 4]
+    assert resumen["iteraciones"] == 4
+    assert (resumen["validaciones"][:corte - 1]
+            == referencia["resumen"]["validaciones"][:corte - 1])
+    assert resumen["reanudado_desde"] == ([corte - 1] if corte > 1 else [])
+    assert ("entornos_reanudacion" in resumen["semillas"]) == (corte > 1)
+    assert canal.imagenes and not carpeta.exists()
+    assert len(Biblioteca(raiz, {"cartpole": "CartPole-v1"}).listar("cartpole", ("gail",))) == 2
+
+
+def test_gail_reanudado_dos_veces_desde_el_mismo_checkpoint_da_lo_mismo(tmp_path):
+    import shutil
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_gail_reanudable(tmp_path, _conjunto(raiz))
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_gail(argumentos, CanalQueSeCae(3))
+    copia = tmp_path / "copia"
+    shutil.copytree(argumentos["checkpoint"], copia)
+    a = tarea_entrenar_gail(argumentos, CanalFalso())
+    b = tarea_entrenar_gail({**argumentos, "checkpoint": str(copia)}, CanalFalso())
+    (agente_a, d_a, _), (agente_b, d_b, _) = _gail_de(raiz, a), _gail_de(raiz, b)
+    assert _iguales(agente_a.policy.state_dict(), agente_b.policy.state_dict())
+    assert _iguales(d_a.state_dict(), d_b.state_dict())
+    assert a["resumen"]["validaciones"] == b["resumen"]["validaciones"]
+    assert a["resumen"]["reanudado_desde"] == b["resumen"]["reanudado_desde"] == [2]
+
+
+def test_gail_reanudado_con_wandb_abre_un_run_nuevo_marcado(tmp_path, monkeypatch):
+    abiertos = []
+
+    def abrir(cfg, **opciones):
+        run = RunFalso()
+        run.id, run.summary = f"run{len(abiertos)}", {}
+        abiertos.append((cfg, opciones))
+        return run
+
+    monkeypatch.setattr(trabajadores, "abrir_run", abrir)
+    monkeypatch.setattr(trabajadores, "subir_artefacto", lambda *a, **k: None)
+    monkeypatch.setattr(trabajadores, "terminar_run", lambda run, error=None: None)
+    argumentos = _argumentos_gail_reanudable(
+        tmp_path, _conjunto(tmp_path / "biblioteca"),
+        wandb={"activo": True, "grupo": "dashboard-cartpole"})
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_gail(argumentos, CanalQueSeCae(3))
+    tarea_entrenar_gail(argumentos, CanalFalso())
+    (_, op0), (cfg1, op1) = abiertos
+    assert "reanudado" not in op0["etiquetas"] and "reanudado" in op1["etiquetas"]
+    assert cfg1["reanudado"] == {"run_anterior": "run0", "desde_iteracion": 2}
+
+
+def test_gail_no_se_reanuda_con_otros_datos(tmp_path):
+    raiz = tmp_path / "biblioteca"
+    argumentos = _argumentos_gail_reanudable(tmp_path, _conjunto(raiz))
+    with pytest.raises(KeyboardInterrupt):
+        tarea_entrenar_gail(argumentos, CanalQueSeCae(3))
+    for cambio in ({"datos": [_conjunto(raiz, partidas=9)]}, {"cantidad": 2}):
+        with pytest.raises(ValueError, match="No se puede reanudar"):
+            tarea_entrenar_gail({**argumentos, **cambio}, CanalFalso())

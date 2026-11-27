@@ -75,6 +75,27 @@ def restaurar_estado_aleatorio(estado: dict[str, object]) -> None:
         raise ValueError(f"Estado aleatorio no válido: {error}") from error
 
 
+def estado_generador(generador: np.random.Generator) -> dict[str, object]:
+    """Estado de un generador de crear_generador, para un checkpoint (solo tipos básicos).
+
+    NumPy da un diccionario nuevo en cada lectura: usar después el generador no lo cambia.
+    """
+    return generador.bit_generator.state
+
+
+def restaurar_generador(generador: np.random.Generator, estado: dict[str, object]) -> None:
+    """Deja un generador de crear_generador como lo guardó estado_generador.
+
+    Raises:
+        ValueError: Si el estado no es de un generador como ese.
+    """
+    try:
+        # NumPy rechaza el estado de otro tipo de generador o con otra forma.
+        generador.bit_generator.state = estado
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Estado del generador no válido: {error}") from error
+
+
 def validar_semilla(semilla: object) -> int:
     """Comprueba que semilla es un entero no negativo y la devuelve como int.
 

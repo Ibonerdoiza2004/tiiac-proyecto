@@ -72,3 +72,32 @@ def test_un_estado_aleatorio_que_no_vale(cambio):
     cambio(estado)
     with pytest.raises(ValueError, match="Estado aleatorio no válido"):
         restaurar_estado_aleatorio(estado)
+
+
+def test_restaurar_un_generador_repite_los_mismos_numeros():
+    import io
+
+    from src.utils.seed import crear_generador, estado_generador, restaurar_generador
+    generador = crear_generador(8)
+    generador.random(5)
+    estado = estado_generador(generador)
+    esperados = generador.random(4)
+    memoria = io.BytesIO()
+    torch.save(estado, memoria)
+    memoria.seek(0)
+    otro = crear_generador(1)
+    restaurar_generador(otro, torch.load(memoria, weights_only=True))
+    assert np.array_equal(otro.random(4), esperados)
+    # El estado es una copia: usar el generador no lo cambia.
+    generador.random(3)
+    assert estado == torch.load(io.BytesIO(memoria.getvalue()), weights_only=True)
+
+
+@pytest.mark.parametrize("estado", [
+    None, {}, {"bit_generator": "MT19937"}, {"bit_generator": "PCG64", "state": 3},
+    {"bit_generator": "PCG64"},
+])
+def test_un_estado_de_generador_que_no_vale(estado):
+    from src.utils.seed import crear_generador, restaurar_generador
+    with pytest.raises(ValueError, match="Estado del generador no válido"):
+        restaurar_generador(crear_generador(1), estado)
