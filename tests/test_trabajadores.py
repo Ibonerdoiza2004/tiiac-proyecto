@@ -19,7 +19,8 @@ import torch
 import yaml
 from gymnasium import spaces
 
-from src.app.contrato import ResultadoComparacion, ResultadoEntrenamiento
+from src.app.contrato import (ProgresoComparacionApi, ResultadoComparacion,
+                              ResultadoEntrenamiento)
 from src.app.trabajos import GestorTrabajos
 from src.data.biblioteca import Biblioteca, agregar_nuevo
 from src.data.demostraciones import guardar_demostraciones
@@ -859,6 +860,7 @@ def test_compara_como_la_evaluacion_de_la_e1(modelos):
     assert [(m["partida"], m["modelo"]) for m in canal.progresos] == [
         (i, id_modelo) for i in range(3) for id_modelo in [*orden, "aleatorio"]]
     for mensaje in canal.progresos:
+        ProgresoComparacionApi.model_validate(mensaje)  # lo que espera el contrato
         i, evaluado = mensaje["partida"], esperados[mensaje["modelo"]]
         assert mensaje["retorno"] == evaluado["retornos"][i]
         assert mensaje["pasos"] == evaluado["longitudes"][i]
