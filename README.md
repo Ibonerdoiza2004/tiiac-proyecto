@@ -140,6 +140,14 @@ python run.py --smoke
 El checker ya ejecuta el smoke; el último comando sirve para verlo por separado
 (ver [El smoke](#el-smoke)).
 
+Algunos tests dibujan Reacher y HalfCheetah. Sin pantalla (como en el CI o por SSH),
+`tests/conftest.py` hace que MuJoCo dibuje con EGL de Mesa, que necesita estos paquetes
+del sistema:
+
+```bash
+sudo apt install libegl1 libegl-mesa0 libgl1-mesa-dri
+```
+
 ### 3. Iniciar sesión en W&B
 
 ```bash
