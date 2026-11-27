@@ -123,7 +123,8 @@ def es_estado(estado: str) -> Callable[[Any], bool]:
 def test_listar_obtener_y_filtrar(app_y_gestor) -> None:
     cliente, gestor = app_y_gestor
     assert cliente.get("/api/trabajos").json() == []
-    a = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1, 2]})["id"]
+    a = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1, 2]},
+                     publicos={"entorno": "cartpole"})["id"]
     b = gestor.crear("comparacion", "tareas_app:sumar", {"numeros": [3]})["id"]
     for id_ in (a, b):
         gestor.esperar(id_, LIMITE)
@@ -136,7 +137,8 @@ def test_listar_obtener_y_filtrar(app_y_gestor) -> None:
     assert uno["estado"] == "terminado"
     assert uno["resultado"] == {"suma": 3}
     assert uno["progresos"] == 2
-    assert uno["argumentos"] == {"numeros": [1, 2]}
+    assert uno["argumentos"] == {"entorno": "cartpole"}  # los públicos, no los de la tarea
+    assert cliente.get(f"/api/trabajos/{b}").json()["argumentos"] == {}
     assert set(uno) == {"id", "tipo", "estado", "argumentos", "interactivo", "creado",
                         "iniciado", "terminado", "progresos", "resultado", "error"}
 
@@ -590,3 +592,14 @@ def test_una_orden_que_no_vale_no_llega_al_trabajo(app_y_gestor, orden, mensaje)
         resto, _ = leer_hasta_cierre(ws)
     assert resto[-1]["trabajo"]["resultado"]["ordenes"] == [
         {"tipo": "vista", "activa": True}, {"tipo": "finalizar"}]
+
+
+def test_el_websocket_manda_los_argumentos_publicos(app_y_gestor) -> None:
+    cliente, gestor = app_y_gestor
+    trabajo = gestor.crear("comparacion", "tareas_app:sumar",
+                           {"numeros": [1], "ruta": "/interna"}, publicos={"partidas": 2})["id"]
+    gestor.esperar(trabajo, LIMITE)
+    with cliente.websocket_connect(f"/api/trabajos/{trabajo}") as ws:
+        estado = ws.receive_json()
+    assert estado["tipo"] == "estado"
+    assert estado["trabajo"]["argumentos"] == {"partidas": 2}

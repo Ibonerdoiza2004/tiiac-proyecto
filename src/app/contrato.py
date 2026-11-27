@@ -7,8 +7,9 @@ OpenAPI no recoge, sirven para validar lo que llega del navegador y como referen
 Convención (protocolo único):
 
 - Cada funcionalidad tiene su ruta para *crear* (``POST /api/sesiones``,
-  ``POST /api/entrenamientos``), porque pide datos distintos y elige qué código se
-  ejecuta. Todas devuelven un ``TrabajoApi``.
+  ``POST /api/entrenamientos``, ``POST /api/comparaciones``), porque pide datos
+  distintos y elige qué código se ejecuta. Todas devuelven un ``TrabajoApi``, cuyos
+  ``argumentos`` son los públicos que fija esa ruta.
 - Todo lo demás es común a cualquier trabajo: consultar, pausar, reanudar, cancelar
   (``/api/trabajos/{id}``) y seguirlo por el WebSocket ``/api/trabajos/{id}``.
 - Solo hay rutas propias donde cambia el significado, como guardar una sesión.
@@ -404,6 +405,65 @@ class EntrenamientoCrear(_Estricto):
         if self.grupo is not None and not self.wandb:
             raise ValueError("El grupo de W&B solo tiene sentido con wandb: true")
         return self
+
+
+# --- Comparar ---------------------------------------------------------------------------
+
+IdBiblioteca = Annotated[str, Field(min_length=1)]
+
+
+class ComparacionCrear(_Estricto):
+    """Cuerpo de POST /api/comparaciones: modelos que juegan las mismas partidas.
+
+    Se juega como la evaluación de la E1: semilla y modo de ``evaluacion`` en configs/,
+    para que todas las comparaciones sean comparables entre sí.
+    """
+
+    entorno: TipoEntorno
+    modelos: list[IdBiblioteca] = Field(
+        default_factory=list, description="Ids de expertos, BC y GAIL de la biblioteca, del "
+                                          "entorno y válidos, sin repetir.")
+    aleatorio: Booleano = Field(False, description="Añadir el agente aleatorio como referencia.")
+    partidas: Positivo | None = Field(
+        None, description="Por modelo; por defecto, evaluacion.episodios (50). Como mucho "
+                          "laboratorio.partidas_maximas de configs/dashboard.yaml.")
+    vista: Booleano = Field(False, description="Dibujar las partidas, a la velocidad del "
+                                               "entorno mientras está encendida.")
+
+    @model_validator(mode="after")
+    def _algo_que_comparar(self) -> ComparacionCrear:
+        """Sin modelos repetidos y con al menos un agente."""
+        if len(set(self.modelos)) != len(self.modelos):
+            raise ValueError("Hay modelos repetidos")
+        if not self.modelos and not self.aleatorio:
+            raise ValueError("No hay nada que comparar: elige algún modelo o el aleatorio")
+        return self
+
+
+class ArgumentosComparacionApi(BaseModel):
+    """``argumentos`` de un trabajo de comparación: la petición con lo que se usa de verdad.
+
+    ``partidas`` y ``semilla`` son las efectivas (por defecto, las de ``evaluacion``).
+    """
+
+    entorno: TipoEntorno
+    modelos: list[str]
+    aleatorio: bool
+    partidas: Positivo
+    semilla: Natural
+    vista: bool
+
+
+class ProgresoComparacionApi(BaseModel):
+    """``medidas`` de cada progreso de una comparación: una partida de un modelo.
+
+    Todos los modelos juegan la partida i, con la misma semilla, antes de la i + 1.
+    """
+
+    modelo: str = Field(description="Id de la biblioteca o «aleatorio».")
+    partida: Natural = Field(description="Desde 0.")
+    retorno: float
+    pasos: Positivo
 
 
 # --- Biblioteca -------------------------------------------------------------------------

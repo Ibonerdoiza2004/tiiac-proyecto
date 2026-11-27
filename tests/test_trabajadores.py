@@ -19,7 +19,8 @@ import torch
 import yaml
 from gymnasium import spaces
 
-from src.app.contrato import ResultadoComparacion, ResultadoEntrenamiento
+from src.app.contrato import (ProgresoComparacionApi, ResultadoComparacion,
+                              ResultadoEntrenamiento)
 from src.app.trabajos import GestorTrabajos
 from src.data.biblioteca import Biblioteca, agregar_nuevo
 from src.data.demostraciones import guardar_demostraciones
@@ -783,7 +784,7 @@ def modelos(tmp_path_factory) -> tuple[Path, dict[str, str]]:
 def _argumentos_comparar(raiz: Path, modelos: list[str], **cambios) -> dict:
     argumentos = {"ruta_config": str(CONFIG), "biblioteca": str(raiz), "calidad_jpeg": 80,
                   "entorno": "cartpole", "modelos": modelos, "aleatorio": True,
-                  "partidas": 3, "vista": False}
+                  "partidas": 3, "semilla": None, "vista": False}
     argumentos.update(cambios)
     return argumentos
 
@@ -816,6 +817,8 @@ def test_argumentos_de_comparacion_validos(tmp_path):
     ({"partidas": True}, "partidas"), ({"partidas": 2.0}, "partidas"),
     ({"entorno": " "}, "entorno"), ({"ruta_config": None}, "ruta_config"),
     ({"biblioteca": ""}, "biblioteca"),
+    ({"semilla": -1}, "semilla"), ({"semilla": True}, "semilla"), ({"semilla": 1.5}, "semilla"),
+    ({"semilla": "9000"}, "semilla"),
 ])
 def test_argumentos_de_comparacion_que_no_valen(tmp_path, cambio, mensaje):
     with pytest.raises(ValueError, match=mensaje):
@@ -825,7 +828,8 @@ def test_argumentos_de_comparacion_que_no_valen(tmp_path, cambio, mensaje):
 
 @pytest.mark.parametrize("argumentos", [
     None, [], {"modelos": []},
-    {**_argumentos_comparar(Path("x"), []), "semilla": 3},
+    {**_argumentos_comparar(Path("x"), []), "determinista": True},
+    {k: v for k, v in _argumentos_comparar(Path("x"), []).items() if k != "semilla"},
 ])
 def test_argumentos_de_comparacion_con_claves_de_mas_o_de_menos(argumentos):
     with pytest.raises(ValueError, match="exactamente"):
@@ -859,10 +863,28 @@ def test_compara_como_la_evaluacion_de_la_e1(modelos):
     assert [(m["partida"], m["modelo"]) for m in canal.progresos] == [
         (i, id_modelo) for i in range(3) for id_modelo in [*orden, "aleatorio"]]
     for mensaje in canal.progresos:
+        ProgresoComparacionApi.model_validate(mensaje)  # lo que espera el contrato
         i, evaluado = mensaje["partida"], esperados[mensaje["modelo"]]
         assert mensaje["retorno"] == evaluado["retornos"][i]
         assert mensaje["pasos"] == evaluado["longitudes"][i]
     assert canal.imagenes == []
+
+
+def test_la_semilla_pedida_manda_sobre_la_de_la_evaluacion(modelos):
+    """Regresión: la ruta pasa la semilla que enseña; el trabajador juega con esa."""
+    raiz, ids = modelos
+    cfg = resolver_configuracion(CONFIG, "cartpole")
+    agente, estadisticas = cargar_agente(Biblioteca(raiz, ENTORNOS), ids["bc"], "cartpole")
+    for semilla in (77, np.int64(78)):
+        resultado = tarea_comparar(_argumentos_comparar(raiz, [ids["bc"]], semilla=semilla),
+                                   CanalFalso())
+        esperado = evaluar_politica(agente, cfg, 3, int(semilla),
+                                    cfg["evaluacion"]["determinista"], estadisticas)
+        assert resultado["semilla"] == int(semilla)
+        assert resultado["modelos"][0]["retornos"] == esperado["retornos"]
+    # Sin semilla, la de evaluacion.
+    assert tarea_comparar(_argumentos_comparar(raiz, [ids["bc"]]),
+                          CanalFalso())["semilla"] == cfg["evaluacion"]["semilla"]
 
 
 def test_sin_aleatorio_solo_juegan_los_modelos(modelos):

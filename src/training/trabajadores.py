@@ -52,9 +52,12 @@ incompleto.
 Comparación (tarea_comparar; la prepara la ruta de crear comparaciones): argumentos
 ``ruta_config``, ``biblioteca``, ``calidad_jpeg``, ``entorno``, ``modelos`` (ids de
 expertos, BC y GAIL válidos de la biblioteca, sin repetir), ``aleatorio`` (si se añade el
-agente aleatorio), ``partidas`` (por modelo; None, evaluacion.episodios) y ``vista``. Se
-juega como la evaluación de la E1 (evaluar_politica): semillas de evaluacion.semilla,
-una por partida, la misma para todos, y evaluacion.determinista. Todos los modelos juegan
+agente aleatorio), ``partidas`` (por modelo; None, evaluacion.episodios), ``semilla``
+(None, evaluacion.semilla) y ``vista``. La ruta pasa las partidas y la semilla ya
+resueltas, las mismas que enseña al navegador: así no cambian aunque configs/ cambie
+mientras la comparación espera en la cola. Se juega como la evaluación de la E1
+(evaluar_politica): semillas derivadas de esa semilla, una por partida, la misma para
+todos, y evaluacion.determinista. Todos los modelos juegan
 la partida i antes de la i + 1. Un progreso por partida de cada modelo,
 ``{"modelo", "partida", "retorno", "pasos"}``, con ``modelo`` el id o ``aleatorio`` y
 ``partida`` desde 0. La vista dibuja las partidas a velocidad real (los fps del entorno)
@@ -111,7 +114,7 @@ REPETICION_DASHBOARD = 0
 SECCIONES_EVALUACION = ("evaluacion/", "validacion/")
 # Claves de los argumentos de una comparación y nombre del agente aleatorio en ella.
 ARGUMENTOS_COMPARACION = frozenset({"ruta_config", "biblioteca", "calidad_jpeg", "entorno",
-                                    "modelos", "aleatorio", "partidas", "vista"})
+                                    "modelos", "aleatorio", "partidas", "semilla", "vista"})
 ALEATORIO = "aleatorio"
 # Tipos de la biblioteca que se pueden comparar.
 TIPOS_COMPARABLES = ("experto", "bc", "gail")
@@ -776,6 +779,9 @@ def comprobar_argumentos_comparacion(argumentos: object) -> dict[str, Any]:
     if argumentos["partidas"] is not None and not es_entero_positivo(argumentos["partidas"]):
         raise ValueError(f"partidas debe ser un entero positivo o None, no "
                          f"{argumentos['partidas']!r}")
+    if argumentos["semilla"] is not None and not es_semilla(argumentos["semilla"]):
+        raise ValueError(f"semilla debe ser una semilla válida o None, no "
+                         f"{argumentos['semilla']!r}")
     return dict(argumentos)
 
 
@@ -841,6 +847,8 @@ def tarea_comparar(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     cfg = resolver_configuracion(Path(argumentos["ruta_config"]), argumentos["entorno"])
     evaluacion = config_evaluacion(cfg)
     partidas = argumentos["partidas"] or evaluacion["episodios"]
+    semilla_base = (int(argumentos["semilla"]) if argumentos["semilla"] is not None
+                    else evaluacion["semilla"])
     biblioteca = Biblioteca(Path(argumentos["biblioteca"]),
                             entornos_gym(argumentos["ruta_config"]))
     agentes = [(id_modelo, *cargar_agente(biblioteca, id_modelo, argumentos["entorno"]))
@@ -866,8 +874,7 @@ def tarea_comparar(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     incompleta = False
     try:
         with torch.no_grad():
-            for indice, semilla in enumerate(semillas_independientes(evaluacion["semilla"],
-                                                                     partidas)):
+            for indice, semilla in enumerate(semillas_independientes(semilla_base, partidas)):
                 ronda = []
                 for id_modelo, agente, estadisticas in agentes:
 
@@ -890,7 +897,7 @@ def tarea_comparar(argumentos: dict[str, Any], canal: Any) -> dict[str, Any]:
     finally:
         entorno.close()
     return {"partidas": len(next(iter(retornos.values()))),
-            "semilla": int(evaluacion["semilla"]), "incompleta": incompleta,
+            "semilla": semilla_base, "incompleta": incompleta,
             "modelos": [{"id": id_modelo, "retornos": valores}
                         for id_modelo, valores in retornos.items()]}
 
