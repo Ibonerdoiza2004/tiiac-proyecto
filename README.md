@@ -451,6 +451,10 @@ Cerrar la conexión no para un entrenamiento, que admite reconectarse sin perder
 progreso; una sesión de jugar, en cambio, se descarta al cerrarse la última pestaña que
 la seguía.
 
+Los `argumentos` de un trabajo son los públicos que fija la ruta que lo crea (la petición
+con los valores por defecto ya puestos), no los del trabajador, que llevan rutas internas
+del servidor y no salen de él.
+
 Al pedir un entrenamiento, la API comprueba los ajustes con las mismas reglas que los
 entrenadores (`src/utils/reglas_config.py`), también las que combinan campos, y que el
 experto o las demostraciones elegidos existan en la biblioteca, sean de su tipo y

@@ -14,7 +14,9 @@ continúan al reanudar.
 La tarea se indica como texto, ``"modulo:funcion"``, y se importa dentro del proceso
 hijo: así la API no importa ``src/training``. La función recibe
 ``(argumentos, canal)`` y devuelve un diccionario con el resultado. Por ``canal``
-(``CanalTrabajo``) manda el progreso y las imágenes y lee las órdenes.
+(``CanalTrabajo``) manda el progreso y las imágenes y lee las órdenes. Los argumentos de
+la tarea pueden llevar rutas internas y no salen del servidor: el navegador ve, como
+``argumentos`` del trabajo, los públicos que pasa la ruta que lo crea (``publicos``).
 
 Comunicación con cada proceso, por tres tuberías de un solo sentido:
 
@@ -41,6 +43,7 @@ repartidor y en el orden en que ocurrieron.
 from __future__ import annotations
 
 import importlib
+import json
 import multiprocessing
 import os
 import queue
@@ -241,7 +244,8 @@ class _Trabajo:
     id: str
     tipo: str
     tarea: str
-    argumentos: dict[str, Any]
+    argumentos: dict[str, Any]  # los de la tarea; pueden llevar rutas internas
+    publicos: dict[str, Any]  # los que ve el navegador, como "argumentos"
     interactivo: bool
     creado: float
     estado: EstadoTrabajo = EstadoTrabajo.EN_COLA
@@ -261,9 +265,12 @@ class _Trabajo:
     hilo_imagenes: threading.Thread | None = None
 
     def describir(self) -> dict[str, Any]:
-        """Datos públicos del trabajo (sin el historial de progreso ni la imagen)."""
+        """Datos públicos del trabajo (sin el historial de progreso ni la imagen).
+
+        En ``argumentos`` van los públicos, nunca los de la tarea.
+        """
         return {"id": self.id, "tipo": self.tipo, "estado": self.estado.value,
-                "argumentos": self.argumentos, "interactivo": self.interactivo,
+                "argumentos": self.publicos, "interactivo": self.interactivo,
                 "creado": self.creado, "iniciado": self.iniciado,
                 "terminado": self.terminado, "progresos": len(self.progreso),
                 "resultado": self.resultado, "error": self.error}
@@ -468,14 +475,20 @@ class GestorTrabajos:
     # --- Crear y lanzar -----------------------------------------------------
 
     def crear(self, tipo: str, tarea: str, argumentos: Mapping[str, Any] | None = None,
-              interactivo: bool = False) -> dict[str, Any]:
+              interactivo: bool = False,
+              publicos: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Crea un trabajo: empieza si hay hueco y, si no, espera en la cola.
 
         Args:
             tipo: Qué es (por ejemplo "sesion", "entrenamiento" o "comparacion").
             tarea: Función ``"modulo:funcion"`` que se ejecuta en el proceso hijo.
-            argumentos: Lo que recibe la tarea (tiene que poder pasarse por pickle).
+            argumentos: Lo que recibe la tarea (tiene que poder pasarse por pickle). No
+                sale del servidor: puede llevar rutas internas.
             interactivo: Si es una sesión que no puede esperar en la cola.
+            publicos: Lo que ve el navegador del trabajo, como ``argumentos`` (por
+                ejemplo, la petición con los valores por defecto ya puestos); tiene que
+                poder pasarse a JSON. Por defecto, nada: así una ruta que se olvide no
+                enseña los argumentos de la tarea.
 
         Returns:
             Los datos públicos del trabajo nuevo.
@@ -490,9 +503,16 @@ class GestorTrabajos:
         comprobar_ruta_tarea(tarea)
         if argumentos is not None and not isinstance(argumentos, Mapping):
             raise ValueError("argumentos debe ser un diccionario o None")
+        if publicos is not None and not isinstance(publicos, Mapping):
+            raise ValueError("publicos debe ser un diccionario o None")
+        try:
+            # Una copia: si quien llama cambia su diccionario después, no cambia el trabajo.
+            publicos = json.loads(json.dumps(dict(publicos or {}), allow_nan=False))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"publicos tiene que poder pasarse a JSON: {error}") from error
         trabajo = _Trabajo(id=uuid.uuid4().hex, tipo=tipo, tarea=tarea,
-                           argumentos=dict(argumentos or {}), interactivo=bool(interactivo),
-                           creado=time.time())
+                           argumentos=dict(argumentos or {}), publicos=publicos,
+                           interactivo=bool(interactivo), creado=time.time())
         with self._cerrojo:
             if self._cerrado:
                 raise RuntimeError("El gestor de trabajos está cerrado")

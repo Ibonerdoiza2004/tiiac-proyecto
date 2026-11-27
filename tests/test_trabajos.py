@@ -90,12 +90,54 @@ def test_un_trabajo_termina_con_su_resultado_y_su_progreso(crear_gestor) -> None
 def test_listar_y_obtener(crear_gestor) -> None:
     gestor = crear_gestor()
     a = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
-    b = gestor.crear("comparacion", "tareas_app:sumar", {"numeros": [2]})
+    b = gestor.crear("comparacion", "tareas_app:sumar", {"numeros": [2]},
+                     publicos={"cuantos": 1})
     for trabajo in (a, b):
         gestor.esperar(trabajo["id"], LIMITE)
     assert [t["id"] for t in gestor.listar()] == [a["id"], b["id"]]
     assert gestor.obtener(b["id"])["tipo"] == "comparacion"
-    assert gestor.obtener(b["id"])["argumentos"] == {"numeros": [2]}
+    assert gestor.obtener(b["id"])["argumentos"] == {"cuantos": 1}
+
+
+# --- argumentos públicos ---------------------------------------------------------------
+
+def test_el_navegador_ve_los_publicos_y_la_tarea_recibe_los_suyos(crear_gestor) -> None:
+    gestor = crear_gestor()
+    publicos = {"entorno": "cartpole", "partidas": 3}
+    trabajo = gestor.crear("comparacion", "tareas_app:sumar",
+                           {"numeros": [4, 5], "ruta": "/interna/configs"}, publicos=publicos)
+    assert trabajo["argumentos"] == publicos
+    final = gestor.esperar(trabajo["id"], LIMITE)
+    assert final["resultado"] == {"suma": 9}  # la tarea recibió los suyos
+    assert final["argumentos"] == publicos
+    assert all(t["argumentos"] == publicos for t in gestor.listar())
+
+
+def test_sin_publicos_no_se_ensena_nada_de_la_tarea(crear_gestor) -> None:
+    gestor = crear_gestor()
+    trabajo = gestor.crear("entrenamiento", "tareas_app:sumar", {"numeros": [1]})
+    assert trabajo["argumentos"] == {}
+    assert gestor.esperar(trabajo["id"], LIMITE)["argumentos"] == {}
+
+
+def test_los_publicos_son_una_copia(crear_gestor) -> None:
+    gestor = crear_gestor()
+    publicos = {"modelos": ["a"]}
+    trabajo = gestor.crear("comparacion", "tareas_app:sumar", {"numeros": [1]},
+                           publicos=publicos)
+    publicos["modelos"].append("b")
+    assert gestor.obtener(trabajo["id"])["argumentos"] == {"modelos": ["a"]}
+
+
+@pytest.mark.parametrize("publicos, mensaje", [
+    ([1], "diccionario"), ("x", "diccionario"),
+    ({"ruta": Path("/a")}, "JSON"), ({"x": float("nan")}, "JSON"), ({"x": {1, 2}}, "JSON"),
+])
+def test_unos_publicos_que_no_valen(crear_gestor, publicos, mensaje) -> None:
+    gestor = crear_gestor()
+    with pytest.raises(ValueError, match=mensaje):
+        gestor.crear("comparacion", "tareas_app:sumar", {"numeros": [1]}, publicos=publicos)
+    assert gestor.listar() == []
 
 
 def test_el_proceso_hijo_trabaja_con_un_hilo_y_sin_cargar_el_entrenamiento(crear_gestor) -> None:
