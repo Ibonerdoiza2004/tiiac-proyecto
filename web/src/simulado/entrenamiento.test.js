@@ -45,7 +45,11 @@ describe('ajustes y demostraciones', () => {
     const api = crearApiEntrenamientoSimulada({ almacen, dibujar });
     expect(await api.demostraciones('cartpole')).toEqual([{ id: 'congelado-cartpole',
       nombre: 'CartPole · experto congelado', tipo: 'conjunto', partidas: 15, pares: 7500, fuente: 'experto' }]);
-    expect((await api.demostraciones('mountaincar'))[0].pares).toBeNull();
+    // Las partidas de MountainCar duran distinto: los pares son la suma de las inventadas.
+    const [montana] = await api.demostraciones('mountaincar');
+    expect(montana).toEqual({ id: 'congelado-mountaincar', nombre: 'MountainCar · experto congelado',
+      tipo: 'conjunto', partidas: 15, pares: expect.any(Number), fuente: 'experto' });
+    expect(montana.pares).toBeGreaterThan(15);
 
     const laboratorio = crearApiLaboratorioSimulada({ almacen, dibujar });
     const sesion = await laboratorio.crearSesion({ entorno: 'reacher', modo: 'experto', partidas: 1 });

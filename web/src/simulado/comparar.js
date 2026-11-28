@@ -1,18 +1,20 @@
 /**
  * Comparar simulado: la misma ApiComparar que src/api/comparar.js, en el navegador.
  *
- * La biblioteca tiene, por entorno, el experto congelado y unos BC y GAIL de entrega
- * inventados, más los modelos que se entrenen en el Laboratorio simulado. La comparación
- * corre en el servidor de trabajos simulado con el protocolo único: un progreso por
- * partida de cada modelo, ronda a ronda, y el resultado al terminar. Los retornos son
+ * Los modelos son los de la biblioteca simulada (./biblioteca.js): por entorno, el experto
+ * congelado y unos BC y GAIL de entrega inventados, más los que se entrenen en el
+ * Laboratorio simulado. La comparación corre en el servidor de trabajos simulado con el
+ * protocolo único: un progreso por partida de cada modelo, ronda a ronda, y el resultado
+ * al terminar. Los retornos son
  * inventados (cerca del objetivo del perfil para el experto, más bajos cuanto peor es el
  * modelo); las partidas, la semilla y el determinismo por defecto son los de configs/.
  */
 
 import { ALEATORIO, MAXIMO_PARTIDAS, comparacionesDe } from '../api/comparar.js';
 import { ErrorApi } from '../api/http.js';
-import { ENTORNOS, buscarEntorno } from '../entornos.js';
+import { ENTORNOS } from '../entornos.js';
 import { crearAlmacen } from './almacen.js';
+import { modelosSimulados } from './biblioteca.js';
 import { crearAleatorio, crearSimulacion } from './entornos.js';
 import EVALUACION from './evaluacion.json';
 import PERFILES from './perfiles.json';
@@ -24,29 +26,6 @@ function rechazar(estado, mensaje) {
 
 const campoExperto = (entorno, clave) => PERFILES[entorno].experto.secciones
   .find((s) => s.clave === 'experto').campos.find((c) => c.clave === clave).valor;
-
-/** Duración del perfil de un método, con la clave que usan los detalles de la biblioteca. */
-const duracion = (entorno, metodo) => {
-  const { unidad, total } = PERFILES[entorno][metodo].duracion;
-  return { [unidad]: total };
-};
-
-/** Modelos de partida de la biblioteca simulada de un entorno, con la forma de la API. */
-export function modelosIniciales(entorno) {
-  const { nombre } = buscarEntorno(entorno);
-  const base = { entorno, creado: '2026-11-01T00:00:00Z', valido: true, motivo: null };
-  return [
-    { ...base, id: `experto-${entorno}`, tipo: 'experto', nombre: `Experto congelado · ${nombre}`,
-      origen: 'congelado', detalles: { ...duracion(entorno, 'experto'),
-        objetivo: campoExperto(entorno, 'retorno_objetivo') } },
-    ...[1, 10].flatMap((cantidad) => [
-      { ...base, id: `gail-${entorno}-${cantidad}`, tipo: 'gail', nombre: `GAIL · ${cantidad} partidas`,
-        origen: 'entrega', detalles: { cantidad, repeticion: 0, ...duracion(entorno, 'gail') } },
-      { ...base, id: `bc-${entorno}-${cantidad}`, tipo: 'bc', nombre: `BC · ${cantidad} partidas`,
-        origen: 'entrega', detalles: { subconjunto: cantidad, repeticion: 0, ...duracion(entorno, 'bc') } },
-    ]),
-  ];
-}
 
 /** Calidad inventada de un modelo, de 0 (aleatorio) a 1 (experto). */
 function calidad(modelo) {
@@ -73,14 +52,7 @@ export function crearApiCompararSimulada({ almacen = crearAlmacen(), servidor = 
   const pintar = dibujar
     ?? ((entorno, foto) => import('./dibujo.js').then((m) => m.dibujarFotograma(entorno, foto)));
 
-  const modelos = (entorno) => [
-    ...modelosIniciales(entorno),
-    ...almacen.modelos.filter((m) => m.entorno === entorno).map((m) => ({
-      id: m.id, entorno, tipo: m.metodo, nombre: m.nombre, origen: 'dashboard', creado: m.creado ?? null,
-      valido: true, motivo: null,
-      detalles: { [m.resumen.unidad]: m.resumen.paso, incompleto: m.incompleto },
-    })),
-  ];
+  const modelos = (entorno) => modelosSimulados(almacen, entorno);
 
   return {
     modelos(entorno) {

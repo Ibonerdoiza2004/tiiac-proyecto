@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import App from './App.jsx';
 import { ENTORNOS } from './entornos.js';
-import { modelosIniciales } from './simulado/comparar.js';
+import { modelosIniciales } from './simulado/biblioteca.js';
 import { crearApiLaboratorioSimulada } from './simulado/laboratorio.js';
 import { VISTAS } from './vistas.js';
 
@@ -167,5 +167,16 @@ describe('App', () => {
     expect(apiComparar.modelos).toHaveBeenCalledWith('acrobot');
     await usuario.selectOptions(selector(), 'reacher');
     await waitFor(() => expect(apiComparar.comparaciones).toHaveBeenLastCalledWith('reacher'));
+  });
+
+  it('la pestaña Biblioteca usa la API que recibe', async () => {
+    const usuario = userEvent.setup();
+    const apiBiblioteca = { modelos: vi.fn(async () => []), demostraciones: vi.fn(async () => []), elemento: vi.fn(),
+      partidas: vi.fn(), crearSubconjunto: vi.fn() };
+    render(<App vistaInicial="biblioteca" entornoInicial="mountaincar" apiBiblioteca={apiBiblioteca} />);
+    expect(await screen.findByText('No hay modelos de MountainCar. Entrénalos en el Laboratorio.')).toBeInTheDocument();
+    expect(apiBiblioteca.modelos).toHaveBeenCalledWith('mountaincar');
+    await usuario.selectOptions(selector(), 'halfcheetah');
+    await waitFor(() => expect(apiBiblioteca.demostraciones).toHaveBeenLastCalledWith('halfcheetah'));
   });
 });

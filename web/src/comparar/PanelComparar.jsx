@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { ALEATORIO, MAXIMO_PARTIDAS, TIPOS_MODELO } from '../api/comparar.js';
 import { ESTADOS_TRABAJO } from '../api/trabajos.js';
+import useCarga from '../componentes/useCarga.js';
 import { buscarEntorno } from '../entornos.js';
 import VistaEntorno from '../laboratorio/VistaEntorno.jsx';
 import { partidasCompletas, resumir } from './estadisticas.js';
@@ -21,24 +22,6 @@ const ETIQUETAS_ESTADO = {
   [ESTADOS_TRABAJO.FALLIDO]: 'Falló',
   [ESTADOS_TRABAJO.CANCELADO]: 'Cancelada',
 };
-const mensajeDe = (error) => (error instanceof Error ? error.message : String(error));
-
-/** Pide algo al backend cuando cambia la clave y descarta la respuesta si llega tarde. */
-function useCarga(cargar, clave) {
-  const [estado, setEstado] = useState({ datos: null, error: null });
-  const [intento, setIntento] = useState(0);
-  useEffect(() => {
-    let vigente = true;
-    setEstado((anterior) => ({ datos: anterior.clave === clave ? anterior.datos : null, error: null, clave }));
-    cargar().then((datos) => vigente && setEstado({ datos, error: null, clave }))
-      .catch((error) => vigente && setEstado({ datos: null, error: mensajeDe(error), clave }));
-    return () => {
-      vigente = false;
-    };
-    // cargar es nueva en cada render: lo que cambia la petición es clave, e intento la repite.
-  }, [clave, intento]);
-  return { datos: estado.datos, error: estado.error, recargar: useCallback(() => setIntento((n) => n + 1), []) };
-}
 
 /** Partidas escritas: undefined si se deja vacío (las de la evaluación), null si no valen. */
 export function leerPartidas(texto) {

@@ -28,17 +28,21 @@ const CONTENIDO = { laboratorio: Laboratorio, comparar: Comparar, biblioteca: Bi
  *   de los entrenamientos (por defecto, el que indique VITE_API).
  * @param {import('./api/comparar.js').ApiComparar} [props.apiComparar] Backend de Comparar
  *   (por defecto, el que indique VITE_API).
+ * @param {import('./api/biblioteca.js').ApiBiblioteca} [props.apiBiblioteca] Backend de la
+ *   Biblioteca (por defecto, el que indique VITE_API).
  * @returns {JSX.Element} La aplicación.
  */
 export default function App({ vistaInicial = VISTA_INICIAL, entornoInicial = ENTORNO_INICIAL,
-  apiLaboratorio, apiEntrenamiento, apiComparar }) {
+  apiLaboratorio, apiEntrenamiento, apiComparar, apiBiblioteca }) {
   const [vista, setVista] = useState(() => buscarVista(vistaInicial).id);
   const [entorno, setEntorno] = useState(() => buscarEntorno(entornoInicial).id);
   const [apis] = useState(() => {
-    const porDefecto = apiLaboratorio && apiEntrenamiento && apiComparar ? null : crearApisPorDefecto();
+    const porDefecto = apiLaboratorio && apiEntrenamiento && apiComparar && apiBiblioteca ? null
+      : crearApisPorDefecto();
     return { laboratorio: apiLaboratorio ?? porDefecto.laboratorio,
       entrenamiento: apiEntrenamiento ?? porDefecto.entrenamiento,
-      comparar: apiComparar ?? porDefecto.comparar };
+      comparar: apiComparar ?? porDefecto.comparar,
+      biblioteca: apiBiblioteca ?? porDefecto.biblioteca };
   });
   // Cada pestaña avisa por separado: si una se libera, las demás siguen bloqueando.
   const [ocupadas, setOcupadas] = useState({});
@@ -64,7 +68,7 @@ export default function App({ vistaInicial = VISTA_INICIAL, entornoInicial = ENT
           return (
             <div key={id} hidden={id !== vista}>
               <Contenido entorno={entorno} api={apis.laboratorio} apiEntrenamiento={apis.entrenamiento}
-                apiComparar={apis.comparar} alCambiarOcupado={avisos[id]} />
+                apiComparar={apis.comparar} apiBiblioteca={apis.biblioteca} alCambiarOcupado={avisos[id]} />
             </div>
           );
         })}
