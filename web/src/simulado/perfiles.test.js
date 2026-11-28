@@ -4,8 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { OPCIONES, generarEvaluacion, generarPerfiles, textoPerfiles } from '../../scripts/perfiles.mjs';
+import { OPCIONES, generarDemostraciones, generarEvaluacion, generarPerfiles, textoPerfiles }
+  from '../../scripts/perfiles.mjs';
 import { ENTORNOS } from '../entornos.js';
+import DEMOSTRACIONES from './demostraciones.json';
 import EVALUACION from './evaluacion.json';
 import PERFILES from './perfiles.json';
 
@@ -107,5 +109,22 @@ describe('evaluacion.json', () => {
     for (const evaluacion of Object.values(EVALUACION)) {
       expect(evaluacion).toEqual({ episodios: 50, semilla: 9000, determinista: true });
     }
+  });
+});
+
+describe('demostraciones.json', () => {
+  it('está al día con configs/ (si falla: npm run perfiles)', () => {
+    expect(JSON.stringify(DEMOSTRACIONES, null, 2) + '\n').toBe(textoPerfiles(generarDemostraciones()));
+  });
+
+  it('da el reparto de las demostraciones congeladas de cada entorno', () => {
+    // configs/entornos/*.yaml, sección demostraciones.
+    expect(DEMOSTRACIONES).toEqual({
+      acrobot: { partidas_train: 10, partidas_validacion: 5 },
+      cartpole: { partidas_train: 10, partidas_validacion: 5 },
+      halfcheetah: { partidas_train: 25, partidas_validacion: 5 },
+      mountaincar: { partidas_train: 10, partidas_validacion: 5 },
+      reacher: { partidas_train: 25, partidas_validacion: 5 },
+    });
   });
 });

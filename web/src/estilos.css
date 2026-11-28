@@ -771,6 +771,122 @@ button:not(:disabled):hover {
   font-size: 12px;
 }
 
+.campo-en-linea {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.campo-en-linea select {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.biblioteca-lista,
+.biblioteca-detalle {
+  min-width: 0;
+}
+
+.biblioteca .rejilla-dos {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+}
+
+.biblioteca-filtros,
+.partidas-cabecera {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.tabla-elegible tbody tr.elegida {
+  background: var(--activo);
+}
+
+.tabla-elegible .enlace {
+  color: var(--tinta);
+  text-align: left;
+}
+
+.tabla-elegible td,
+.tabla-elegible th {
+  white-space: normal;
+}
+
+.no-valido {
+  color: var(--apagado);
+  text-decoration: underline dotted;
+}
+
+.detalle {
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--superficie);
+  border: 1px solid var(--linea);
+}
+
+.detalle h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.detalle code {
+  overflow-wrap: anywhere;
+}
+
+.ficha {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.ficha > div {
+  display: grid;
+  grid-template-columns: minmax(0, 11em) minmax(0, 1fr);
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--suave);
+}
+
+.ficha dt {
+  color: var(--apagado);
+}
+
+.ficha dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.partidas-detalle {
+  margin-top: 14px;
+}
+
+.partidas-detalle h4,
+.crear-subconjunto h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.tabla-partidas .tabla-envoltorio {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.crear-subconjunto {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.controles-compactos button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .barra div {
     transition: none;
@@ -816,6 +932,15 @@ button:not(:disabled):hover {
 
   .rejilla-dos {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .biblioteca .rejilla-dos {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ficha > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 
   .selector-entorno {

@@ -574,13 +574,20 @@ finalizar con lo jugado o cancelar, y resultados en directo (media ± desviació
 partida, puntuación de cada partida e historial de entrenamiento de cada modelo); las
 comparaciones anteriores se vuelven a abrir desde la lista. Comparar tiene ya toda su
 API real: la biblioteca, crear la comparación (`POST /api/comparaciones`, con el formato
-de `web/src/api/comparar.js`) y seguir el trabajo (protocolo de `/api/trabajos`). Por
-defecto, mientras no está todo el backend, la interfaz usa uno simulado en el navegador
+de `web/src/api/comparar.js`) y seguir el trabajo (protocolo de `/api/trabajos`). En la
+Biblioteca: modelos y demostraciones del entorno (con filtro por tipo), el detalle de cada
+uno (origen, fecha, artefacto de W&B y lo principal de su entrenamiento o de sus
+partidas), las partidas de unas demostraciones (pasos, retorno y si son de train o de
+validación) y crear un subconjunto eligiendo partidas enteras de un conjunto; los
+subconjuntos aparecen después para entrenar. Las listas y el detalle usan la API real
+(`/api/biblioteca/modelos`, `/demostraciones` y `/{id}`); ver las partidas y crear el
+subconjunto llegan con `biblioteca-api`, y lo que espera la interfaz está descrito en
+`web/src/api/biblioteca.js`. Por defecto, mientras no está todo el backend, la interfaz usa uno simulado en el navegador
 (`web/src/simulado/`): CartPole y MountainCar con las ecuaciones de Gymnasium,
 animaciones de ejemplo en los demás y curvas de entrenamiento y retornos inventados; no
 entrena ni guarda nada de verdad. Los
-hiperparámetros del simulado y las partidas y la semilla de la evaluación salen de
-`configs/` con `npm run perfiles` (un test avisa si no están al día). Con
+hiperparámetros del simulado, las partidas y la semilla de la evaluación y el reparto de
+las demostraciones en train y validación salen de `configs/` con `npm run perfiles` (un test avisa si no están al día). Con
 `VITE_API=real npm run dev` usa el backend real.
 
 ## Estructura del repositorio

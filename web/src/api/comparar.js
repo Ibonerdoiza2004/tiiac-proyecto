@@ -32,8 +32,8 @@ export const ALEATORIO = 'aleatorio';
 /** Máximo de partidas por modelo que acepta la interfaz (propuesta, como al grabar). */
 export const MAXIMO_PARTIDAS = 1000;
 
-/** Tipos de modelo que se pueden comparar. */
-export const TIPOS_MODELO = Object.freeze(['experto', 'gail', 'bc']);
+/** Tipos de modelo que se pueden comparar: los de la biblioteca. */
+export { TIPOS_MODELO } from './biblioteca.js';
 
 /**
  * @typedef {object} ElementoBiblioteca

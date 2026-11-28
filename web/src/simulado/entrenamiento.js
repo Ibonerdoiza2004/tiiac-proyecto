@@ -108,9 +108,10 @@ export function crearApiEntrenamientoSimulada({ almacen = crearAlmacen(), dibuja
       if (!PERFILES[entorno]) {
         return rechazar(404, `Entorno desconocido: ${entorno}`);
       }
+      // Solo los campos de DemostracionApi, como el backend real.
       return Promise.resolve(copia(almacen.demostraciones
         .filter((d) => d.entorno === entorno)
-        .map(({ entorno: _, ...demostracion }) => demostracion)));
+        .map(({ id, nombre, tipo, partidas, pares, fuente }) => ({ id, nombre, tipo, partidas, pares, fuente }))));
     },
 
     crear({ entorno, metodo, ajustes = {}, datos = [], vista = false, wandb = false } = {}) {

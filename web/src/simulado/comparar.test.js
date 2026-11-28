@@ -4,7 +4,8 @@ import { ALEATORIO } from '../api/comparar.js';
 import { ErrorApi } from '../api/http.js';
 import { ENTORNOS } from '../entornos.js';
 import { crearAlmacen } from './almacen.js';
-import { crearApiCompararSimulada, modelosIniciales } from './comparar.js';
+import { modelosIniciales } from './biblioteca.js';
+import { crearApiCompararSimulada } from './comparar.js';
 import EVALUACION from './evaluacion.json';
 import { crearServidorTrabajosSimulado } from './trabajos.js';
 
@@ -55,7 +56,8 @@ describe('biblioteca simulada', () => {
     const { api } = crear(almacen);
     const propios = (await api.modelos('cartpole')).filter((m) => m.origen === 'dashboard');
     expect(propios).toEqual([{ id: 'm1', entorno: 'cartpole', tipo: 'gail', nombre: 'Mi GAIL',
-      origen: 'dashboard', creado: '2026-11-25T10:00:00Z', valido: true, motivo: null,
+      origen: 'dashboard', creado: '2026-11-25T10:00:00Z', descripcion: null, fuente: null, artefacto: null,
+      valido: true, motivo: null,
       detalles: { iteraciones: 4, incompleto: true } }]);
   });
 

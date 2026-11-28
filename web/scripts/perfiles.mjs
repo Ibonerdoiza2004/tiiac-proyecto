@@ -10,7 +10,9 @@
  * para el experto, además, experto.trpo encima de trpo.
  *
  * Genera también src/simulado/evaluacion.json: la evaluación de la E1 de cada entorno
- * (partidas, semilla y si es determinista), la que usa por defecto la comparación simulada.
+ * (partidas, semilla y si es determinista), la que usa por defecto la comparación simulada;
+ * y src/simulado/demostraciones.json: cuántas partidas de train y de validación tienen las
+ * demostraciones congeladas de cada entorno, las que reparte la biblioteca simulada.
  */
 
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -23,6 +25,7 @@ const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'configs'
 const SIMULADO = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'simulado');
 const SALIDA = join(SIMULADO, 'perfiles.json');
 const SALIDA_EVALUACION = join(SIMULADO, 'evaluacion.json');
+const SALIDA_DEMOSTRACIONES = join(SIMULADO, 'demostraciones.json');
 
 /**
  * Valores admitidos de los campos de texto, por clave o por sección y clave (que manda).
@@ -161,15 +164,31 @@ export function generarPerfiles(raiz = RAIZ) {
  * @returns {Record<string, {episodios: number, semilla: number, determinista: boolean}>}
  */
 export function generarEvaluacion(raiz = RAIZ) {
+  return porEntorno(raiz, ({ evaluacion: { episodios, semilla, determinista } }) => ({
+    episodios: episodios.valor, semilla: semilla.valor, determinista: determinista.valor }));
+}
+
+/**
+ * Partidas de train y de validación de las demostraciones de cada entorno, resueltas desde
+ * configs/ (sección demostraciones).
+ *
+ * @param {string} [raiz] Carpeta configs/.
+ * @returns {Record<string, {partidas_train: number, partidas_validacion: number}>}
+ */
+export function generarDemostraciones(raiz = RAIZ) {
+  return porEntorno(raiz, ({ demostraciones: { partidas_train: train, partidas_validacion: validacion } }) => ({
+    partidas_train: train.valor, partidas_validacion: validacion.valor }));
+}
+
+/** Aplica extraer a la configuración resuelta (base y perfil) de cada entorno. */
+function porEntorno(raiz, extraer) {
   const leer = (ruta) => leerNodo(parseDocument(readFileSync(ruta, 'utf-8')).contents);
   const base = leer(join(raiz, 'default.yaml'));
-  const evaluacion = {};
+  const resultado = {};
   for (const archivo of readdirSync(join(raiz, 'entornos')).filter((f) => f.endsWith('.yaml')).sort()) {
-    const { episodios, semilla, determinista } = combinar(base, leer(join(raiz, 'entornos', archivo))).evaluacion;
-    evaluacion[archivo.replace(/\.yaml$/, '')] = {
-      episodios: episodios.valor, semilla: semilla.valor, determinista: determinista.valor };
+    resultado[archivo.replace(/\.yaml$/, '')] = extraer(combinar(base, leer(join(raiz, 'entornos', archivo))));
   }
-  return evaluacion;
+  return resultado;
 }
 
 /** Texto del JSON tal como se guarda. */
@@ -178,5 +197,6 @@ export const textoPerfiles = (perfiles) => `${JSON.stringify(perfiles, null, 2)}
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   writeFileSync(SALIDA, textoPerfiles(generarPerfiles()));
   writeFileSync(SALIDA_EVALUACION, textoPerfiles(generarEvaluacion()));
-  console.log(`Escritos ${SALIDA} y ${SALIDA_EVALUACION}`);
+  writeFileSync(SALIDA_DEMOSTRACIONES, textoPerfiles(generarDemostraciones()));
+  console.log(`Escritos ${SALIDA}, ${SALIDA_EVALUACION} y ${SALIDA_DEMOSTRACIONES}`);
 }

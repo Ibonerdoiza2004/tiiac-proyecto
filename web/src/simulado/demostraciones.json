@@ -1,0 +1,22 @@
+{
+  "acrobot": {
+    "partidas_train": 10,
+    "partidas_validacion": 5
+  },
+  "cartpole": {
+    "partidas_train": 10,
+    "partidas_validacion": 5
+  },
+  "halfcheetah": {
+    "partidas_train": 25,
+    "partidas_validacion": 5
+  },
+  "mountaincar": {
+    "partidas_train": 10,
+    "partidas_validacion": 5
+  },
+  "reacher": {
+    "partidas_train": 25,
+    "partidas_validacion": 5
+  }
+}

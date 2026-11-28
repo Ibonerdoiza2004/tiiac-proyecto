@@ -191,6 +191,7 @@ export function crearApiLaboratorioSimulada({ dibujar, semilla = 1000, almacen =
         return rechazar(422, 'Elige al menos una partida');
       }
       const vistas = new Set();
+      const detallePartidas = [];
       let pares = 0;
       for (const { indice, tramo } of partidas) {
         const partida = sesion.partidas[indice];
@@ -201,12 +202,17 @@ export function crearApiLaboratorioSimulada({ dibujar, semilla = 1000, almacen =
         }
         vistas.add(indice);
         pares += fin - inicio;
+        // Para la Biblioteca: sin splits (se reparten al entrenar). El retorno es el de la
+        // partida entera aunque se guarde un tramo.
+        detallePartidas.push({ id_episodio: detallePartidas.length, pasos: fin - inicio, retorno: partida.retorno,
+          split: null, orden_train: null });
       }
       sesiones.delete(id);
       almacen.demostraciones.push({
         id: almacen.nuevoId('demostraciones'), entorno: sesion.entorno, nombre: nombre.trim(),
         tipo: 'conjunto', partidas: partidas.length, pares,
         fuente: sesion.modo === MODOS.MANUAL ? 'humano' : 'experto',
+        origen: 'dashboard', creado: new Date().toISOString(), detallePartidas,
       });
       return Promise.resolve({ nombre: nombre.trim(), partidas: partidas.length, pares });
     },

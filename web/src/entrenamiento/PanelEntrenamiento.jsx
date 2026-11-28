@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { METODOS, METODOS_CON_DATOS, METODOS_CON_VISTA } from '../api/entrenamiento.js';
+import useCarga from '../componentes/useCarga.js';
 import { buscarEntorno } from '../entornos.js';
 import VistaEntorno from '../laboratorio/VistaEntorno.jsx';
 import { duracionEditada, valoresIniciales, validarAjustes } from './ajustes.js';
@@ -12,28 +13,6 @@ import useEntrenamiento, { FASES_ENTRENO, FASES_ENTRENO_OCUPADAS } from './useEn
 
 const NOMBRES = { [METODOS.EXPERTO]: 'Experto (TRPO)', [METODOS.GAIL]: 'GAIL', [METODOS.BC]: 'BC' };
 const UNIDADES = { pasos: 'pasos', epocas: 'épocas', iteraciones: 'iteraciones' };
-const mensajeDe = (error) => (error instanceof Error ? error.message : String(error));
-
-/** Pide algo al backend cuando cambia la clave y lo descarta si llega tarde. */
-function useCarga(cargar, clave) {
-  const [estado, setEstado] = useState({ datos: null, error: null });
-  const [intento, setIntento] = useState(0);
-  useEffect(() => {
-    if (!cargar) {
-      return undefined;
-    }
-    let vigente = true;
-    setEstado({ datos: null, error: null });
-    cargar().then((datos) => vigente && setEstado({ datos, error: null }))
-      .catch((error) => vigente && setEstado({ datos: null, error: mensajeDe(error) }));
-    return () => {
-      vigente = false;
-    };
-    // cargar es una función nueva en cada render: lo que cambia lo que pide es clave, e
-    // intento fuerza otra petición.
-  }, [clave, intento]);
-  return { ...estado, recargar: useCallback(() => setIntento((n) => n + 1), []) };
-}
 
 /**
  * Formulario, progreso y controles de un entrenamiento. Se usa con ['experto'] en

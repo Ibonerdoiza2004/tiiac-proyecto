@@ -7,9 +7,11 @@
  */
 
 import { crearAlmacen } from '../simulado/almacen.js';
+import { crearApiBibliotecaSimulada } from '../simulado/biblioteca.js';
 import { crearApiCompararSimulada } from '../simulado/comparar.js';
 import { crearApiEntrenamientoSimulada } from '../simulado/entrenamiento.js';
 import { crearApiLaboratorioSimulada } from '../simulado/laboratorio.js';
+import { crearApiBiblioteca } from './biblioteca.js';
 import { crearApiComparar } from './comparar.js';
 import { crearApiEntrenamiento } from './entrenamiento.js';
 import { crearApiLaboratorio } from './laboratorio.js';
@@ -22,17 +24,19 @@ import { crearApiLaboratorio } from './laboratorio.js';
  * @param {string | undefined} [modo] 'real' o 'simulada' (por defecto, VITE_API).
  * @returns {{laboratorio: import('./laboratorio.js').ApiLaboratorio,
  *   entrenamiento: import('./entrenamiento.js').ApiEntrenamiento,
- *   comparar: import('./comparar.js').ApiComparar}}
+ *   comparar: import('./comparar.js').ApiComparar,
+ *   biblioteca: import('./biblioteca.js').ApiBiblioteca}}
  */
 export function crearApisPorDefecto(modo = import.meta.env.VITE_API) {
   if (modo === 'real') {
     return { laboratorio: crearApiLaboratorio(), entrenamiento: crearApiEntrenamiento(),
-      comparar: crearApiComparar() };
+      comparar: crearApiComparar(), biblioteca: crearApiBiblioteca() };
   }
   const almacen = crearAlmacen();
   return {
     laboratorio: crearApiLaboratorioSimulada({ almacen }),
     entrenamiento: crearApiEntrenamientoSimulada({ almacen }),
     comparar: crearApiCompararSimulada({ almacen }),
+    biblioteca: crearApiBibliotecaSimulada({ almacen }),
   };
 }
